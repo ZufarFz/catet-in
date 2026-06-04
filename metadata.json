@@ -1,0 +1,8 @@
+{
+  "name": "catet-in",
+  "description": "Aplikasi Pintar untuk manajemen keuangan dan Absensi Digital untuk manajemen anggota \u0026 kehadiran real-time.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

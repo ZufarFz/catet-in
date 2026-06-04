@@ -1,0 +1,21 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Mencegah Service Worker tersangkut di cache browser
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "max-age=0, no-cache, no-store, must-revalidate"
+    Service-Worker-Allowed = "/"
+
+# Memastikan manifest selalu diperbarui jika ada perubahan icon/nama
+[[headers]]
+  for = "/manifest.json"
+  [headers.values]
+    Cache-Control = "max-age=0, no-cache, no-store, must-revalidate"
