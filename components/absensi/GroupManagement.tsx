@@ -1,12 +1,15 @@
 
 import React, { useState } from 'react';
-import { LayoutGrid, Plus, Edit2, Trash2, Loader2, X, Save, AlertCircle, CheckCircle2, MapPin, Users, History, Info } from 'lucide-react';
-import { DesaData, KelompokData, AgeCategoryData, DaerahData } from '../../types';
+import { LayoutGrid, Plus, Edit2, Trash2, Loader2, X, Save, AlertCircle, CheckCircle2, MapPin, Users, History, Info, CalendarDays } from 'lucide-react';
+import { DesaData, KelompokData, AgeCategoryData, DaerahData, EventData, Family, FamilyRelationship } from '../../types';
 import { 
   dbAddDesa, dbDeleteDesa, dbAddKelompok, dbDeleteKelompok, 
   dbAddAgeCategory, dbDeleteAgeCategory, dbAddDaerah, dbDeleteDaerah, 
-  dbBatchUpdateMemberFields 
-} from '../../firebase';
+  dbBatchUpdateMemberFields,
+  dbAddEvent, dbDeleteEvent,
+  dbAddFamily, dbDeleteFamily,
+  dbAddFamilyRelationship, dbDeleteFamilyRelationship
+} from '../../supabase';
 
 interface GroupManagementProps {
   daerahs: DaerahData[];
@@ -17,17 +20,26 @@ interface GroupManagementProps {
   setKelompoks: React.Dispatch<React.SetStateAction<KelompokData[]>>;
   ages: AgeCategoryData[];
   setAges: React.Dispatch<React.SetStateAction<AgeCategoryData[]>>;
+  events?: EventData[];
+  setEvents?: React.Dispatch<React.SetStateAction<EventData[]>>;
+  families?: Family[];
+  setFamilies?: React.Dispatch<React.SetStateAction<Family[]>>;
+  relationships?: FamilyRelationship[];
+  setRelationships?: React.Dispatch<React.SetStateAction<FamilyRelationship[]>>;
   appScriptMaster: string;
   canWrite: boolean;
   onRefresh: () => void;
   isLoading: boolean;
 }
 
-type GroupType = 'age' | 'daerah' | 'desa' | 'kelompok';
+type GroupType = 'age' | 'daerah' | 'desa' | 'kelompok' | 'event' | 'family' | 'relationship';
 
 const GroupManagement: React.FC<GroupManagementProps> = ({ 
   daerahs = [], setDaerahs, desas = [], setDesas, 
-  kelompoks = [], setKelompoks, ages = [], setAges, 
+  kelompoks = [], setKelompoks, ages = [], setAges,
+  events = [], setEvents,
+  families = [], setFamilies,
+  relationships = [], setRelationships,
   appScriptMaster, canWrite, onRefresh, isLoading 
 }) => {
   const [activeType, setActiveType] = useState<GroupType>('age');
@@ -60,6 +72,15 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
       } else if (activeType === 'kelompok') {
         await dbDeleteKelompok(id);
         setKelompoks(prev => prev.filter(k => k.id !== id));
+      } else if (activeType === 'event') {
+        await dbDeleteEvent(id);
+        if (setEvents) setEvents(prev => prev.filter(e => e.id !== id));
+      } else if (activeType === 'family') {
+        await dbDeleteFamily(id);
+        if (setFamilies) setFamilies(prev => prev.filter(f => f.id !== id));
+      } else if (activeType === 'relationship') {
+        await dbDeleteFamilyRelationship(id);
+        if (setRelationships) setRelationships(prev => prev.filter(r => r.id !== id));
       }
 
       setMessage({ type: 'success', text: 'Data berhasil dihapus.' });
@@ -82,11 +103,14 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
         age: 'AGE-',
         daerah: 'REG-',
         desa: 'DS-',
-        kelompok: 'KLP-'
+        kelompok: 'KLP-',
+        event: 'EVT-',
+        family: 'FAM-',
+        relationship: 'REL-'
     };
 
     try {
-      const trimmedTargetName = (formData.nama_daerah || formData.nama_desa || formData.nama_kelompok || formData.name || '').trim().toLowerCase();
+      const trimmedTargetName = (formData.nama_daerah || formData.nama_desa || formData.nama_kelompok || formData.name || formData.nama_kegiatan || formData.nama_keluarga || '').trim().toLowerCase();
 
       // Check Duplicates
       if (activeType === 'daerah') {
@@ -165,6 +189,52 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
           setIsSubmitting(false);
           return;
         }
+      } else if (activeType === 'event') {
+        if (!trimmedTargetName) {
+          setMessage({ type: 'error', text: 'Nama Kegiatan tidak boleh kosong.' });
+          setIsSubmitting(false);
+          return;
+        }
+        const duplicate = (events || []).some(item => 
+          item.id !== editingItem?.id && 
+          item.nama_kegiatan.trim().toLowerCase() === trimmedTargetName
+        );
+        if (duplicate) {
+          setMessage({ type: 'error', text: `Kegiatan "${formData.nama_kegiatan}" sudah terdaftar.` });
+          setIsSubmitting(false);
+          return;
+        }
+      } else if (activeType === 'family') {
+        if (!trimmedTargetName) {
+          setMessage({ type: 'error', text: 'Nama Keluarga tidak boleh kosong.' });
+          setIsSubmitting(false);
+          return;
+        }
+        const duplicate = (families || []).some(item => 
+          item.id !== editingItem?.id && 
+          item.nama_keluarga.trim().toLowerCase() === trimmedTargetName
+        );
+        if (duplicate) {
+          setMessage({ type: 'error', text: `Keluarga dengan nama "${formData.nama_keluarga}" sudah terdaftar.` });
+          setIsSubmitting(false);
+          return;
+        }
+      } else if (activeType === 'relationship') {
+        const trimmedRelName = (formData.name || '').trim().toLowerCase();
+        if (!trimmedRelName) {
+          setMessage({ type: 'error', text: 'Nama Peranan tidak boleh kosong.' });
+          setIsSubmitting(false);
+          return;
+        }
+        const duplicate = (relationships || []).some(item => 
+          item.id !== editingItem?.id && 
+          item.name.trim().toLowerCase() === trimmedRelName
+        );
+        if (duplicate) {
+          setMessage({ type: 'error', text: `Peranan dengan nama "${formData.name}" sudah terdaftar.` });
+          setIsSubmitting(false);
+          return;
+        }
       }
 
       // Base-36 ID + random characters
@@ -207,6 +277,42 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
         }
         if (editingItem) setAges(prev => prev.map(a => a.id === editingItem.id ? newItem : a));
         else setAges(prev => [...prev, newItem as AgeCategoryData]);
+      } else if (activeType === 'event') {
+        const eventToSave: EventData = {
+          id: generatedId,
+          nama_kegiatan: formData.nama_kegiatan || '',
+          keterangan: formData.keterangan || ''
+        };
+        await dbAddEvent(eventToSave);
+        if (editingItem) {
+          if (setEvents) setEvents(prev => prev.map(e => e.id === editingItem.id ? eventToSave : e));
+        } else {
+          if (setEvents) setEvents(prev => [...prev, eventToSave]);
+        }
+      } else if (activeType === 'family') {
+        const familyToSave: Family = {
+          id: generatedId,
+          nama_keluarga: formData.nama_keluarga || '',
+          nomor_kk: formData.nomor_kk || ''
+        };
+        await dbAddFamily(familyToSave);
+        if (editingItem) {
+          if (setFamilies) setFamilies(prev => prev.map(f => f.id === editingItem.id ? familyToSave : f));
+        } else {
+          if (setFamilies) setFamilies(prev => [...prev, familyToSave]);
+        }
+      } else if (activeType === 'relationship') {
+        const relationshipToSave: FamilyRelationship = {
+          id: generatedId,
+          name: formData.name || '',
+          is_wali: !!formData.is_wali
+        };
+        await dbAddFamilyRelationship(relationshipToSave);
+        if (editingItem) {
+          if (setRelationships) setRelationships(prev => prev.map(r => r.id === editingItem.id ? relationshipToSave : r));
+        } else {
+          if (setRelationships) setRelationships(prev => [...prev, relationshipToSave]);
+        }
       }
 
       setMessage({ type: 'success', text: 'Data berhasil disimpan.' });
@@ -223,6 +329,32 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
   };
 
   const renderFormFields = () => {
+    if (activeType === 'event') {
+      return (
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Nama Kegiatan *</label>
+            <input
+              required
+              type="text"
+              value={formData.nama_kegiatan || ''}
+              onChange={(e) => setFormData({...formData, nama_kegiatan: e.target.value})}
+              className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl font-bold text-xs text-slate-700 focus:border-rose-500 focus:bg-white outline-none transition-all"
+              placeholder="Contoh: Kajian Rutin Mingguan"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Keterangan</label>
+            <textarea
+              value={formData.keterangan || ''}
+              onChange={(e) => setFormData({...formData, keterangan: e.target.value})}
+              className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl font-bold text-xs text-slate-700 focus:border-rose-500 focus:bg-white outline-none transition-all resize-none h-20"
+              placeholder="Contoh: Keterangan tambahan atau lokasi acara"
+            />
+          </div>
+        </div>
+      );
+    }
     if (activeType === 'age') {
       return (
         <div className="space-y-4">
@@ -338,6 +470,65 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
         </div>
       );
     }
+    if (activeType === 'family') {
+      return (
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Nama Keluarga *</label>
+            <input
+              required
+              type="text"
+              value={formData.nama_keluarga || ''}
+              onChange={(e) => setFormData({...formData, nama_keluarga: e.target.value})}
+              className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl font-bold text-xs text-slate-700 focus:border-rose-500 focus:bg-white outline-none transition-all"
+              placeholder="Contoh: Keluarga Budi Santoso"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Nomor Kartu Keluarga (KK)</label>
+            <input
+              type="text"
+              value={formData.nomor_kk || ''}
+              onChange={(e) => setFormData({...formData, nomor_kk: e.target.value})}
+              className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl font-bold text-xs text-slate-700 focus:border-rose-500 focus:bg-white outline-none transition-all"
+              placeholder="16-digit nomor KK (opsional)..."
+            />
+          </div>
+        </div>
+      );
+    }
+    if (activeType === 'relationship') {
+      return (
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Nama Peranan / Hubungan Keluarga *</label>
+            <input
+              required
+              type="text"
+              value={formData.name || ''}
+              onChange={(e) => setFormData({...formData, name: e.target.value})}
+              className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl font-bold text-xs text-slate-700 focus:border-violet-500 focus:bg-white outline-none transition-all"
+              placeholder="Contoh: Ayah, Ibu, Anak, Wali Lainnya..."
+            />
+          </div>
+          <div className="flex items-center space-x-3 bg-violet-50/30 p-3 rounded-xl border border-violet-100">
+            <input
+              type="checkbox"
+              id="is_wali"
+              checked={!!formData.is_wali}
+              onChange={(e) => setFormData({...formData, is_wali: e.target.checked})}
+              className="w-4 h-4 text-violet-600 border-slate-300 rounded focus:ring-violet-500 cursor-pointer"
+            />
+            <label htmlFor="is_wali" className="text-xs font-bold text-slate-700 select-none cursor-pointer">
+              Peranan ini bertindak sebagai Wali / Orang Tua
+            </label>
+          </div>
+          <p className="text-[10px] font-medium text-slate-400 leading-relaxed ml-1">
+            * Jika dicentang, nomor HP dan pekerjaan orang ini akan otomatis diambil sebagai data Orang Tua / Wali bagi anggota keluarga lainnya (seperti Anak).
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="space-y-4">
         <div className="space-y-1.5">
@@ -393,6 +584,9 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
     if (activeType === 'age') return ages || [];
     if (activeType === 'daerah') return daerahs || [];
     if (activeType === 'desa') return desas || [];
+    if (activeType === 'event') return events || [];
+    if (activeType === 'family') return families || [];
+    if (activeType === 'relationship') return relationships || [];
     return kelompoks || [];
   };
 
@@ -400,8 +594,8 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
     <div className="h-full flex flex-col p-3 md:p-8 space-y-4 md:space-y-6 overflow-hidden bg-[#F8FAFC]">
       <div className="flex flex-row justify-between items-center gap-2 shrink-0">
         <div>
-          <h2 className="text-base md:text-2xl font-black text-slate-800 tracking-tight leading-none">Manajemen Group</h2>
-          <p className="text-[8px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest mt-0.5 md:mt-1 leading-none">Kelola Kategori Usia, Daerah, Desa, &amp; Kelompok</p>
+          <h2 className="text-base md:text-2xl font-black text-slate-800 tracking-tight leading-none">Manajemen Group &amp; Master</h2>
+          <p className="text-[8px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest mt-0.5 md:mt-1 leading-none">Kelola Kategori Usia, Daerah, Desa, Kelompok, &amp; Kegiatan</p>
         </div>
         {canWrite && (
           <button 
@@ -410,6 +604,9 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
               activeType === 'age' ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200/50' :
               activeType === 'daerah' ? 'bg-purple-600 hover:bg-purple-700 shadow-purple-200/50' :
               activeType === 'desa' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-200/50' :
+              activeType === 'event' ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-200/50' :
+              activeType === 'family' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-200/50' :
+              activeType === 'relationship' ? 'bg-violet-600 hover:bg-violet-700 shadow-violet-200/50' :
               'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-200/50'
             }`}
           >
@@ -425,7 +622,10 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
            { id: 'age', label: 'Kategori Usia', icon: History, color: 'text-indigo-600', bg: 'bg-indigo-50/80', border: 'border-indigo-100/50', count: (ages || []).length },
            { id: 'daerah', label: 'Daftar Daerah', icon: LayoutGrid, color: 'text-purple-600', bg: 'bg-purple-50/80', border: 'border-purple-100/50', count: (daerahs || []).length },
            { id: 'desa', label: 'Daftar Desa', icon: MapPin, color: 'text-blue-600', bg: 'bg-blue-50/80', border: 'border-blue-100/50', count: (desas || []).length },
-           { id: 'kelompok', label: 'Daftar Kelompok', icon: Users, color: 'text-emerald-600', bg: 'bg-emerald-50/80', border: 'border-emerald-100/50', count: (kelompoks || []).length }
+           { id: 'kelompok', label: 'Daftar Kelompok', icon: Users, color: 'text-emerald-600', bg: 'bg-emerald-50/80', border: 'border-emerald-100/50', count: (kelompoks || []).length },
+           { id: 'event', label: 'Daftar Kegiatan', icon: CalendarDays, color: 'text-rose-600', bg: 'bg-rose-50/80', border: 'border-rose-100/50', count: (events || []).length },
+           { id: 'family', label: 'Data Keluarga / KK', icon: Users, color: 'text-amber-600', bg: 'bg-amber-50/80', border: 'border-amber-100/50', count: (families || []).length },
+           { id: 'relationship', label: 'Hubungan Keluarga', icon: LayoutGrid, color: 'text-violet-600', bg: 'bg-violet-50/80', border: 'border-violet-100/50', count: (relationships || []).length }
          ].map(tab => (
            <button
              key={tab.id}
@@ -480,6 +680,9 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
                 const isDaerah = activeType === 'daerah';
                 const isDesa = activeType === 'desa';
                 const isKelompok = activeType === 'kelompok';
+                const isEvent = activeType === 'event';
+                const isFamily = activeType === 'family';
+                const isRelationship = activeType === 'relationship';
 
                 const matchedDaerah = (isDesa && item.daerah_id) ? (daerahs || []).find(d => d.id === item.daerah_id) : null;
                 const matchedDesa = (isKelompok && item.desa_id) ? (desas || []).find(d => d.id === item.desa_id) : null;
@@ -491,7 +694,13 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
                     ? { border: 'hover:border-purple-300', iconBg: 'bg-purple-50 text-purple-600' }
                     : isDesa 
                       ? { border: 'hover:border-blue-300', iconBg: 'bg-blue-50 text-blue-600' }
-                      : { border: 'hover:border-emerald-300', iconBg: 'bg-emerald-50 text-emerald-600' };
+                      : isEvent
+                        ? { border: 'hover:border-rose-300', iconBg: 'bg-rose-50 text-rose-600' }
+                        : isFamily
+                          ? { border: 'hover:border-amber-300', iconBg: 'bg-amber-50 text-amber-600' }
+                          : isRelationship
+                            ? { border: 'hover:border-violet-300', iconBg: 'bg-violet-50 text-violet-600' }
+                            : { border: 'hover:border-emerald-300', iconBg: 'bg-emerald-50 text-emerald-600' };
 
                 return (
                   <div 
@@ -501,14 +710,20 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
                     <div className="flex items-center gap-2.5 min-w-0 flex-1">
                       {/* Icon Indicator */}
                       <div className={`p-2 rounded-lg shrink-0 ${colorMap.iconBg}`}>
-                        {isAge ? <History className="size-3.5 md:size-4" /> : isDaerah ? <LayoutGrid className="size-3.5 md:size-4" /> : isDesa ? <MapPin className="size-3.5 md:size-4" /> : <Users className="size-3.5 md:size-4" />}
+                        {isAge ? <History className="size-3.5 md:size-4" /> : 
+                         isDaerah ? <LayoutGrid className="size-3.5 md:size-4" /> : 
+                         isDesa ? <MapPin className="size-3.5 md:size-4" /> : 
+                         isEvent ? <CalendarDays className="size-3.5 md:size-4" /> : 
+                         isFamily ? <Users className="size-3.5 md:size-4" /> : 
+                         isRelationship ? <LayoutGrid className="size-3.5 md:size-4" /> : 
+                         <Users className="size-3.5 md:size-4" />}
                       </div>
                       
                       {/* Text Information block */}
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <h4 className="text-[11px] md:text-xs font-black text-slate-800 uppercase tracking-tight truncate max-w-[125px] md:max-w-[145px]">
-                            {item.name || item.nama_daerah || item.nama_desa || item.nama_kelompok}
+                            {item.name || item.nama_daerah || item.nama_desa || item.nama_kelompok || item.nama_kegiatan || item.nama_keluarga}
                           </h4>
                           <span className="text-[7px] md:text-[8px] font-black text-slate-300 bg-slate-100 px-1 py-0.2 rounded-md uppercase shrink-0">
                             #{item.id.slice(-4)}
@@ -531,6 +746,32 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
                             <p className="text-[9px] md:text-[10px] font-bold text-slate-500 leading-none truncate" title={item.description}>
                               {item.description || 'Tidak ada deskripsi.'}
                             </p>
+                          ) : isEvent ? (
+                            <div className="flex items-center gap-1.5 text-[9px] md:text-[10px] text-slate-500 leading-none truncate flex-wrap">
+                              {item.keterangan && (
+                                <span className="font-extrabold text-slate-600 truncate max-w-[150px]" title={`Keterangan: ${item.keterangan}`}>
+                                  📝 {item.keterangan}
+                                </span>
+                              )}
+                              {item.keterangan && (item.tanggal_kegiatan || item.created_at) && (
+                                <span className="text-slate-200 font-normal">|</span>
+                              )}
+                              <span className="font-semibold text-slate-400 italic truncate max-w-[120px]">
+                                📅 {item.tanggal_kegiatan || item.created_at ? new Date(item.tanggal_kegiatan || item.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Tanggal tidak tertera'}
+                              </span>
+                            </div>
+                          ) : isFamily ? (
+                            <div className="flex items-center gap-1.5 text-[9px] md:text-[10px] text-slate-500 leading-none truncate flex-wrap">
+                              <span className="font-semibold text-slate-500">
+                                💳 KK: {item.nomor_kk || 'Belum Diatur'}
+                              </span>
+                            </div>
+                          ) : isRelationship ? (
+                            <div className="flex items-center gap-1.5 text-[9px] md:text-[10px] text-slate-500 leading-none truncate flex-wrap">
+                              <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${item.is_wali ? 'bg-amber-100 text-amber-700 border border-amber-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
+                                {item.is_wali ? '👑 Wali' : 'Anggota'}
+                              </span>
+                            </div>
                           ) : (
                             <div className="flex items-center gap-1.5 text-[9px] md:text-[10px] text-slate-500 leading-none truncate flex-wrap">
                               {item.pimpinan && (

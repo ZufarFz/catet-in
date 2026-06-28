@@ -104,7 +104,7 @@ const DeleteHistoryView: React.FC<DeleteHistoryViewProps> = ({ deletedTransactio
                <Trash2 size={10} className="text-rose-400" />
                <span className="text-[8px] font-black text-slate-400 uppercase tracking-[0.2em]">Transaksi Terhapus</span>
              </div>
-             <span className={`px-2 py-0.5 rounded-full text-[7px] font-black uppercase tracking-widest border ${isKasUmum ? 'bg-blue-50 text-blue-500 border-blue-100' : 'bg-emerald-50 text-emerald-600 border-emerald-100'}`}>
+             <span className={`px-2 py-0.5 rounded-full text-[7px] font-black uppercase tracking-widest border ${isKasUmum ? 'bg-sky-50 text-[#007CC2] border-sky-100' : 'bg-emerald-50 text-emerald-600 border-emerald-100'}`}>
               {isKasUmum ? 'KAS UMUM' : `EVENT: ${log.project_name}`}
             </span>
           </div>
@@ -138,7 +138,7 @@ const DeleteHistoryView: React.FC<DeleteHistoryViewProps> = ({ deletedTransactio
     <div className="h-full w-full overflow-hidden flex flex-col">
       {isLoading && deletedTransactions.length === 0 ? (
         <div className="flex-1 py-10 flex flex-col items-center justify-center space-y-6">
-          <div className="relative"><div className="absolute inset-0 bg-blue-500/20 rounded-full blur-xl animate-pulse" /><Trash2 size={40} className="relative animate-bounce text-blue-500" /></div>
+          <div className="relative"><div className="absolute inset-0 bg-[#007CC2]/20 rounded-full blur-xl animate-pulse" /><Trash2 size={40} className="relative animate-bounce text-[#007CC2]" /></div>
           <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-400">Sinkronisasi Log...</p>
         </div>
       ) : (

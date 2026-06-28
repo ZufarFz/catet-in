@@ -2,7 +2,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { TransactionType, Transaction, GlobalStats, ProjectMetadata } from '../../types';
 import { Save, Loader2, Plus, Minus, Calendar, AlignLeft, ShieldAlert, Lock, Info, ChevronDown, Wallet, Layers, Filter, Check, Search, CalendarDays, Trophy, AlertTriangle, PlusCircle, LayoutGrid } from 'lucide-react';
-import { dbAddTransaction, dbAddProject } from '../../firebase';
+import { dbAddTransaction, dbAddProject } from '../../supabase';
+import { syncToSpreadsheet } from '../../sheetsSync';
 
 interface TransactionFormProps {
   scriptUrl: string;
@@ -123,7 +124,9 @@ const TransactionForm: React.FC<TransactionFormProps> = ({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const locked = isDateLocked(formData.date) || (inputContext === 'EVENT' && archivedProjectNames.includes(formData.project_name.toUpperCase()));
+  const locked = inputContext === 'DAILY'
+    ? isDateLocked(formData.date)
+    : archivedProjectNames.includes(formData.project_name.toUpperCase());
   const isIncome = formData.type === 'INCOME';
 
   const formatDisplay = (val: string) => {
@@ -218,6 +221,8 @@ const TransactionForm: React.FC<TransactionFormProps> = ({
       }
 
       await dbAddTransaction(tx);
+      // Background Sync to Spreadsheet
+      syncToSpreadsheet({ action: 'add_tx', data: tx });
       setIsSubmitting(false);
       onSuccess(tx);
     } catch (error) {
@@ -345,7 +350,7 @@ const TransactionForm: React.FC<TransactionFormProps> = ({
                     max={todayStr}
                     value={formData.date}
                     onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                    className={`w-full px-3 py-2.5 md:px-4 md:py-3 rounded-lg font-bold text-xs outline-none transition-all border-2 ${locked ? 'bg-rose-50 border-rose-100 text-rose-500' : 'bg-slate-50 border-transparent focus:bg-white focus:border-blue-100 text-slate-700'}`}
+                    className={`w-full px-3 py-2.5 md:px-4 md:py-3 rounded-lg font-bold text-xs outline-none transition-all border-2 ${locked ? 'bg-rose-50 border-rose-100 text-rose-500' : 'bg-slate-50 border-transparent focus:bg-white focus:border-sky-100 text-slate-700'}`}
                   />
                 </div>
 
@@ -375,7 +380,7 @@ const TransactionForm: React.FC<TransactionFormProps> = ({
                                 key={cat}
                                 type="button"
                                 onClick={() => { setFormData({...formData, category: cat}); setIsCategoryOpen(false); }}
-                                className={`w-full px-4 py-2.5 rounded-lg text-[10px] font-black uppercase text-left flex items-center justify-between transition-all group ${formData.category === cat ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}
+                                className={`w-full px-4 py-2.5 rounded-lg text-[10px] font-black uppercase text-left flex items-center justify-between transition-all group ${formData.category === cat ? 'bg-[#007CC2] text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}
                               >
                                 <span>{cat}</span>
                                 {formData.category === cat && <Check size={12} />}
@@ -384,7 +389,7 @@ const TransactionForm: React.FC<TransactionFormProps> = ({
                             <button
                               type="button"
                               onClick={() => setIsAddingNewCategory(true)}
-                              className="w-full px-4 py-3 border-t border-slate-100 mt-2 text-[10px] font-black uppercase text-blue-600 text-left flex items-center gap-2 hover:bg-blue-50/50 transition-all"
+                              className="w-full px-4 py-3 border-t border-slate-100 mt-2 text-[10px] font-black uppercase text-[#007CC2] text-left flex items-center gap-2 hover:bg-sky-50/50 transition-all"
                             >
                               <PlusCircle size={14} />
                               Tambah Baru
@@ -398,7 +403,7 @@ const TransactionForm: React.FC<TransactionFormProps> = ({
                               value={newCategoryName}
                               onChange={(e) => setNewCategoryName(e.target.value)}
                               placeholder="Nama kategori..."
-                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold outline-none focus:border-blue-500"
+                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold outline-none focus:border-[#007CC2]"
                             />
                             <div className="flex gap-2">
                               <button
@@ -412,7 +417,7 @@ const TransactionForm: React.FC<TransactionFormProps> = ({
                                 type="button"
                                 disabled={isSavingCategory || !newCategoryName.trim()}
                                 onClick={handleSaveNewCategory}
-                                className="flex-1 py-2 text-[8px] font-black uppercase text-white bg-blue-600 rounded-md shadow-md"
+                                className="flex-1 py-2 text-[8px] font-black uppercase text-white bg-[#007CC2] rounded-md shadow-md"
                               >
                                 {isSavingCategory ? '...' : 'Simpan'}
                               </button>
@@ -464,7 +469,7 @@ const TransactionForm: React.FC<TransactionFormProps> = ({
                                     key={proj}
                                     type="button"
                                     onClick={() => { setFormData({...formData, project_name: proj}); setIsProjectOpen(false); }}
-                                    className={`w-full px-4 py-2.5 rounded-lg text-[10px] font-black uppercase text-left flex items-center justify-between transition-all group ${formData.project_name === proj ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}
+                                    className={`w-full px-4 py-2.5 rounded-lg text-[10px] font-black uppercase text-left flex items-center justify-between transition-all group ${formData.project_name === proj ? 'bg-[#007CC2] text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}
                                   >
                                     <span className="truncate">{proj}</span>
                                     {formData.project_name === proj && <Check size={12} />}
@@ -474,7 +479,7 @@ const TransactionForm: React.FC<TransactionFormProps> = ({
                               <button
                                 type="button"
                                 onClick={() => setIsAddingNewProject(true)}
-                                className="w-full px-4 py-3 border-t border-slate-100 mt-2 text-[10px] font-black uppercase text-blue-600 text-left flex items-center gap-2 hover:bg-blue-50/50 transition-all"
+                                className="w-full px-4 py-3 border-t border-slate-100 mt-2 text-[10px] font-black uppercase text-[#007CC2] text-left flex items-center gap-2 hover:bg-sky-50/50 transition-all"
                               >
                                 <PlusCircle size={14} />
                                 Tambah Proker Baru
@@ -488,7 +493,7 @@ const TransactionForm: React.FC<TransactionFormProps> = ({
                                 value={newProjectInput}
                                 onChange={(e) => setNewProjectInput(e.target.value.replace(/[^a-zA-Z0-9\s]/g, ''))}
                                 placeholder="Ketik nama proker baru..."
-                                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold outline-none focus:border-blue-500"
+                                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold outline-none focus:border-[#007CC2]"
                               />
                               <div className="flex gap-2">
                                 <button
@@ -502,7 +507,7 @@ const TransactionForm: React.FC<TransactionFormProps> = ({
                                   type="button"
                                   disabled={!newProjectInput.trim()}
                                   onClick={handleAddNewProject}
-                                  className="flex-1 py-2 text-[8px] font-black uppercase text-white bg-blue-600 rounded-md shadow-md"
+                                  className="flex-1 py-2 text-[8px] font-black uppercase text-white bg-[#007CC2] rounded-md shadow-md"
                                 >
                                   Pilih
                                 </button>
@@ -528,7 +533,7 @@ const TransactionForm: React.FC<TransactionFormProps> = ({
                   placeholder="Detail transaksi..."
                   value={formData.description}
                   onChange={(e) => setFormData({ ...formData, description: e.target.value.replace(/[\r\n]/gm, "") })}
-                  className="w-full px-3 py-2.5 md:px-4 md:py-3 bg-slate-50 border-2 border-transparent rounded-lg font-bold text-xs outline-none focus:bg-white focus:border-blue-100 text-slate-700 transition-all placeholder:text-slate-300 resize-none disabled:opacity-50"
+                  className="w-full px-3 py-2.5 md:px-4 md:py-3 bg-slate-50 border-2 border-transparent rounded-lg font-bold text-xs outline-none focus:bg-white focus:border-sky-100 text-slate-700 transition-all placeholder:text-slate-300 resize-none disabled:opacity-50"
                 />
               </div>
             </div>
@@ -543,9 +548,9 @@ const TransactionForm: React.FC<TransactionFormProps> = ({
               </div>
             ) : (
               <div className="bg-slate-50 p-3 md:p-4 rounded-lg border border-slate-100 flex items-center space-x-3">
-                <div className="bg-blue-600 text-white p-1.5 rounded-md shadow-md"><Info size={14} /></div>
+                <div className="bg-[#007CC2] text-white p-1.5 rounded-md shadow-md"><Info size={14} /></div>
                 <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest leading-relaxed">
-                  Pencatat: <span className="text-blue-600">@{currentUsername}</span> <span className="text-[7px] opacity-50">({currentUserRole})</span>
+                  Pencatat: <span className="text-[#007CC2]">@{currentUsername}</span> <span className="text-[7px] opacity-50">({currentUserRole})</span>
                 </p>
               </div>
             )}

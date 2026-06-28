@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@netlify/functions": "^2.8.2",
-    "firebase": "^12.13.0",
+    "@supabase/supabase-js": "^2.107.0",
     "framer-motion": "^12.38.0",
     "jspdf": "^2.5.1",
     "jspdf-autotable": "^3.8.2",
@@ -24,7 +24,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@firebase/eslint-plugin-security-rules": "^0.0.2",
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { Transaction, GlobalStats, ProjectMetadata } from '../../types';
 import { Search, Trash2, Edit2, Loader2, ArrowUpRight, ArrowDownLeft, X, Save, AlertCircle, Check, CornerDownRight, ShieldCheck, Clock, CalendarDays, ChevronDown, MoreVertical, UserCheck, ShieldAlert, Activity, RefreshCw, Copy, Info, Receipt, User, Wallet, Hash, Fingerprint, Layers, Filter, Lock } from 'lucide-react';
-import { dbAddTransaction, dbAddEditHistory, dbAddDeletedTransaction, dbDeleteTransaction } from '../../firebase';
+import { dbAddTransaction, dbAddEditHistory, dbAddDeletedTransaction, dbDeleteTransaction } from '../../supabase';
+import { syncToSpreadsheet } from '../../sheetsSync';
 
 interface HistoryViewProps {
   transactions: Transaction[];
@@ -127,7 +128,7 @@ const HistoryView: React.FC<HistoryViewProps> = ({
   const getVersionBadge = (rawVersion: number) => {
     const vv = (Number(rawVersion) || 0) + 1;
     if (vv <= 1) return null;
-    let colorClass = vv <= 3 ? "bg-blue-50 text-blue-500 border-blue-100" : vv <= 5 ? "bg-amber-50 text-amber-600 border-amber-200" : "bg-rose-50 text-rose-500 border-rose-100";
+    let colorClass = vv <= 3 ? "bg-sky-50 text-[#007CC2] border-sky-100" : vv <= 5 ? "bg-amber-50 text-amber-600 border-amber-200" : "bg-rose-50 text-rose-500 border-rose-100";
     return (
       <span className={`inline-flex items-center px-1.5 py-0.5 rounded-[4px] text-[7px] md:text-[8px] font-black border uppercase tracking-tighter shrink-0 transition-all ${colorClass}`}>
         v{vv}
@@ -158,7 +159,7 @@ const HistoryView: React.FC<HistoryViewProps> = ({
         };
         
         const historyRecord = {
-          history_id: `EDT-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+          id: `EDT-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
           transaction_id: oldTx.id,
           project_name: oldTx.project_name,
           type: oldTx.type,
@@ -175,6 +176,13 @@ const HistoryView: React.FC<HistoryViewProps> = ({
           dbAddTransaction(updatedTx),
           dbAddEditHistory(historyRecord)
         ]);
+
+        // Background Sync to Spreadsheet (Edit Action)
+        syncToSpreadsheet({
+          action: 'edit_tx',
+          data: updatedTx,
+          auditEdit: historyRecord
+        });
 
         const diff = Number(editForm.amount) - Number(oldTx.amount);
         setTransactions((prev: Transaction[]) => prev.map(t => t.id === editingId ? { ...t, description: editForm.description || '', amount: Number(editForm.amount), debit: t.type === 'masuk' ? Number(editForm.amount) : 0, credit: t.type === 'keluar' ? Number(editForm.amount) : 0, edit_version: (Number(t.edit_version) || 0) + 1 } : t));
@@ -212,6 +220,13 @@ const HistoryView: React.FC<HistoryViewProps> = ({
             dbDeleteTransaction(txToDelete.id)
           ]);
 
+          // Background Sync to Spreadsheet (Delete Action)
+          syncToSpreadsheet({
+            action: 'delete_tx',
+            data: txToDelete,
+            auditDelete: deletedTxPayload
+          });
+
           const amt = Number(txToDelete.amount); const isIncome = txToDelete.type === 'masuk';
           setTransactions((prev: Transaction[]) => prev.filter(t => t.id !== deletingId));
           setGlobalStats((prev: GlobalStats | null) => {
@@ -234,7 +249,7 @@ const HistoryView: React.FC<HistoryViewProps> = ({
             placeholder="Cari keterangan, proker, kategori..." 
             value={searchTerm} 
             onChange={(e) => { setSearchTerm(e.target.value); setVisibleCount(50); }} 
-            className="w-full pl-12 pr-4 py-4 bg-slate-50 rounded-xl text-[10px] md:text-xs font-bold border-none outline-none focus:ring-1 focus:ring-blue-100 transition-all shadow-inner" 
+            className="w-full pl-12 pr-4 py-4 bg-slate-50 rounded-xl text-[10px] md:text-xs font-bold border-none outline-none focus:ring-1 focus:ring-sky-100 transition-all shadow-inner" 
           />
         </div>
         
@@ -244,7 +259,7 @@ const HistoryView: React.FC<HistoryViewProps> = ({
           <div 
             className={`absolute top-0 bottom-0 rounded-xl transition-all duration-500 cubic-bezier(0.34, 1.56, 0.64, 1) shadow-lg ${
               filterType === 'ALL' ? 'left-0 bg-slate-900' : 
-              filterType === 'DAILY' ? 'left-[calc(33.33%+0px)] bg-blue-600' : 
+              filterType === 'DAILY' ? 'left-[calc(33.33%+0px)] bg-[#007CC2]' : 
               'left-[calc(66.66%+0px)] bg-emerald-600'
             }`}
             style={{ width: 'calc(33.33% - 5.33px)' }}
@@ -283,11 +298,11 @@ const HistoryView: React.FC<HistoryViewProps> = ({
         <div className="h-2 md:h-6 w-full" />
         {isLoading && displayData.length === 0 ? (
           <div className="py-24 text-center flex flex-col items-center justify-center space-y-6">
-            <div className="relative"><div className="absolute inset-0 bg-blue-500/20 rounded-full blur-xl animate-pulse" /><Clock size={40} className="relative animate-bounce text-blue-500" /></div>
+            <div className="relative"><div className="absolute inset-0 bg-[#007CC2]/20 rounded-full blur-xl animate-pulse" /><Clock size={40} className="relative animate-bounce text-[#007CC2]" /></div>
             <div className="flex flex-col items-center space-y-2">
               <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-400">Sinkronisasi Kas...</p>
               <div className="flex items-center space-x-1.5 px-3 py-1 bg-white border border-slate-100 rounded-full shadow-sm">
-                <RefreshCw size={10} className="animate-spin text-blue-500" />
+                <RefreshCw size={10} className="animate-spin text-[#007CC2]" />
                 <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Memuat Riwayat</span>
               </div>
             </div>
@@ -320,7 +335,7 @@ const HistoryView: React.FC<HistoryViewProps> = ({
                       <React.Fragment key={t.id}>
                         <tr 
                           onClick={() => setSelectedId(selectedId === t.id ? null : t.id)} 
-                          className={`transition-all active:scale-[0.99] cursor-pointer ${selectedId === t.id ? 'bg-blue-100/40' : isEven ? 'bg-white' : 'bg-slate-50/40'} hover:bg-blue-50/60`}
+                          className={`transition-all active:scale-[0.99] cursor-pointer ${selectedId === t.id ? 'bg-sky-100/40' : isEven ? 'bg-white' : 'bg-slate-50/40'} hover:bg-sky-50/60`}
                         >
                           <td className="hidden md:table-cell p-3 md:p-5 text-[8px] md:text-[11px] font-black text-slate-400 uppercase tracking-tighter truncate">{t.id}</td>
                           <td className="p-3 md:p-5 text-[8px] md:text-[11px] font-black text-slate-500 truncate">
@@ -329,14 +344,14 @@ const HistoryView: React.FC<HistoryViewProps> = ({
                           </td>
                           <td className="p-3 md:p-5 overflow-hidden">
                              <div className="flex flex-col min-w-0">
-                               <span className={`px-1 py-0.5 rounded text-[7px] md:text-[9px] font-bold tracking-tight truncate w-fit ${isKasUmum ? 'bg-blue-50 text-blue-400' : 'bg-slate-100 text-slate-500'}`}>{t.category || 'Lainnya'}</span>
+                               <span className={`px-1 py-0.5 rounded text-[7px] md:text-[9px] font-bold tracking-tight truncate w-fit ${isKasUmum ? 'bg-sky-50 text-[#007CC2] border border-sky-100/50' : 'bg-slate-100 text-slate-500'}`}>{t.category || 'Lainnya'}</span>
                              </div>
                           </td>
                           <td className="p-3 md:p-5 overflow-hidden">
                              <div className="flex flex-col min-w-0 w-full">
                                <div className="flex items-center gap-1.5 flex-nowrap w-full overflow-hidden">
                                  {/* v16.8: Hapus 'uppercase' agar teks penutupan tampil sesuai data database */}
-                                 <span className={`text-[9px] md:text-sm font-bold truncate leading-tight flex-shrink min-w-0 ${isSystem ? 'text-blue-600 font-black' : 'text-slate-800'}`}>{t.description}</span>
+                                 <span className={`text-[9px] md:text-sm font-bold truncate leading-tight flex-shrink min-w-0 ${isSystem ? 'text-[#007CC2] font-black' : 'text-slate-800'}`}>{t.description}</span>
                                  {getVersionBadge(t.edit_version)}
                                </div>
                                {!isKasUmum && (
@@ -347,13 +362,13 @@ const HistoryView: React.FC<HistoryViewProps> = ({
                           <td className={`p-3 md:p-5 text-right text-[10px] md:text-base font-black ${t.type === 'masuk' ? 'text-emerald-500' : 'text-rose-500'}`}>{t.type === 'masuk' ? '' : '- '}{formatIDR(t.amount)}</td>
                         </tr>
                         {selectedId === t.id && (
-                          <tr className="bg-blue-100/30 border-b border-blue-100">
+                          <tr className="bg-sky-100/30 border-b border-sky-100">
                             <td colSpan={5} className="p-4 md:p-6 animate-in slide-in-from-top-2 duration-300">
                                <div className="flex flex-row md:flex-row justify-between items-start gap-4">
                                   <div className="flex flex-col md:grid md:grid-cols-3 lg:grid-cols-4 gap-y-3 md:gap-x-8 md:gap-y-3 flex-1 min-w-0">
                                     <div className="space-y-0.5">
                                       <span className="text-[7px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest block text-left">Pencatat</span>
-                                      <span className="text-[9px] md:text-xs font-black text-slate-700 uppercase block text-left">{t.created_by} <span className="text-blue-500 text-[8px] italic">({t.created_by_role || '-'})</span></span>
+                                      <span className="text-[9px] md:text-xs font-black text-slate-700 uppercase block text-left">{t.created_by} <span className="text-[#007CC2] text-[8px] italic">({t.created_by_role || '-'})</span></span>
                                     </div>
                                     <div className="space-y-1">
                                       <span className="text-[7px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest block text-left">Status Audit</span>
@@ -382,8 +397,8 @@ const HistoryView: React.FC<HistoryViewProps> = ({
                                           </>
                                         ) : locked ? (
                                           <div className="flex items-center space-x-1.5 text-rose-500">
-                                            {isSystem ? <ShieldCheck size={12} className="text-blue-500" /> : <Lock size={12} />}
-                                            <span className={`text-[8px] md:text-[10px] font-black uppercase tracking-tight ${isSystem ? 'text-blue-600 font-black' : 'text-rose-500'}`}>
+                                            {isSystem ? <ShieldCheck size={12} className="text-[#007CC2]" /> : <Lock size={12} />}
+                                            <span className={`text-[8px] md:text-[10px] font-black uppercase tracking-tight ${isSystem ? 'text-[#007CC2] font-black' : 'text-rose-500'}`}>
                                               {isSystem ? 'Sistem Terkunci' : 'Proker Diarsipkan'}
                                             </span>
                                           </div>
@@ -395,11 +410,11 @@ const HistoryView: React.FC<HistoryViewProps> = ({
                                         )}
                                       </div>
                                     </div>
-                                    <div className="md:hidden space-y-0.5 pt-1 border-t border-blue-100/50 mt-1">
+                                    <div className="md:hidden space-y-0.5 pt-1 border-t border-sky-100/50 mt-1">
                                        <span className="text-[7px] font-black text-slate-400 uppercase tracking-widest block text-left">ID Referensi</span>
                                        <div className="flex items-center space-x-2">
                                          <span className="text-[9px] font-black text-slate-700 uppercase tracking-tighter">#{t.id}</span>
-                                         <button onClick={(e) => handleCopyId(e, t.id)} className="p-1 text-blue-500 bg-blue-100/50 rounded hover:bg-blue-200 transition-colors"><Copy size={10} /></button>
+                                         <button onClick={(e) => handleCopyId(e, t.id)} className="p-1 text-[#007CC2] bg-sky-100/50 rounded hover:bg-sky-200 transition-colors"><Copy size={10} /></button>
                                        </div>
                                     </div>
                                   </div>
@@ -407,7 +422,7 @@ const HistoryView: React.FC<HistoryViewProps> = ({
                                     <button onClick={(e) => { e.stopPropagation(); setViewDetail(t); }} className="flex items-center justify-center space-x-1.5 md:space-x-2 px-2.5 md:px-4 py-1.5 md:py-2.5 bg-slate-900 text-white rounded-lg md:rounded-xl text-[7px] md:text-[10px] font-black uppercase tracking-widest shadow-lg active:scale-95 transition-all w-full md:w-fit"><Receipt size={12} className="md:size-[14px]" /><span>Detail</span></button>
                                     {canWrite && (isAdmin || !locked) && (
                                       <>
-                                        <button onClick={(e) => { e.stopPropagation(); setEditingId(t.id); setEditForm(t); }} className={`flex items-center justify-center space-x-1.5 md:space-x-2 px-2.5 md:px-4 py-1.5 md:py-2.5 rounded-lg md:rounded-xl text-[7px] md:text-[10px] font-black uppercase tracking-widest shadow-lg active:scale-95 transition-all w-full md:w-fit ${t.is_approve ? 'bg-indigo-600 text-white' : 'bg-blue-600 text-white'}`}><Edit2 size={12} className="md:size-[14px]" /><span>Edit</span></button>
+                                        <button onClick={(e) => { e.stopPropagation(); setEditingId(t.id); setEditForm(t); }} className={`flex items-center justify-center space-x-1.5 md:space-x-2 px-2.5 md:px-4 py-1.5 md:py-2.5 rounded-lg md:rounded-xl text-[7px] md:text-[10px] font-black uppercase tracking-widest shadow-lg active:scale-95 transition-all w-full md:w-fit ${t.is_approve ? 'bg-[#004D90] text-white' : 'bg-[#007CC2] text-white'}`}><Edit2 size={12} className="md:size-[14px]" /><span>Edit</span></button>
                                         <button onClick={(e) => { e.stopPropagation(); setDeletingId(t.id); setDeleteReason(''); }} className="flex items-center justify-center space-x-1.5 md:space-x-2 px-2.5 md:px-4 py-1.5 md:py-2.5 bg-rose-500 text-white rounded-lg md:rounded-xl text-[7px] md:text-[10px] font-black uppercase tracking-widest shadow-lg active:scale-95 transition-all w-full md:w-fit"><Trash2 size={12} className="md:size-[14px]" /><span>Hapus</span></button>
                                       </>
                                     )}
@@ -422,7 +437,7 @@ const HistoryView: React.FC<HistoryViewProps> = ({
                 </tbody>
               </table>
             </div>
-            {filteredData.length > visibleCount && (<button onClick={() => setVisibleCount(prev => prev + 100)} className="w-full py-5 md:py-6 bg-white border border-slate-100 rounded-xl flex items-center justify-center space-x-3 text-blue-600 shadow-sm active:scale-95 transition-all hover:bg-blue-50/30"><ChevronDown size={20} /><span className="text-[10px] md:sm font-black uppercase tracking-widest">Muat data lebih lama ({filteredData.length - visibleCount} data lagi)</span></button>)}
+            {filteredData.length > visibleCount && (<button onClick={() => setVisibleCount(prev => prev + 100)} className="w-full py-5 md:py-6 bg-white border border-slate-100 rounded-xl flex items-center justify-center space-x-3 text-[#007CC2] shadow-sm active:scale-95 transition-all hover:bg-sky-50/30"><ChevronDown size={20} /><span className="text-[10px] md:sm font-black uppercase tracking-widest">Muat data lebih lama ({filteredData.length - visibleCount} data lagi)</span></button>)}
           </div>
         )}
       </div>
@@ -634,18 +649,18 @@ const HistoryView: React.FC<HistoryViewProps> = ({
       {editingId && (
         <div className="fixed inset-0 z-[10001] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4 animate-backdrop">
           <div className="bg-white w-[calc(100%-3rem)] max-w-[320px] rounded-2xl shadow-2xl overflow-hidden animate-dialog-bounce mx-auto">
-            <div className="p-6 text-white flex items-center justify-between bg-blue-600">
+            <div className="p-6 text-white flex items-center justify-between bg-[#007CC2]">
                <div className="flex items-center space-x-3"><div className="bg-white/20 p-2 rounded-lg"><Edit2 size={18} /></div><h3 className="font-black uppercase text-[10px] tracking-widest">Edit Transaksi</h3></div>
                {!isUpdating && <button onClick={closeEditModal}><X size={20} /></button>}
             </div>
             <div className="p-6 space-y-5">
-              {editForm.is_approve && <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100 flex items-start space-x-3"><ShieldAlert size={16} className="text-indigo-500 flex-shrink-0 mt-0.5" /><p className="text-[9px] font-bold text-indigo-700 leading-tight">Warning: Mengedit data yang sudah disetujui akan memengaruhi saldo kumulatif laporan divalidasi.</p></div>}
-              <div className="space-y-1.5"><label className="text-[8px] font-black text-slate-400 uppercase tracking-widest ml-1">Keterangan Baru</label><input type="text" value={editForm.description} onChange={e => setEditForm({...editForm, description: e.target.value.replace(/[\r\n]/gm, "")})} className="w-full p-4 bg-slate-50 border-none rounded-lg text-xs font-black outline-none focus:ring-1 focus:ring-blue-500" /></div>
-              <div className="space-y-1.5"><label className="text-[8px] font-black text-slate-400 uppercase tracking-widest ml-1">Nominal (IDR)</label><input type="number" value={editForm.amount} onChange={e => setEditForm({...editForm, amount: Number(e.target.value)})} className="w-full p-4 bg-slate-50 border-none rounded-lg text-xl font-black outline-none focus:ring-1 focus:ring-blue-500" /></div>
+              {editForm.is_approve && <div className="bg-sky-50 p-4 rounded-xl border border-sky-100 flex items-start space-x-3"><ShieldAlert size={16} className="text-[#007CC2] flex-shrink-0 mt-0.5" /><p className="text-[9px] font-bold text-[#004D90] leading-tight">Warning: Mengedit data yang sudah disetujui akan memengaruhi saldo kumulatif laporan divalidasi.</p></div>}
+              <div className="space-y-1.5"><label className="text-[8px] font-black text-slate-400 uppercase tracking-widest ml-1">Keterangan Baru</label><input type="text" value={editForm.description} onChange={e => setEditForm({...editForm, description: e.target.value.replace(/[\r\n]/gm, "")})} className="w-full p-4 bg-slate-50 border-none rounded-lg text-xs font-black outline-none focus:ring-1 focus:ring-[#007CC2]" /></div>
+              <div className="space-y-1.5"><label className="text-[8px] font-black text-slate-400 uppercase tracking-widest ml-1">Nominal (IDR)</label><input type="number" value={editForm.amount} onChange={e => setEditForm({...editForm, amount: Number(e.target.value)})} className="w-full p-4 bg-slate-50 border-none rounded-lg text-xl font-black outline-none focus:ring-1 focus:ring-[#007CC2]" /></div>
             </div>
             <div className="p-6 bg-slate-50 flex space-x-2">
               {!isUpdating && <button onClick={closeEditModal} className="flex-1 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest">Batal</button>}
-              <button onClick={handleRequestUpdate} disabled={isUpdating} className="flex-[2] py-4 rounded-lg text-[9px] font-black text-white uppercase tracking-widest bg-blue-600 shadow-xl shadow-blue-100 transition-all active:scale-95">{isUpdating ? <Loader2 className="animate-spin mx-auto" size={16} /> : 'SIMPAN PERUBAHAN'}</button>
+              <button onClick={handleRequestUpdate} disabled={isUpdating} className="flex-[2] py-4 rounded-lg text-[9px] font-black text-white uppercase tracking-widest bg-[#007CC2] shadow-xl shadow-[#007CC2]/20 transition-all active:scale-95">{isUpdating ? <Loader2 className="animate-spin mx-auto" size={16} /> : 'SIMPAN PERUBAHAN'}</button>
             </div>
           </div>
         </div>
