@@ -2,13 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { 
   Users, Trash2, Check, X, 
   Globe, UserCheck, RefreshCw, LogOut, Edit, ShieldCheck, 
-  Lock, Database, Mail
+  Lock, Database, Mail, Plus
 } from 'lucide-react';
-import { centralDb, getFirestoreForConfig } from '../../firebase';
+import { db, centralClient } from '../../supabase';
 import SetupGuide from './SetupGuide';
-import { 
-  collection, getDocs, doc, setDoc, updateDoc, deleteDoc
-} from 'firebase/firestore';
 
 interface SuperadminPanelProps {
   onLogout: () => void;
@@ -20,36 +17,48 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
   const [users, setUsers] = useState<any[]>([]);
   const [configs, setConfigs] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'pending' | 'active' | 'setup'>('pending');
+  const [activeTab, setActiveTab] = useState<'pending' | 'active' | 'instansi' | 'setup'>('pending');
   
   // Edit State
   const [editingUser, setEditingUser] = useState<any | null>(null);
+
+  // Instansi CRUD States
+  const [editingInstansi, setEditingInstansi] = useState<any | null>(null);
+  const [isCreatingInstansi, setIsCreatingInstansi] = useState(false);
+  const [newInstansiName, setNewInstansiName] = useState('');
+  const [newSupabaseUrl, setNewSupabaseUrl] = useState('');
+  const [newSupabaseAnonKey, setNewSupabaseAnonKey] = useState('');
+  const [newBackupUrl, setNewBackupUrl] = useState('');
   const [editFullName, setEditFullName] = useState('');
   const [editRole, setEditRole] = useState('Viewer');
   const [editOriginalRole, setEditOriginalRole] = useState('');
   const [editWebAccess, setEditWebAccess] = useState({ bendahara: true, absensi: true });
   const [editFirebaseConfig, setEditFirebaseConfig] = useState('');
+  const [editStatus, setEditStatus] = useState('Active');
+
+  const activeClient = centralClient || db;
 
   const fetchPortalData = async () => {
     setIsLoading(true);
     try {
-      // 1. Fetch all configurations in instansi (formerly firebase_config)
-      const configSnap = await getDocs(collection(centralDb, 'instansi'));
-      const configList: any[] = [];
-      configSnap.forEach(d => {
-        configList.push({ id: d.id, ...d.data() });
-      });
-      setConfigs(configList);
+      // 1. Fetch all configurations in instansi from central Supabase DB
+      const { data: configList, error: configErr } = await activeClient.from('instansi').select('*');
+      if (configErr) throw configErr;
 
-      // 2. Fetch all users from centralDb
-      const usersSnap = await getDocs(collection(centralDb, 'users'));
-      const usersList: any[] = [];
-      usersSnap.forEach(d => {
-        usersList.push({ id: d.id, ...d.data() });
-      });
-      setUsers(usersList);
+      const mappedConfigs = (configList || []).map(d => ({
+        id: d.id,
+        instansiName: d.instansi_name || d.id,
+        ...d
+      }));
+      setConfigs(mappedConfigs);
+
+      // 2. Fetch all users from central Supabase DB
+      const { data: usersList, error: usersErr } = await activeClient.from('users').select('*');
+      if (usersErr) throw usersErr;
+
+      setUsers(usersList || []);
     } catch (err: any) {
-      console.error("Error fetching portal data:", err);
+      console.error("Error fetching portal data from Supabase:", err);
       notify("Gagal memuat data portal: " + (err.message || String(err)), "error");
     } finally {
       setIsLoading(false);
@@ -68,6 +77,7 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
     setEditFullName(user.full_name || user.username || '');
     setEditRole(user.role === 'Pending' ? 'Viewer' : (user.role || 'Viewer'));
     setEditOriginalRole(user.original_role || '');
+    setEditStatus(user.status || 'Active');
     
     // Parse web_access
     const accessStr = String(user.web_access || 'bendahara,absensi').toLowerCase();
@@ -76,14 +86,9 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
       absensi: accessStr.includes('absensi')
     });
 
-    // Default to matching config or first available
-    const instansiId = user.instansi || user.firebase_config;
+    const instansiId = user.instansi;
     if (instansiId) {
-      if (typeof instansiId === 'string') {
-        setEditFirebaseConfig(instansiId);
-      } else if (typeof instansiId === 'object') {
-        setEditFirebaseConfig(instansiId.projectId || '');
-      }
+      setEditFirebaseConfig(instansiId);
     } else {
       setEditFirebaseConfig(configs[0]?.id || '');
     }
@@ -91,6 +96,114 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
 
   const handleCloseEdit = () => {
     setEditingUser(null);
+    setEditStatus('Active');
+  };
+
+  // Instansi crud functions
+  const handleCreateInstansi = async () => {
+    if (!newInstansiName.trim()) {
+      notify("Nama Instansi tidak boleh kosong", "error");
+      return;
+    }
+    if (!newSupabaseUrl.trim() || !newSupabaseAnonKey.trim()) {
+      notify("Supabase URL dan Anon Key harus diisi", "error");
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      
+      const cleanSlug = newInstansiName.trim().toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)+/g, '');
+      const baseId = cleanSlug || 'inst';
+
+      let finalId = `${baseId}-${Math.random().toString(36).substring(2, 6)}`;
+      while (configs.some(c => c.id === finalId)) {
+        finalId = `${baseId}-${Math.random().toString(36).substring(2, 6)}`;
+      }
+
+      const payload = {
+        id: finalId,
+        instansi_name: newInstansiName.trim(),
+        supabase_url: newSupabaseUrl.trim(),
+        supabase_anon_key: newSupabaseAnonKey.trim(),
+        appscriptbackuptreasurerweb: newBackupUrl.trim() || null
+      };
+
+      const { error } = await activeClient.from('instansi').insert([payload]);
+      if (error) throw error;
+
+      notify("Instansi berhasil ditambahkan dengan ID: " + finalId, "success");
+      setIsCreatingInstansi(false);
+      setNewInstansiName('');
+      setNewSupabaseUrl('');
+      setNewSupabaseAnonKey('');
+      setNewBackupUrl('');
+      await fetchPortalData();
+    } catch (err: any) {
+      console.error("Gagal menambahkan instansi:", err);
+      notify("Gagal menambahkan instansi: " + (err.message || String(err)), "error");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleUpdateInstansi = async () => {
+    if (!editingInstansi) return;
+    if (!editingInstansi.instansi_name?.trim()) {
+      notify("Nama Instansi tidak boleh kosong", "error");
+      return;
+    }
+    if (!editingInstansi.supabase_url?.trim() || !editingInstansi.supabase_anon_key?.trim()) {
+      notify("Supabase URL dan Anon Key harus diisi", "error");
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      const payload = {
+        instansi_name: editingInstansi.instansi_name.trim(),
+        supabase_url: editingInstansi.supabase_url.trim(),
+        supabase_anon_key: editingInstansi.supabase_anon_key.trim(),
+        appscriptbackuptreasurerweb: editingInstansi.appscriptbackuptreasurerweb?.trim() || null
+      };
+
+      const { error } = await activeClient.from('instansi').update(payload).eq('id', editingInstansi.id);
+      if (error) throw error;
+
+      notify("Instansi berhasil diperbarui", "success");
+      setEditingInstansi(null);
+      await fetchPortalData();
+    } catch (err: any) {
+      console.error("Gagal memperbarui instansi:", err);
+      notify("Gagal memperbarui instansi: " + (err.message || String(err)), "error");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDeleteInstansi = (inst: any) => {
+    confirm(
+      "Hapus Instansi?",
+      `Apakah Anda yakin ingin menghapus instansi ${inst.instansi_name} (${inst.id})? Pengguna yang terhubung dengan instansi ini tidak akan bisa login ke database ini lagi.`,
+      "Ya, Hapus",
+      async () => {
+        try {
+          setIsLoading(true);
+          const { error } = await activeClient.from('instansi').delete().eq('id', inst.id);
+          if (error) throw error;
+          notify("Instansi berhasil dihapus", "success");
+          await fetchPortalData();
+        } catch (err: any) {
+          console.error("Gagal menghapus instansi:", err);
+          notify("Gagal menghapus instansi: " + (err.message || String(err)), "error");
+        } finally {
+          setIsLoading(false);
+        }
+      },
+      true
+    );
   };
 
   const handleSaveUser = async () => {
@@ -113,36 +226,28 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
         return;
       }
 
-      const userDocRef = doc(centralDb, 'users', editingUser.id);
-      
       const updatedData = {
         full_name: editFullName.trim(),
         role: editRole,
         original_role: editOriginalRole.trim() || editRole,
         web_access: webAccessStr,
         instansi: editFirebaseConfig || null,
-        status: 'Active' // clear pending status
+        status: editStatus
       };
 
-      await updateDoc(userDocRef, updatedData);
+      // 1. Update user inside Central DB
+      const { error: centralErr } = await activeClient.from('users').update(updatedData).eq('id', editingUser.id);
+      if (centralErr) throw centralErr;
 
       // Clean up the user from the previously assigned operational/tenant database if it changed
-      const prevInstansiId = editingUser.instansi || editingUser.firebase_config;
+      const prevInstansiId = editingUser.instansi;
       if (prevInstansiId && prevInstansiId !== editFirebaseConfig) {
         try {
           const prevConfig = configs.find(c => c.id === prevInstansiId);
-          if (prevConfig) {
-            try {
-              const { getAuthForConfig } = await import('../../firebase');
-              const prevAuth = getAuthForConfig(prevConfig);
-              const { signInWithEmailAndPassword } = await import('firebase/auth');
-              await signInWithEmailAndPassword(prevAuth, 'superadmin@catetin.com', 'superadmin354');
-            } catch (authErr) {
-              console.warn("Prev dynamic DB auth login skipped:", authErr);
-            }
-
-            const prevDb = getFirestoreForConfig(prevConfig);
-            await deleteDoc(doc(prevDb, 'users', editingUser.id));
+          if (prevConfig && prevConfig.supabase_url && prevConfig.supabase_anon_key) {
+            const { createClient } = await import('@supabase/supabase-js');
+            const targetClient = createClient(prevConfig.supabase_url, prevConfig.supabase_anon_key);
+            await targetClient.from('users').delete().eq('id', editingUser.id);
             console.log(`Cleaned up user from previous operational DB: ${prevInstansiId}`);
           }
         } catch (prevDelErr) {
@@ -150,31 +255,22 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
         }
       }
 
-      // Sync updated user credentials to target operational/tenant database
-      if (selectedConfig) {
+      // 2. Sync updated user credentials to target operational/tenant database
+      if (selectedConfig && selectedConfig.supabase_url && selectedConfig.supabase_anon_key) {
         try {
-          try {
-            const { getAuthForConfig } = await import('../../firebase');
-            const targetAuth = getAuthForConfig(selectedConfig);
-            const { signInWithEmailAndPassword } = await import('firebase/auth');
-            await signInWithEmailAndPassword(targetAuth, 'superadmin@catetin.com', 'superadmin354');
-            console.log("Superadmin silent sign-in to tenant Auth successful");
-          } catch (superSignErr) {
-            console.warn("Superadmin silent sign-in to tenant Auth failed:", superSignErr);
-          }
-
-          const targetDb = getFirestoreForConfig(selectedConfig);
-          const targetUserDocRef = doc(targetDb, 'users', editingUser.id);
-          await setDoc(targetUserDocRef, {
+          const { createClient } = await import('@supabase/supabase-js');
+          const targetClient = createClient(selectedConfig.supabase_url, selectedConfig.supabase_anon_key);
+          await targetClient.from('users').upsert([{
+            id: editingUser.id,
             email: editingUser.email || '',
             full_name: editFullName.trim(),
             role: editRole,
             original_role: editOriginalRole.trim() || editRole,
             web_access: webAccessStr,
             instansi: editFirebaseConfig || null,
-            status: 'Active',
+            status: editStatus,
             created_at: editingUser.created_at || new Date().toISOString()
-          }, { merge: true });
+          }]);
           console.log(`Successfully synced user edit to operational tenant DB: ${editFirebaseConfig}`);
         } catch (syncErr) {
           console.error("Gagal sinkronisasi data user ke database instansi operasional:", syncErr);
@@ -197,46 +293,29 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
       "Ya, Setujui",
       async () => {
         try {
-          const userDocRef = doc(centralDb, 'users', user.id);
-          
-          // Get first firebase config as default fallback if not specified
           const defaultConfId = configs[0]?.id || '';
+          const rawTargetInstansiId = user.instansi || defaultConfId;
+          const instansiIdStr = typeof rawTargetInstansiId === 'string' ? rawTargetInstansiId : defaultConfId;
 
-          const rawTargetInstansiId = user.instansi || user.firebase_config || defaultConfId;
-          let instansiIdStr = '';
-          if (typeof rawTargetInstansiId === 'string') {
-            instansiIdStr = rawTargetInstansiId;
-          } else if (rawTargetInstansiId && typeof rawTargetInstansiId === 'object') {
-            instansiIdStr = rawTargetInstansiId.projectId || rawTargetInstansiId.id || defaultConfId;
-          } else {
-            instansiIdStr = defaultConfId;
-          }
-
-          await updateDoc(userDocRef, {
+          const updatedData = {
             role: 'Viewer',
             original_role: user.original_role || 'Viewer',
             status: 'Active',
             web_access: 'bendahara,absensi',
             instansi: instansiIdStr
-          });
+          };
+
+          const { error: centralErr } = await activeClient.from('users').update(updatedData).eq('id', user.id);
+          if (centralErr) throw centralErr;
 
           // Sync approved user to the designated operational/tenant database
           const selectedConfig = configs.find(c => c.id === instansiIdStr);
-          if (selectedConfig) {
+          if (selectedConfig && selectedConfig.supabase_url && selectedConfig.supabase_anon_key) {
             try {
-              try {
-                const { getAuthForConfig } = await import('../../firebase');
-                const targetAuth = getAuthForConfig(selectedConfig);
-                const { signInWithEmailAndPassword } = await import('firebase/auth');
-                await signInWithEmailAndPassword(targetAuth, 'superadmin@catetin.com', 'superadmin354');
-                console.log("Superadmin silent sign-in to tenant Auth successful");
-              } catch (superSignErr) {
-                console.warn("Superadmin silent sign-in to tenant Auth failed:", superSignErr);
-              }
-
-              const targetDb = getFirestoreForConfig(selectedConfig);
-              const targetUserDocRef = doc(targetDb, 'users', user.id);
-              await setDoc(targetUserDocRef, {
+              const { createClient } = await import('@supabase/supabase-js');
+              const targetClient = createClient(selectedConfig.supabase_url, selectedConfig.supabase_anon_key);
+              await targetClient.from('users').upsert([{
+                id: user.id,
                 email: user.email || '',
                 full_name: user.full_name || '',
                 role: 'Viewer',
@@ -245,13 +324,11 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
                 instansi: instansiIdStr,
                 status: 'Active',
                 created_at: user.created_at || new Date().toISOString()
-              }, { merge: true });
+              }]);
               console.log(`Successfully synced approved user to operational tenant DB: ${instansiIdStr}`);
             } catch (syncErr) {
               console.error("Gagal sinkronisasi user aktif ke database operasional instansi:", syncErr);
             }
-          } else {
-            console.warn("Could not find matching instansi configuration to sync user data for ID:", instansiIdStr);
           }
 
           notify("Pengajuan akun berhasil disetujui", "success");
@@ -264,6 +341,56 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
     );
   };
 
+  const handleToggleUserStatus = async (user: any) => {
+    const isCurrentlyActive = String(user.status || 'Active').toLowerCase() === 'active';
+    const newStatus = isCurrentlyActive ? 'Disabled' : 'Active';
+    const actionLabel = isCurrentlyActive ? 'menonaktifkan sementara' : 'mengaktifkan kembali';
+    const confirmBtn = isCurrentlyActive ? 'Ya, Nonaktifkan' : 'Ya, Aktifkan';
+
+    confirm(
+      isCurrentlyActive ? "Nonaktifkan Akun?" : "Aktifkan Akun?",
+      `Apakah Anda yakin ingin ${actionLabel} akun ${user.full_name || user.email}?`,
+      confirmBtn,
+      async () => {
+        try {
+          setIsLoading(true);
+
+          // 1. Update status in Central DB
+          const { error: centralErr } = await activeClient
+            .from('users')
+            .update({ status: newStatus })
+            .eq('id', user.id);
+          if (centralErr) throw centralErr;
+
+          // 2. Sync to operational database if configured
+          const targetInstansiId = user.instansi;
+          if (targetInstansiId) {
+            const selectedConfig = configs.find(c => c.id === targetInstansiId);
+            if (selectedConfig && selectedConfig.supabase_url && selectedConfig.supabase_anon_key) {
+              try {
+                const { createClient } = await import('@supabase/supabase-js');
+                const targetClient = createClient(selectedConfig.supabase_url, selectedConfig.supabase_anon_key);
+                await targetClient.from('users').update({ status: newStatus }).eq('id', user.id);
+                console.log(`Synced dynamic power-toggle status: ${newStatus} to operational DB`);
+              } catch (syncErr) {
+                console.warn("Gagal sinkron status dinonaktifkan ke database operasional instansi:", syncErr);
+              }
+            }
+          }
+
+          notify(`Akun berhasil ${isCurrentlyActive ? 'dinonaktifkan' : 'diaktifkan'}`, "success");
+          fetchPortalData();
+        } catch (err: any) {
+          console.error("Gagal mengubah status akun:", err);
+          notify("Gagal mengubah status: " + (err.message || String(err)), "error");
+        } finally {
+          setIsLoading(false);
+        }
+      },
+      isCurrentlyActive // passes isDanger if the action is to disable
+    );
+  };
+
   const handleDeleteUser = async (user: any) => {
     confirm(
       "Hapus/Tolak Akun?",
@@ -271,27 +398,18 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
       "Ya, Hapus",
       async () => {
         try {
-          const userDocRef = doc(centralDb, 'users', user.id);
-          await deleteDoc(userDocRef);
+          const { error: centralErr } = await activeClient.from('users').delete().eq('id', user.id);
+          if (centralErr) throw centralErr;
 
           // Dual-delete user from operational database if they were linked to one
-          const targetInstansiId = user.instansi || user.firebase_config;
+          const targetInstansiId = user.instansi;
           if (targetInstansiId) {
             const selectedConfig = configs.find(c => c.id === targetInstansiId);
-            if (selectedConfig) {
+            if (selectedConfig && selectedConfig.supabase_url && selectedConfig.supabase_anon_key) {
               try {
-                try {
-                  const { getAuthForConfig } = await import('../../firebase');
-                  const targetAuth = getAuthForConfig(selectedConfig);
-                  const { signInWithEmailAndPassword } = await import('firebase/auth');
-                  await signInWithEmailAndPassword(targetAuth, 'superadmin@catetin.com', 'superadmin354');
-                  console.log("Superadmin silent sign-in to tenant Auth successful context deletion");
-                } catch (superSignErr) {
-                  console.warn("Superadmin silent sign-in to tenant Auth failed for delete operation:", superSignErr);
-                }
-
-                const targetDb = getFirestoreForConfig(selectedConfig);
-                await deleteDoc(doc(targetDb, 'users', user.id));
+                const { createClient } = await import('@supabase/supabase-js');
+                const targetClient = createClient(selectedConfig.supabase_url, selectedConfig.supabase_anon_key);
+                await targetClient.from('users').delete().eq('id', user.id);
                 console.log(`Successfully deleted user from operational DB: ${targetInstansiId}`);
               } catch (delErr) {
                 console.warn("Gagal menghapus user dari database operasional instansi:", delErr);
@@ -389,6 +507,13 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
               <span>Pengguna Aktif ({activeUsers.length})</span>
             </button>
             <button 
+              onClick={() => setActiveTab('instansi')}
+              className={`w-full flex items-center justify-start space-x-2.5 px-4 py-3 rounded-xl font-black text-[10px] uppercase tracking-wider transition-all cursor-pointer ${activeTab === 'instansi' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:text-slate-900'}`}
+            >
+              <Globe size={14} className="text-blue-500" />
+              <span>Kelola Instansi ({configs.length})</span>
+            </button>
+            <button 
               onClick={() => setActiveTab('setup')}
               className={`w-full flex items-center justify-start space-x-2.5 px-4 py-3 rounded-xl font-black text-[10px] uppercase tracking-wider transition-all cursor-pointer ${activeTab === 'setup' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:text-slate-900'}`}
             >
@@ -402,8 +527,17 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
         <div className="flex-1 bg-white rounded-3xl border border-slate-200/60 shadow-sm overflow-hidden flex flex-col relative min-w-0">
           <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0">
             <h3 className="text-xs font-black uppercase tracking-widest text-slate-700">
-              {activeTab === 'pending' ? 'Daftar Pengajuan Akun Baru' : activeTab === 'active' ? 'Daftar Pengguna Aktif' : 'Aturan Keamanan & Setup Firebase (Multi-DB)'}
+              {activeTab === 'pending' ? 'Daftar Pengajuan Akun Baru' : activeTab === 'active' ? 'Daftar Pengguna Aktif' : activeTab === 'instansi' ? 'Kelola Database Instansi Cabang' : 'Aturan Keamanan & Setup Firebase (Multi-DB)'}
             </h3>
+            {activeTab === 'instansi' && (
+              <button
+                onClick={() => setIsCreatingInstansi(true)}
+                className="flex items-center space-x-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-black text-[9px] rounded-xl uppercase tracking-widest transition-all cursor-pointer border-0"
+              >
+                <Plus size={11} strokeWidth={3} />
+                <span>Tambah Instansi</span>
+              </button>
+            )}
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-3">
@@ -493,11 +627,18 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
                 activeUsers.map(user => (
                   <div 
                     key={user.id} 
-                    className="p-4 bg-white border border-slate-200 hover:border-slate-300 rounded-2xl shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 transition-all"
+                    className={`p-4 border rounded-2xl shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 transition-all ${
+                      String(user.status || 'Active').toLowerCase() === 'active'
+                        ? 'bg-white border-slate-200 hover:border-slate-300'
+                        : 'bg-rose-50/20 border-rose-200 hover:border-rose-300'
+                    }`}
                   >
                     <div className="space-y-1.5 min-w-0 flex-1">
                       <div className="flex items-center space-x-2">
                         <span className="px-1.5 py-0.5 bg-blue-600 text-white rounded text-[7.5px] font-black uppercase tracking-wider font-mono">{user.role || 'Viewer'}</span>
+                        {String(user.status || 'Active').toLowerCase() !== 'active' && (
+                          <span className="px-1.5 py-0.5 bg-rose-600 text-white rounded text-[7.5px] font-black uppercase tracking-wider font-mono animate-pulse">NONAKTIF</span>
+                        )}
                         <h4 className="text-xs font-black text-slate-800 truncate uppercase mt-0.5">{user.full_name || 'Tidak ada nama'}</h4>
                         {user.original_role && user.original_role !== user.role && (
                           <span className="text-[9px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-lg font-black uppercase tracking-tight shrink-0">
@@ -521,8 +662,19 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
                         </span>
                       </div>
                     </div>
-
+ 
                     <div className="flex items-center space-x-2 w-full sm:w-auto self-end sm:self-center shrink-0">
+                      <button 
+                        onClick={() => handleToggleUserStatus(user)}
+                        title={String(user.status || 'Active').toLowerCase() === 'active' ? 'Nonaktifkan Akun' : 'Aktifkan Akun'}
+                        className={`flex-1 sm:flex-initial flex items-center justify-center space-x-1 px-3 py-2 font-black text-[9px] rounded-xl uppercase tracking-widest transition-all cursor-pointer border ${
+                          String(user.status || 'Active').toLowerCase() === 'active'
+                            ? 'bg-amber-50 border-amber-100 text-amber-700 hover:bg-amber-500 hover:text-white'
+                            : 'bg-emerald-50 border-emerald-100 text-emerald-700 hover:bg-emerald-500 hover:text-white'
+                        }`}
+                      >
+                        {String(user.status || 'Active').toLowerCase() === 'active' ? 'Matikan' : 'Aktifkan'}
+                      </button>
                       <button 
                         onClick={() => handleOpenEdit(user)}
                         className="flex-1 sm:flex-initial flex items-center justify-center space-x-1 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-[9px] rounded-xl uppercase tracking-widest transition-all cursor-pointer border border-slate-200"
@@ -532,6 +684,75 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
                       </button>
                       <button 
                         onClick={() => handleDeleteUser(user)}
+                        className="p-2 text-rose-500 bg-rose-50 border border-rose-100 hover:bg-rose-500 hover:text-white rounded-xl transition-all cursor-pointer"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )
+            ) : activeTab === 'instansi' ? (
+              configs.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center py-20 text-center space-y-4">
+                  <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center border border-slate-200/50 text-slate-400">
+                    <Globe size={28} />
+                  </div>
+                  <h5 className="text-[11px] font-black text-slate-600 uppercase tracking-widest">Belum ada instansi terdaftar</h5>
+                  <button 
+                    onClick={() => setIsCreatingInstansi(true)}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-black text-[10px] rounded-xl uppercase tracking-widest cursor-pointer border-0"
+                  >
+                    Tambah Instansi Baru
+                  </button>
+                </div>
+              ) : (
+                configs.map(inst => (
+                  <div 
+                    key={inst.id} 
+                    className="p-4 bg-white border border-slate-200 hover:border-slate-300 rounded-2xl shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 transition-all"
+                  >
+                    <div className="space-y-1.5 min-w-0 flex-1">
+                      <div className="flex items-center space-x-2">
+                        <span className="px-1.5 py-0.5 bg-slate-900 text-white rounded text-[7.5px] font-black uppercase tracking-wider font-mono">{inst.id}</span>
+                        <h4 className="text-xs font-black text-slate-800 truncate uppercase mt-0.5">{inst.instansi_name}</h4>
+                      </div>
+                      
+                      <div className="space-y-1 text-[8.5px] font-bold text-slate-500 tracking-tight">
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span className="font-black text-slate-400 uppercase w-20 shrink-0">Supabase URL:</span>
+                          <span className="text-slate-600 truncate font-mono bg-slate-50 px-1 py-0.5 rounded">{inst.supabase_url}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span className="font-black text-slate-400 uppercase w-20 shrink-0">Anon Key:</span>
+                          <span className="text-slate-600 truncate font-mono bg-slate-50 px-1 py-0.5 rounded" title={inst.supabase_anon_key}>
+                            {inst.supabase_anon_key.substring(0, 30)}...
+                          </span>
+                        </div>
+                        {inst.appscriptbackuptreasurerweb ? (
+                          <div className="flex items-center gap-1.5 truncate text-emerald-600">
+                            <span className="font-black text-slate-400 uppercase w-20 shrink-0">Backup URL:</span>
+                            <span className="truncate font-mono">{inst.appscriptbackuptreasurerweb}</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 text-slate-400">
+                            <span className="font-black text-slate-400 uppercase w-20 shrink-0">Backup URL:</span>
+                            <span>BELUM SET (BACKUP OFF)</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-2 w-full sm:w-auto self-end sm:self-center shrink-0">
+                      <button 
+                        onClick={() => setEditingInstansi({ ...inst })}
+                        className="flex-1 sm:flex-initial flex items-center justify-center space-x-1 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-[9px] rounded-xl uppercase tracking-widest transition-all cursor-pointer border border-slate-200"
+                      >
+                        <Edit size={12} />
+                        <span>Edit</span>
+                      </button>
+                      <button 
+                        onClick={() => handleDeleteInstansi(inst)}
                         className="p-2 text-rose-500 bg-rose-50 border border-rose-100 hover:bg-rose-500 hover:text-white rounded-xl transition-all cursor-pointer"
                       >
                         <Trash2 size={13} />
@@ -629,6 +850,19 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
                 </select>
               </div>
 
+              {/* Status Akun Select */}
+              <div className="space-y-1">
+                <label className="text-[8.5px] font-black text-slate-400 uppercase tracking-widest block">Status Akun</label>
+                <select 
+                  value={editStatus}
+                  onChange={(e) => setEditStatus(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white px-3.5 py-2.5 rounded-xl text-xs font-bold outline-none uppercase transition-all"
+                >
+                  <option value="Active">AKTIF / DISETUJUI</option>
+                  <option value="Disabled">NONAKTIF (DISABLED)</option>
+                </select>
+              </div>
+
               {/* Web Access Checklists */}
               <div className="space-y-2">
                 <label className="text-[8.5px] font-black text-slate-400 uppercase tracking-widest block">Fitur Aplikasi Yang Diaktifkan</label>
@@ -671,6 +905,180 @@ export const SuperadminPanel: React.FC<SuperadminPanelProps> = ({ onLogout, noti
                 </button>
               </div>
 
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADD INSTANSI MODAL */}
+      {isCreatingInstansi && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[1000] flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl w-full max-w-sm overflow-hidden animate-dialog-bounce my-auto">
+            <div className="bg-slate-900 text-white p-5 flex items-center justify-between border-b border-slate-800">
+              <div className="flex items-center space-x-2">
+                <Globe size={16} className="text-blue-500" />
+                <h3 className="text-xs font-black uppercase tracking-widest">Tambah Instansi</h3>
+              </div>
+              <button onClick={() => setIsCreatingInstansi(false)} className="p-1 rounded bg-slate-800 text-slate-400 hover:text-white cursor-pointer border-0">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-5 sm:p-6 space-y-4">
+              <div className="space-y-1">
+                <label className="text-[8.5px] font-black text-slate-400 uppercase tracking-widest block font-mono">ID Instansi (Dibuat Otomatis)</label>
+                <div className="bg-slate-50 border border-slate-100 px-3.5 py-2.5 rounded-xl text-xs font-mono font-black text-slate-500">
+                  {newInstansiName.trim() ? (
+                    `${newInstansiName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '') || 'inst'}-[xxxx]`
+                  ) : (
+                    "[TULIS NAMA INSTANSI DI BAWAH]"
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[8.5px] font-black text-slate-400 uppercase tracking-widest block">Nama Instansi</label>
+                <input 
+                  type="text" 
+                  value={newInstansiName}
+                  onChange={(e) => setNewInstansiName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white px-3.5 py-2.5 rounded-xl text-xs font-bold outline-none transition-all uppercase"
+                  placeholder="misal: CABANG MALANG"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[8.5px] font-black text-slate-400 uppercase tracking-widest block">Supabase Project URL</label>
+                <input 
+                  type="text" 
+                  value={newSupabaseUrl}
+                  onChange={(e) => setNewSupabaseUrl(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white px-3.5 py-2.5 rounded-xl text-xs font-bold outline-none transition-all"
+                  placeholder="https://xxxx.supabase.co"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[8.5px] font-black text-slate-400 uppercase tracking-widest block">Supabase Anon Public Key</label>
+                <textarea 
+                  value={newSupabaseAnonKey}
+                  onChange={(e) => setNewSupabaseAnonKey(e.target.value)}
+                  rows={3}
+                  className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white px-3.5 py-2 rounded-xl text-[10px] font-mono outline-none transition-all break-all"
+                  placeholder="eyJhbGciOi..."
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[8.5px] font-black text-slate-400 uppercase tracking-widest block font-bold">Google AppScript Backup URL (Opsional)</label>
+                <input 
+                  type="text" 
+                  value={newBackupUrl}
+                  onChange={(e) => setNewBackupUrl(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white px-3.5 py-2.5 rounded-xl text-xs font-bold outline-none transition-all"
+                  placeholder="https://script.google.com/macros/s/..."
+                />
+              </div>
+
+              <div className="pt-4 border-t border-slate-100 flex gap-3">
+                <button 
+                  onClick={() => setIsCreatingInstansi(false)}
+                  className="flex-1 py-3 bg-slate-100 font-black text-[10px] text-slate-500 rounded-xl uppercase tracking-widest hover:bg-slate-200 cursor-pointer border-0"
+                >
+                  Batal
+                </button>
+                <button 
+                  onClick={handleCreateInstansi}
+                  className="flex-1 py-3 bg-blue-600 text-white font-black text-[10px] rounded-xl uppercase tracking-widest shadow-lg shadow-blue-100 hover:bg-blue-700 cursor-pointer border-0"
+                >
+                  Tambah
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT INSTANSI MODAL */}
+      {editingInstansi && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[1000] flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl w-full max-w-sm overflow-hidden animate-dialog-bounce my-auto">
+            <div className="bg-slate-900 text-white p-5 flex items-center justify-between border-b border-slate-800">
+              <div className="flex items-center space-x-2">
+                <Edit size={16} className="text-blue-500" />
+                <h3 className="text-xs font-black uppercase tracking-widest">Edit Instansi</h3>
+              </div>
+              <button onClick={() => setEditingInstansi(null)} className="p-1 rounded bg-slate-800 text-slate-400 hover:text-white cursor-pointer border-0">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-5 sm:p-6 space-y-4">
+              <div className="space-y-1">
+                <label className="text-[8.5px] font-black text-slate-400 uppercase tracking-widest block block font-mono">ID Instansi (Tidak Dapat Diubah)</label>
+                <div className="bg-slate-50 border border-slate-100 px-3.5 py-2.5 rounded-xl text-xs font-mono font-black text-slate-500">
+                  {editingInstansi.id}
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[8.5px] font-black text-slate-400 uppercase tracking-widest block">Nama Instansi</label>
+                <input 
+                  type="text" 
+                  value={editingInstansi.instansi_name || ''}
+                  onChange={(e) => setEditingInstansi({ ...editingInstansi, instansi_name: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white px-3.5 py-2.5 rounded-xl text-xs font-bold outline-none transition-all uppercase"
+                  placeholder="misal: CABANG MALANG"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[8.5px] font-black text-slate-400 uppercase tracking-widest block block">Supabase Project URL</label>
+                <input 
+                  type="text" 
+                  value={editingInstansi.supabase_url || ''}
+                  onChange={(e) => setEditingInstansi({ ...editingInstansi, supabase_url: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white px-3.5 py-2.5 rounded-xl text-xs font-bold outline-none transition-all"
+                  placeholder="https://xxxx.supabase.co"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[8.5px] font-black text-slate-400 uppercase tracking-widest block block">Supabase Anon Public Key</label>
+                <textarea 
+                  value={editingInstansi.supabase_anon_key || ''}
+                  onChange={(e) => setEditingInstansi({ ...editingInstansi, supabase_anon_key: e.target.value })}
+                  rows={3}
+                  className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white px-3.5 py-2 rounded-xl text-[10px] font-mono outline-none transition-all break-all"
+                  placeholder="eyJhbGciOi..."
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[8.5px] font-black text-slate-400 uppercase tracking-widest block block font-bold">Google AppScript Backup URL (Opsional)</label>
+                <input 
+                  type="text" 
+                  value={editingInstansi.appscriptbackuptreasurerweb || ''}
+                  onChange={(e) => setEditingInstansi({ ...editingInstansi, appscriptbackuptreasurerweb: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white px-3.5 py-2.5 rounded-xl text-xs font-bold outline-none transition-all"
+                  placeholder="https://script.google.com/macros/s/..."
+                />
+              </div>
+
+              <div className="pt-4 border-t border-slate-100 flex gap-3">
+                <button 
+                  onClick={() => setEditingInstansi(null)}
+                  className="flex-1 py-3 bg-slate-100 font-black text-[10px] text-slate-500 rounded-xl uppercase tracking-widest hover:bg-slate-200 cursor-pointer border-0"
+                >
+                  Batal
+                </button>
+                <button 
+                  onClick={handleUpdateInstansi}
+                  className="flex-1 py-3 bg-blue-600 text-white font-black text-[10px] rounded-xl uppercase tracking-widest shadow-lg shadow-blue-100 hover:bg-blue-700 cursor-pointer border-0"
+                >
+                  Simpan Perubahan
+                </button>
+              </div>
             </div>
           </div>
         </div>

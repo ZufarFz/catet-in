@@ -192,7 +192,7 @@ const Dashboard: React.FC<DashboardProps> = ({ transactions, globalStats, isLoad
       ];
     } else if (healthScore >= 50) {
       statusTitle = "Cukup Stabil";
-      statusColor = "text-blue-600";
+      statusColor = "text-[#007CC2]";
       conclusion = "Keuangan berjalan normal dengan arus kas yang seimbang, meskipun efisiensi masih bisa ditingkatkan.";
       recommendations = [
         "Lakukan audit pada pengeluaran kecil yang bersifat repetitif.",
@@ -248,12 +248,12 @@ const Dashboard: React.FC<DashboardProps> = ({ transactions, globalStats, isLoad
       {showAnalysis && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center p-3 sm:p-5 md:p-6 bg-slate-900/95 backdrop-blur-2xl animate-backdrop">
           <div className="bg-white w-full max-w-4xl max-h-[85%] md:max-h-[90vh] rounded-xl sm:rounded-3xl shadow-2xl border border-white/20 overflow-hidden animate-dialog-bounce flex flex-col mx-auto">
-            <div className="bg-gradient-to-br from-slate-900 to-blue-900 p-4 md:p-8 text-white flex items-center justify-between shrink-0">
+            <div className="bg-gradient-to-br from-slate-900 to-[#00254A] p-4 md:p-8 text-white flex items-center justify-between shrink-0">
               <div className="flex items-center space-x-3 md:space-x-4">
-                <div className="bg-blue-500 p-2 md:p-3 rounded-xl shadow-lg shadow-blue-500/20"><BrainCircuit size={isMobile ? 18 : 26} /></div>
+                <div className="bg-[#007CC2] p-2 md:p-3 rounded-xl shadow-lg shadow-[#007CC2]/20"><BrainCircuit size={isMobile ? 18 : 26} /></div>
                 <div>
                   <h3 className="text-[10px] md:text-lg font-black uppercase tracking-[0.15em]">Analisis Cerdas</h3>
-                  <p className="text-[7px] md:text-[10px] text-blue-300 font-bold uppercase tracking-widest">Financial Report v3.1</p>
+                  <p className="text-[7px] md:text-[10px] text-sky-300 font-bold uppercase tracking-widest">Financial Report v3.1</p>
                 </div>
               </div>
               <button onClick={() => setShowAnalysis(false)} className="p-1.5 hover:bg-white/10 rounded-xl transition-colors"><X size={isMobile ? 18 : 26} /></button>
@@ -267,7 +267,7 @@ const Dashboard: React.FC<DashboardProps> = ({ transactions, globalStats, isLoad
                          <circle cx="96" cy="96" r="82" fill="transparent" stroke="#f8fafc" strokeWidth="10" />
                          <circle 
                            cx="96" cy="96" r="82" fill="transparent" 
-                           stroke={analysis.healthScore > 75 ? '#10b981' : analysis.healthScore > 45 ? '#3b82f6' : '#f43f5e'} 
+                           stroke={analysis.healthScore > 75 ? '#10b981' : analysis.healthScore > 45 ? '#007CC2' : '#f43f5e'} 
                            strokeWidth="10" 
                            strokeDasharray="515" 
                            strokeDashoffset={515 - (515 * analysis.healthScore / 100)} 
@@ -321,8 +321,8 @@ const Dashboard: React.FC<DashboardProps> = ({ transactions, globalStats, isLoad
                     </h5>
                     <div className="space-y-2">
                        {analysis.recommendations.map((rec, i) => (
-                          <div key={i} className="flex items-start gap-2.5 bg-white p-2.5 md:p-3 rounded-xl border border-slate-100 shadow-sm hover:border-blue-200 transition-all group">
-                             <div className="w-5 h-5 rounded-lg bg-blue-50 text-blue-500 flex items-center justify-center flex-shrink-0 font-black text-[8px] group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                          <div key={i} className="flex items-start gap-2.5 bg-white p-2.5 md:p-3 rounded-xl border border-slate-100 shadow-sm hover:border-sky-200 transition-all group">
+                             <div className="w-5 h-5 rounded-lg bg-sky-50 text-[#007CC2] flex items-center justify-center flex-shrink-0 font-black text-[8px] group-hover:bg-[#007CC2] group-hover:text-white transition-colors">
                                 {i + 1}
                              </div>
                              <p className="text-[9px] md:text-xs font-bold text-slate-700 leading-tight">{rec}</p>
@@ -333,7 +333,7 @@ const Dashboard: React.FC<DashboardProps> = ({ transactions, globalStats, isLoad
 
                  <div className="space-y-3">
                     <h5 className="text-[8px] font-black uppercase tracking-[0.2em] text-slate-400 flex items-center gap-2">
-                       <Activity size={12} className="text-blue-500" /> Metrik Kinerja (30H)
+                       <Activity size={12} className="text-[#007CC2]" /> Metrik Kinerja (30H)
                     </h5>
                     <div className="grid grid-cols-1 gap-2">
                        <div className="bg-slate-50 p-2.5 md:p-3 rounded-xl border border-slate-100 flex items-center justify-between">
@@ -356,11 +356,11 @@ const Dashboard: React.FC<DashboardProps> = ({ transactions, globalStats, isLoad
                           </div>
                        </div>
 
-                       <div className="bg-blue-50/50 p-2.5 md:p-3 rounded-xl border border-blue-100/50 flex items-center gap-2.5">
-                          <div className="p-1.5 bg-blue-600 text-white rounded-lg"><Lightbulb size={14} /></div>
+                       <div className="bg-sky-50/50 p-2.5 md:p-3 rounded-xl border border-sky-100/50 flex items-center gap-2.5">
+                          <div className="p-1.5 bg-[#007CC2] text-white rounded-lg"><Lightbulb size={14} /></div>
                           <div>
-                             <span className="text-[6px] font-black text-blue-400 uppercase tracking-widest block">Saran Sistem</span>
-                             <p className="text-[8px] font-bold text-blue-700 italic">"{analysis.efficiencyInsight}"</p>
+                             <span className="text-[6px] font-black text-[#007CC2] uppercase tracking-widest block">Saran Sistem</span>
+                             <p className="text-[8px] font-bold text-[#004D90] italic">"{analysis.efficiencyInsight}"</p>
                           </div>
                        </div>
                     </div>
@@ -369,7 +369,7 @@ const Dashboard: React.FC<DashboardProps> = ({ transactions, globalStats, isLoad
             </div>
 
             <div className="p-4 md:p-8 bg-slate-50 border-t border-slate-100 text-center flex flex-col md:flex-row items-center justify-center gap-2 md:gap-3 shrink-0">
-              <button onClick={() => setShowAnalysis(false)} className="w-full md:w-auto px-10 py-3 bg-slate-900 text-white rounded-xl font-black text-[9px] md:text-[10px] uppercase tracking-[0.25em] shadow-lg hover:bg-blue-600 transition-all active:scale-95">Tutup Laporan</button>
+              <button onClick={() => setShowAnalysis(false)} className="w-full md:w-auto px-10 py-3 bg-slate-900 text-white rounded-xl font-black text-[9px] md:text-[10px] uppercase tracking-[0.25em] shadow-lg hover:bg-[#007CC2] transition-all active:scale-95">Tutup Laporan</button>
               <div className="flex items-center gap-1.5 text-[7px] font-black text-slate-400 uppercase tracking-widest">
                  <ShieldCheck size={10} className="text-emerald-500" />
                  Sistem Terverifikasi
@@ -380,48 +380,98 @@ const Dashboard: React.FC<DashboardProps> = ({ transactions, globalStats, isLoad
       )}
 
       {/* Header Saldo Global */}
-      <div className="bg-slate-900 p-5 sm:p-6 md:p-12 rounded-2xl sm:rounded-3xl text-white shadow-2xl relative overflow-hidden group min-h-[160px] sm:min-h-[220px] flex flex-col justify-center">
-        <div className="absolute top-0 right-0 p-8 opacity-5 sm:opacity-10 group-hover:scale-110 transition-transform">
+      <div className="bg-gradient-to-br from-[#00A1E5] via-[#007CC2] to-[#004D90] p-5 sm:p-6 md:p-12 rounded-2xl sm:rounded-3xl text-white shadow-2xl relative overflow-hidden group min-h-[160px] sm:min-h-[220px] flex flex-col justify-center">
+        {/* WAVE & CELESTIAL BACKGROUND PATTERN (Unified Theme) */}
+        <div className="absolute inset-0 pointer-events-none overflow-hidden select-none z-0">
+          {/* STARLIGHTS & METEORS (Titik-titik & Garis-garis Meteor) */}
+          <svg className="absolute inset-0 w-full h-full opacity-35" viewBox="0 0 500 200" preserveAspectRatio="none" fill="none">
+            <defs>
+              <linearGradient id="dashMeteorGrad" x1="1" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#ffffff" stopOpacity="0.95" />
+                <stop offset="40%" stopColor="#38bdf8" stopOpacity="0.5" />
+                <stop offset="100%" stopColor="#0284c7" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            {/* Dots / Stars */}
+            <circle cx="45" cy="35" r="1.5" fill="#ffffff" opacity="0.8" />
+            <circle cx="120" cy="65" r="1" fill="#ffffff" opacity="0.55" />
+            <circle cx="160" cy="25" r="1.8" fill="#ffffff" opacity="0.9" />
+            <circle cx="210" cy="55" r="1.2" fill="#ffffff" opacity="0.4" />
+            <circle cx="270" cy="85" r="1.5" fill="#ffffff" opacity="0.75" />
+            <circle cx="340" cy="45" r="1" fill="#ffffff" opacity="0.6" />
+            <circle cx="390" cy="75" r="1.6" fill="#ffffff" opacity="0.85" />
+            <circle cx="450" cy="35" r="1.2" fill="#ffffff" opacity="0.5" />
+            <circle cx="480" cy="95" r="1.8" fill="#ffffff" opacity="0.8" />
+            
+            {/* Lines / Meteors */}
+            <line x1="90" y1="15" x2="40" y2="55" stroke="url(#dashMeteorGrad)" strokeWidth="2.2" strokeLinecap="round" />
+            <line x1="260" y1="20" x2="210" y2="60" stroke="url(#dashMeteorGrad)" strokeWidth="1.8" strokeLinecap="round" />
+            <line x1="420" y1="25" x2="370" y2="65" stroke="url(#dashMeteorGrad)" strokeWidth="2.5" strokeLinecap="round" />
+          </svg>
+
+          {/* OVERLAPPING CLOUDS & WAVES FLOW (Gelombang-gelombang) */}
+          <svg className="absolute bottom-0 left-0 w-full h-[60%] opacity-20" viewBox="0 0 500 150" preserveAspectRatio="none" fill="none">
+            <defs>
+              <linearGradient id="dashCloudL1" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#00AEEF" />
+                <stop offset="100%" stopColor="#0054A6" />
+              </linearGradient>
+              <linearGradient id="dashCloudL2" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#009EE2" stopOpacity="0.85" />
+                <stop offset="100%" stopColor="#004D8C" />
+              </linearGradient>
+              <linearGradient id="dashCloudL3" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#0072BC" />
+                <stop offset="100%" stopColor="#003580" />
+              </linearGradient>
+            </defs>
+            <path d="M-50,75 Q100,25 240,65 T550,55 L550,150 L-50,150 Z" fill="url(#dashCloudL1)" opacity="0.8" />
+            <path d="M-50,95 Q130,50 280,85 T550,70 L550,150 L-50,150 Z" fill="url(#dashCloudL2)" opacity="0.85" />
+            <path d="M-50,110 Q160,75 320,105 T550,85 L550,150 L-50,150 Z" fill="url(#dashCloudL3)" />
+          </svg>
+        </div>
+
+        <div className="absolute top-0 right-0 p-8 opacity-10 group-hover:scale-110 transition-transform z-10">
           <Wallet size={isMobile ? 80 : 140} />
         </div>
-        <div className="relative z-10 space-y-4 sm:space-y-6">
+        <div className="relative z-20 space-y-4 sm:space-y-6">
           <div className="flex justify-between items-center">
-            <span className="text-[8px] sm:text-[10px] md:text-sm font-black uppercase tracking-[0.2em] sm:tracking-[0.3em] text-blue-400 bg-blue-500/10 px-3 py-1.5 sm:px-4 sm:py-2 rounded-full border border-blue-500/20 flex items-center gap-1.5 sm:gap-2">
+            <span className="text-[8px] sm:text-[10px] md:text-sm font-black uppercase tracking-[0.2em] sm:tracking-[0.3em] text-white bg-white/20 px-3 py-1.5 sm:px-4 sm:py-2 rounded-full border border-white/20 flex items-center gap-1.5 sm:gap-2 backdrop-blur-sm">
               <Zap size={isMobile ? 12 : 14} /> Saldo Global
             </span>
-            <span className="text-[8px] sm:text-[10px] md:text-xs font-bold text-slate-500 uppercase tracking-widest">
-              {analysis.monthName} {new Date().getFullYear()}
+            <span className="text-[8px] sm:text-[10px] md:text-xs font-bold text-sky-100 uppercase tracking-widest">
+               {analysis.monthName} {new Date().getFullYear()}
             </span>
           </div>
           
           <div className="h-10 sm:h-14 flex items-baseline">
             {isLoading && !globalStats ? (
-              <div className="flex items-baseline space-x-2 animate-pulse">
-                <span className="text-xl sm:text-2xl font-bold opacity-30">Rp</span>
-                <div className="h-8 sm:h-12 w-40 sm:w-60 bg-white/10 rounded-xl" />
-              </div>
+               <div className="flex items-baseline space-x-2 animate-pulse">
+                 <span className="text-xl sm:text-2xl font-bold opacity-30">Rp</span>
+                 <div className="h-8 sm:h-12 w-40 sm:w-60 bg-white/10 rounded-xl" />
+               </div>
             ) : (
-              <h2 className={`font-black tracking-tight flex items-baseline leading-none transition-all duration-700 ${isSmallMobile ? 'text-2xl' : 'text-3xl sm:text-4xl md:text-5xl'}`}>
-                {globalStats ? formatIDR(globalStats.totalBalance) : formatIDR(0)}
-              </h2>
+               <h2 className={`font-black tracking-tight flex items-baseline leading-none transition-all duration-700 ${isSmallMobile ? 'text-2xl' : 'text-3xl sm:text-4xl md:text-5xl'}`}>
+                 {globalStats ? formatIDR(globalStats.totalBalance) : formatIDR(0)}
+               </h2>
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-3 sm:gap-4 pt-4 sm:pt-6 border-t border-white/5">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 pt-4 sm:pt-6 border-t border-white/10">
             <div className="space-y-0.5 sm:space-y-1">
-              <p className="text-[7px] sm:text-[9px] md:text-xs font-black text-slate-500 uppercase tracking-widest">Masuk Bulan Ini</p>
+              <p className="text-[7px] sm:text-[9px] md:text-xs font-black text-sky-200/90 uppercase tracking-widest">Masuk Bulan Ini</p>
               {isLoading && !isDataLoaded ? (
-                <SkeletonText className="h-5 sm:h-7 w-24 sm:w-32 mt-1 opacity-20" />
+                 <SkeletonText className="h-5 sm:h-7 w-24 sm:w-32 mt-1 opacity-20" />
               ) : (
-                <span className={`text-emerald-400 font-black ${isSmallMobile ? 'text-sm' : 'text-lg sm:text-xl md:text-2xl'}`}>{formatIDR(analysis.currMIncome)}</span>
+                 <span className={`text-emerald-300 font-black ${isSmallMobile ? 'text-sm' : 'text-lg sm:text-xl md:text-2xl'}`}>{formatIDR(analysis.currMIncome)}</span>
               )}
             </div>
-            <div className="space-y-0.5 sm:space-y-1 pl-3 sm:pl-6 border-l border-white/5">
-              <p className="text-[7px] sm:text-[9px] md:text-xs font-black text-slate-500 uppercase tracking-widest">Keluar Bulan Ini</p>
+            <div className="space-y-0.5 sm:space-y-1 pl-3 sm:pl-6 border-l border-white/10">
+              <p className="text-[7px] sm:text-[9px] md:text-xs font-black text-sky-200/90 uppercase tracking-widest">Keluar Bulan Ini</p>
               {isLoading && !isDataLoaded ? (
-                <SkeletonText className="h-5 sm:h-7 w-24 sm:w-32 mt-1 opacity-20" />
+                 <SkeletonText className="h-5 sm:h-7 w-24 sm:w-32 mt-1 opacity-20" />
               ) : (
-                <span className={`text-rose-400 font-black ${isSmallMobile ? 'text-sm' : 'text-lg sm:text-xl md:text-2xl'}`}>{formatIDR(analysis.currMExpense)}</span>
+                 <span className={`text-rose-300 font-black ${isSmallMobile ? 'text-sm' : 'text-lg sm:text-xl md:text-2xl'}`}>{formatIDR(analysis.currMExpense)}</span>
               )}
             </div>
           </div>
@@ -433,7 +483,7 @@ const Dashboard: React.FC<DashboardProps> = ({ transactions, globalStats, isLoad
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="space-y-1">
             <h3 className="font-black text-[9px] sm:text-[11px] md:text-sm flex items-center space-x-2 sm:space-x-3 text-slate-800 uppercase tracking-widest">
-              <BarChart3 className="text-blue-500" size={isMobile ? 16 : 18} />
+              <BarChart3 className="text-[#007CC2]" size={isMobile ? 16 : 18} />
               <span>Volume Arus Kas</span>
             </h3>
             <p className="text-[7px] sm:text-[8px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest sm:px-8">Riwayat 6 Bulan Terakhir</p>
@@ -501,13 +551,13 @@ const Dashboard: React.FC<DashboardProps> = ({ transactions, globalStats, isLoad
           ) : (
             <div className="h-full w-full flex flex-col items-center justify-center space-y-4">
                <div className="relative">
-                 <div className="absolute inset-0 bg-blue-500/20 rounded-full blur-xl animate-pulse" />
-                 <Activity size={32} className="relative animate-bounce text-blue-500" />
+                 <div className="absolute inset-0 bg-[#007CC2]/20 rounded-full blur-xl animate-pulse" />
+                 <Activity size={32} className="relative animate-bounce text-[#007CC2]" />
                </div>
                <div className="flex flex-col items-center space-y-2">
                  <p className="text-[8px] font-black uppercase tracking-[0.3em] text-slate-300">Sinkronisasi Kas...</p>
                  <div className="flex items-center space-x-1.5 px-3 py-1 bg-slate-50 border border-slate-100 rounded-full">
-                    <Loader2 size={10} className="animate-spin text-blue-500" />
+                    <Loader2 size={10} className="animate-spin text-[#007CC2]" />
                     <span className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Background Fetching</span>
                  </div>
                </div>
@@ -521,7 +571,7 @@ const Dashboard: React.FC<DashboardProps> = ({ transactions, globalStats, isLoad
         {/* Efisiensi Kas */}
         <div className="bg-white p-5 sm:p-6 md:p-10 lg:p-12 rounded-2xl sm:rounded-3xl shadow-sm border border-slate-100 space-y-6 sm:space-y-8">
           <h3 className="font-black text-[9px] sm:text-[11px] md:text-sm flex items-center space-x-2 sm:space-x-3 text-slate-400 uppercase tracking-widest">
-            <Activity className="text-blue-500" size={isMobile ? 16 : 18} />
+            <Activity className="text-[#007CC2]" size={isMobile ? 16 : 18} />
             <span>Efisiensi Kas</span>
           </h3>
           <div className="space-y-6 sm:space-y-8">
@@ -572,7 +622,7 @@ const Dashboard: React.FC<DashboardProps> = ({ transactions, globalStats, isLoad
         {/* Kapasitas Surplus */}
         <div className="bg-white p-5 sm:p-6 md:p-10 lg:p-12 rounded-2xl sm:rounded-3xl shadow-sm border border-slate-100 space-y-6 sm:space-y-8">
           <h3 className="font-black text-[9px] sm:text-[11px] md:text-sm flex items-center space-x-2 sm:space-x-3 text-slate-400 uppercase tracking-widest">
-            <Target className="text-blue-500" size={isMobile ? 16 : 18} />
+            <Target className="text-[#007CC2]" size={isMobile ? 16 : 18} />
             <span>Kapasitas Surplus</span>
           </h3>
           <div className="space-y-6 sm:space-y-8">
@@ -597,12 +647,12 @@ const Dashboard: React.FC<DashboardProps> = ({ transactions, globalStats, isLoad
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3 sm:gap-4">
-              <div className="p-3 sm:p-5 bg-blue-50 rounded-xl sm:rounded-2xl flex flex-col border border-blue-100">
-                 <span className="text-[6px] sm:text-[8px] md:text-[10px] font-black text-blue-400 uppercase mb-0.5 tracking-widest">Kondisi Kas</span>
+              <div className="p-3 sm:p-5 bg-sky-50 rounded-xl sm:rounded-2xl flex flex-col border border-sky-100">
+                 <span className="text-[6px] sm:text-[8px] md:text-[10px] font-black text-[#00A1E5] uppercase mb-0.5 tracking-widest">Kondisi Kas</span>
                  {isLoading && !isDataLoaded ? (
                    <SkeletonText className="h-4 sm:h-5 w-16 sm:w-24 mt-0.5 opacity-30" />
                  ) : (
-                   <span className={`text-[10px] sm:text-xs md:text-base font-black uppercase ${analysis.netFlow >= 0 ? 'text-blue-600' : 'text-rose-600'}`}>
+                   <span className={`text-[10px] sm:text-xs md:text-base font-black uppercase ${analysis.netFlow >= 0 ? 'text-[#007CC2]' : 'text-rose-600'}`}>
                       {analysis.netFlow >= 0 ? 'Surplus' : 'Defisit'}
                    </span>
                  )}
@@ -624,7 +674,7 @@ const Dashboard: React.FC<DashboardProps> = ({ transactions, globalStats, isLoad
                  <button 
                   onClick={() => setShowAnalysis(true)} 
                   disabled={isLoading && !isDataLoaded}
-                  className="flex w-full py-4 sm:py-5 bg-slate-900 text-white rounded-xl sm:rounded-2xl font-black text-[9px] md:text-[11px] uppercase tracking-[0.2em] sm:tracking-[0.3em] items-center justify-center space-x-2 sm:space-x-3 hover:bg-blue-600 transition-all shadow-2xl hover:scale-[1.02] active:scale-95 group disabled:bg-slate-300 disabled:shadow-none disabled:scale-100"
+                  className="flex w-full py-4 sm:py-5 bg-slate-900 text-white rounded-xl sm:rounded-2xl font-black text-[9px] md:text-[11px] uppercase tracking-[0.2em] sm:tracking-[0.3em] items-center justify-center space-x-2 sm:space-x-3 hover:bg-[#007CC2] transition-all shadow-2xl hover:scale-[1.02] active:scale-95 group disabled:bg-slate-300 disabled:shadow-none disabled:scale-100"
                  >
                     <BrainCircuit size={14} className="group-hover:rotate-12 transition-transform" />
                     <span>Laporan Analisis Mendalam</span>

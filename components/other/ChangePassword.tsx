@@ -1,8 +1,6 @@
-
 import React, { useState } from 'react';
 import { Lock, ShieldCheck, KeyRound, Loader2, ArrowRight, CheckCircle2, XCircle, User } from 'lucide-react';
-import { auth } from '../../firebase';
-import { signInWithEmailAndPassword, updatePassword } from 'firebase/auth';
+import { db, centralClient } from '../../supabase';
 
 interface ChangePasswordProps {
   portalUrl: string;
@@ -12,15 +10,14 @@ interface ChangePasswordProps {
   currentApp?: 'bendahara' | 'absensi';
   switchApp?: (app: 'bendahara' | 'absensi') => void;
   webAccessStrings?: string[];
+  activeScriptUrl?: string;
+  setActiveScriptUrl?: React.Dispatch<React.SetStateAction<string>>;
 }
 
 const ChangePassword: React.FC<ChangePasswordProps> = ({ 
   currentUsername, 
   onLogout, 
   notify,
-  currentApp,
-  switchApp,
-  webAccessStrings = []
 }) => {
   const [step, setStep] = useState<'verify' | 'new'>('verify');
   const [oldPassword, setOldPassword] = useState('');
@@ -39,13 +36,39 @@ const ChangePassword: React.FC<ChangePasswordProps> = ({
     setError('');
 
     try {
-      const user = auth.currentUser;
-      if (!user || !user.email) {
-        setError('Sesi autentikasi tidak valid. Silakan login kembali.');
+      const activeClient = centralClient || db;
+      if (!activeClient) {
+        throw new Error('Database server tidak siap atau belum dikonfigurasi.');
+      }
+
+      const { data: user, error: lookupErr } = await activeClient
+        .from('users')
+        .select('*')
+        .or(`username.eq.${lockedUsername},email.eq.${lockedUsername}`)
+        .maybeSingle();
+
+      if (lookupErr || !user) {
+        setError('Sesi autentikasi tidak valid atau akun tidak ditemukan.');
         return;
       }
-      // Re-autentikasi dengan sign-in menggunakan password lama
-      await signInWithEmailAndPassword(auth, user.email, oldPassword);
+
+      // Secure verification by attempting to sign in centrally using standard Supabase Auth
+      const resolvedEmail = user.email || (lockedUsername.includes('@') ? lockedUsername : '');
+      if (!resolvedEmail) {
+        setError('Email Akun tidak valid. Gagal melakukan verifikasi password.');
+        return;
+      }
+
+      const { error: authVerifyErr } = await activeClient.auth.signInWithPassword({
+        email: resolvedEmail,
+        password: oldPassword,
+      });
+
+      if (authVerifyErr) {
+        setError('Password lama tidak sesuai atau gagal verifikasi.');
+        return;
+      }
+
       setStep('new');
     } catch (err: any) {
       console.error("Reauth error:", err);
@@ -70,12 +93,28 @@ const ChangePassword: React.FC<ChangePasswordProps> = ({
     setError('');
 
     try {
-      const user = auth.currentUser;
-      if (!user) {
-        setError('Sesi telah berakhir. Silakan login kembali.');
-        return;
+      const activeClient = centralClient || db;
+      if (!activeClient) {
+        throw new Error('Database server tidak siap.');
       }
-      await updatePassword(user, newPassword);
+
+      // Securely update the password using Supabase Auth native API
+      const { error: authUpdateErr } = await activeClient.auth.updateUser({
+        password: newPassword
+      });
+
+      if (authUpdateErr) throw authUpdateErr;
+
+      // Nullify plain-text password from the table entirely since we rely on Supabase Auth
+      try {
+        await activeClient
+          .from('users')
+          .update({ password: null })
+          .or(`username.eq.${lockedUsername},email.eq.${lockedUsername}`);
+      } catch (tableErr) {
+        console.warn("Cleared public.users.password columns fallback skipped:", tableErr);
+      }
+
       setIsSuccess(true);
       notify('Password Berhasil Diperbarui', 'success');
       setTimeout(() => {
@@ -83,7 +122,7 @@ const ChangePassword: React.FC<ChangePasswordProps> = ({
       }, 3000);
     } catch (err: any) {
       console.error("Update password error:", err);
-      setError('Gagal mengubah password. Sesi mungkin kedaluwarsa, silakan login ulang.');
+      setError('Gagal mengubah password: ' + (err.message || String(err)));
     } finally {
       setIsLoading(false);
     }
@@ -91,17 +130,15 @@ const ChangePassword: React.FC<ChangePasswordProps> = ({
 
   if (isSuccess) {
     return (
-      <div className="h-full flex items-center justify-center p-6">
+      <div className="h-full flex items-center justify-center p-6 bg-slate-50 min-h-screen">
         <div className="bg-white p-10 rounded-3xl shadow-xl border border-slate-100 text-center space-y-4 max-w-sm animate-dialog-bounce">
           <div className="w-16 h-16 bg-emerald-100 text-emerald-500 rounded-full flex items-center justify-center mx-auto mb-4">
             <CheckCircle2 size={32} />
           </div>
           <h2 className="text-xl font-black uppercase text-slate-800 tracking-tight">Sukses!</h2>
-          <p className="text-xs text-slate-400 font-bold leading-relaxed">Password Anda telah diperbarui di sistem pusat. Silakan login kembali dengan password baru Anda.</p>
-          <div className="pt-4">
-             <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
-                <div className="h-full bg-emerald-500 animate-[progress_3s_linear_forwards]" style={{width: '100%'}}></div>
-             </div>
+          <p className="text-xs text-slate-400 font-bold leading-relaxed">Password Anda telah diperbarui di database pusat. Silakan login kembali dengan password baru Anda.</p>
+          <div className="pt-4 animate-pulse">
+            <span className="text-[10px] font-black uppercase text-slate-500 tracking-wide">MENGORGANISIKASALAN PAGI...</span>
           </div>
         </div>
       </div>
@@ -130,7 +167,7 @@ const ChangePassword: React.FC<ChangePasswordProps> = ({
                      type="text" 
                      readOnly
                      value={lockedUsername}
-                     className="w-full pl-10 pr-4 py-3 bg-slate-100 border-none rounded-xl text-xs font-black text-slate-500 cursor-not-allowed outline-none"
+                     className="w-full pl-10 pr-4 py-3 bg-slate-100 border-none rounded-xl text-xs font-black text-slate-500 cursor-not-allowed outline-none uppercase"
                    />
                 </div>
                 <p className="text-[7px] font-bold text-slate-400 uppercase tracking-tight ml-1">Username tidak dapat diubah</p>
@@ -145,7 +182,7 @@ const ChangePassword: React.FC<ChangePasswordProps> = ({
                      placeholder="••••••••"
                      value={oldPassword}
                      onChange={(e) => setOldPassword(e.target.value)}
-                     className="w-full pl-10 pr-4 py-3 bg-slate-50 border-none rounded-xl text-xs font-bold focus:ring-2 focus:ring-slate-200 outline-none"
+                     className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-slate-300 outline-none"
                    />
                 </div>
               </div>
@@ -159,24 +196,24 @@ const ChangePassword: React.FC<ChangePasswordProps> = ({
                    <input 
                      type="password" 
                      required
-                     placeholder="Min. 4 karakter"
+                     placeholder="MINIMAL 6 KARAKTER"
                      value={newPassword}
                      onChange={(e) => setNewPassword(e.target.value)}
-                     className="w-full pl-10 pr-4 py-3 bg-slate-50 border-none rounded-xl text-xs font-bold focus:ring-2 focus:ring-blue-100 outline-none"
+                     className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-blue-500 outline-none"
                    />
                 </div>
               </div>
               <div className="space-y-1">
-                <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Ulangi Password Baru</label>
+                <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Konfirmasi Password Baru</label>
                 <div className="relative">
                    <Lock size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
                    <input 
                      type="password" 
                      required
-                     placeholder="Konfirmasi password baru"
+                     placeholder="ULANGI PASSWORD BARU"
                      value={confirmNewPassword}
                      onChange={(e) => setConfirmNewPassword(e.target.value)}
-                     className="w-full pl-10 pr-4 py-3 bg-slate-50 border-none rounded-xl text-xs font-bold focus:ring-2 focus:ring-blue-100 outline-none"
+                     className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-blue-500 outline-none"
                    />
                 </div>
               </div>
@@ -184,60 +221,31 @@ const ChangePassword: React.FC<ChangePasswordProps> = ({
           )}
 
           {error && (
-            <div className="flex items-center space-x-2 p-3 bg-rose-50 text-rose-500 rounded-xl animate-in fade-in">
-              <XCircle size={14} className="flex-shrink-0" />
-              <span className="text-[10px] font-black uppercase tracking-tight">{error}</span>
+            <div className="bg-rose-50 text-rose-600 p-3 rounded-xl flex items-start space-x-2.5 border border-rose-100 animate-in slide-in-from-top-1 text-left">
+              <XCircle size={14} className="flex-shrink-0 mt-0.5" />
+              <span className="text-[9px] font-black uppercase tracking-tight leading-normal whitespace-pre-line">{error}</span>
             </div>
           )}
 
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             disabled={isLoading}
-            className={`w-full py-4 rounded-2xl font-black text-xs uppercase tracking-widest text-white shadow-xl flex items-center justify-center space-x-2 transition-all active:scale-95 disabled:bg-slate-300 ${step === 'verify' ? 'bg-slate-800' : 'bg-blue-600'}`}
+            className="w-full bg-slate-900 hover:bg-slate-800 text-white py-3.5 rounded-xl font-black text-xs uppercase tracking-[0.15em] shadow-lg shadow-slate-100 transition-all flex items-center justify-center space-x-2 cursor-pointer"
           >
-            {isLoading ? <Loader2 className="animate-spin" size={18} /> : step === 'verify' ? <ShieldCheck size={18} /> : <ArrowRight size={18} />}
-            <span>{isLoading ? 'MEMPROSES...' : step === 'verify' ? 'VERIFIKASI LANJUT' : 'GANTI PASSWORD SEKARANG'}</span>
+            {isLoading ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                <span>Memproses...</span>
+              </>
+            ) : (
+              <>
+                <span>{step === 'verify' ? 'Lanjut Verifikasi' : 'Perbarui Password'}</span>
+                <ArrowRight size={16} />
+              </>
+            )}
           </button>
-
-          {step === 'new' && !isLoading && (
-             <button type="button" onClick={() => { setStep('verify'); setNewPassword(''); setConfirmNewPassword(''); }} className="w-full text-[9px] font-black text-slate-400 uppercase tracking-widest">Batal</button>
-          )}
         </form>
       </div>
-
-      {/* Switch Web Mobile Section */}
-      {webAccessStrings.length > 1 && switchApp && currentApp && (
-        <div className="md:hidden max-w-md mx-auto mt-4 bg-white rounded-3xl p-6 shadow-xl border border-slate-100 flex flex-col space-y-3">
-          <div>
-            <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">Navigasi Antar Web</h4>
-            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tight mt-0.5">Pilih aplikasi yang ingin Anda buka</p>
-          </div>
-          <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
-            <button
-              type="button"
-              onClick={() => switchApp('bendahara')}
-              className={`flex-1 py-3 px-4 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${
-                currentApp === 'bendahara'
-                  ? 'bg-blue-600 text-white shadow-md shadow-blue-200'
-                  : 'text-slate-500 hover:bg-slate-200/50'
-              }`}
-            >
-              <span>Bendahara</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => switchApp('absensi')}
-              className={`flex-1 py-3 px-4 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${
-                currentApp === 'absensi'
-                  ? 'bg-blue-600 text-white shadow-md shadow-blue-200'
-                  : 'text-slate-500 hover:bg-slate-200/50'
-              }`}
-            >
-              <span>Absensi</span>
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

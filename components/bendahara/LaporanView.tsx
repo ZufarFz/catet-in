@@ -5,7 +5,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Download, TrendingUp, TrendingDown, Wallet, ChevronDown, Loader2, ShieldCheck, AlertTriangle, FileText, ArrowRight, CalendarSearch, UserCheck, Lock, Unlock, Inbox, RefreshCw, Clock, AlertCircle, X, Check, Filter, CheckCircle, Info } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
-import { dbAddApproval, dbUpdateProjectStatus, dbAddTransaction } from '../../firebase';
+import { dbAddApproval, dbUpdateProjectStatus, dbAddTransaction } from '../../supabase';
+import { syncToSpreadsheet } from '../../sheetsSync';
 
 interface LaporanViewProps {
   transactions: Transaction[];
@@ -101,6 +102,8 @@ const LaporanView: React.FC<LaporanViewProps> = ({
   const semesterRef = useRef<HTMLDivElement>(null);
   const projectRef = useRef<HTMLDivElement>(null);
   const modeRef = useRef<HTMLDivElement>(null);
+  const warningRef = useRef<HTMLDivElement>(null);
+  const [warningHeight, setWarningHeight] = useState(120);
 
   const kasUmumConfigRef = useRef({
     viewMode: 'monthly' as 'monthly' | 'quarterly' | 'caturwulan' | 'semester' | 'annual' | 'custom',
@@ -930,6 +933,17 @@ const LaporanView: React.FC<LaporanViewProps> = ({
     return true;
   }, [isFuturePeriod, isBoundaryMonth, isDataVerifiedByServer, reportData.hasData, isDeepScanMode, viewMode, isCustomRangeValid]);
 
+  useEffect(() => {
+    if (!warningRef.current) return;
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setWarningHeight(entry.target.clientHeight);
+      }
+    });
+    resizeObserver.observe(warningRef.current);
+    return () => resizeObserver.disconnect();
+  }, [shouldShowReport, isLoading, isRefreshing]);
+
   const handleApprove = () => {
     confirm("Approve Laporan?", `Semua transaksi periode ${months[selectedMonth]} ${selectedYear} akan dikunci.`, "Setujui Sekarang", async () => {
         setIsApproving(true);
@@ -1028,6 +1042,10 @@ const LaporanView: React.FC<LaporanViewProps> = ({
               dbAddTransaction(payoutTx),
               dbAddTransaction(inflowTx)
             ]);
+
+            // Background Sync to Spreadsheet for both transactions
+            syncToSpreadsheet({ action: 'add_tx', data: payoutTx });
+            syncToSpreadsheet({ action: 'add_tx', data: inflowTx });
           }
 
           notify(`Proker ${projToArchive} berhasil diselesaikan.`, "success");
@@ -1102,7 +1120,7 @@ const LaporanView: React.FC<LaporanViewProps> = ({
           ['Saldo Awal (Periode Sebelumnya)', formatIDR(reportData.saldoAwal)], 
           ['Total Penerimaan (+)', formatIDR(reportData.totalIncome)], 
           ['Total Pengeluaran (-)', formatIDR(reportData.totalExpense)], 
-          [{ content: 'Saldo Akhir', styles: { fontStyle: 'bold', fillColor: [241, 245, 249] } }, { content: formatIDR(reportData.saldoAkhir), styles: { fontStyle: 'bold', fillColor: [241, 245, 249] } }]
+          [{ content: 'Saldo Akhir', styles: { fontStyle: 'bold', fillColor: [0, 124, 194], textColor: [255, 255, 255] } }, { content: formatIDR(reportData.saldoAkhir), styles: { fontStyle: 'bold', fillColor: [0, 124, 194], textColor: [255, 255, 255] } }]
         ],
         theme: 'grid', headStyles: { fillColor: [51, 65, 85], textColor: 255 }, columnStyles: { 1: { halign: 'right' } }
       });
@@ -1267,7 +1285,7 @@ const LaporanView: React.FC<LaporanViewProps> = ({
             <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-1 block">Pilih Proker (Arsip & Aktif)</label>
             <button 
               onClick={(e) => { e.stopPropagation(); setIsProjectPickerOpen(!isProjectPickerOpen); setIsModePickerOpen(false); setIsMonthPickerOpen(false); setIsQuarterPickerOpen(false); setIsCaturwulanPickerOpen(false); setIsSemesterPickerOpen(false); }} 
-              className={`w-full px-5 py-4 bg-blue-50 text-blue-600 rounded-xl text-[10px] sm:text-xs font-black text-left border flex items-center justify-between transition-all active:scale-[0.98] ${isProjectPickerOpen ? 'border-blue-300 ring-2 ring-blue-50' : 'border-blue-100'}`}
+              className={`w-full px-5 py-4 bg-sky-50 text-[#007CC2] rounded-xl text-[10px] sm:text-xs font-black text-left border flex items-center justify-between transition-all active:scale-[0.98] ${isProjectPickerOpen ? 'border-sky-300 ring-2 ring-sky-50' : 'border-sky-100'}`}
             >
               <div className="flex items-center space-x-3"><Filter size={16} /><span className="uppercase">{selectedProjectDraft}</span></div>
               <ChevronDown size={14} className={`shrink-0 transition-transform duration-300 ${isProjectPickerOpen ? 'rotate-180' : ''}`} />
@@ -1275,16 +1293,16 @@ const LaporanView: React.FC<LaporanViewProps> = ({
             {isProjectPickerOpen && (
               <div className="absolute top-[calc(100%+8px)] left-0 right-0 z-[110] bg-white/80 backdrop-blur-xl border border-white/50 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-300">
                 <div className="p-3 max-h-[300px] overflow-y-auto no-scrollbar space-y-1">
-                  <div className="px-3 py-1.5 text-[8px] font-black text-blue-400 uppercase tracking-[0.2em] border-b border-slate-100/50 mb-1">KAS HARIAN</div>
+                  <div className="px-3 py-1.5 text-[8px] font-black text-[#007CC2] uppercase tracking-[0.2em] border-b border-slate-100/50 mb-1">KAS HARIAN</div>
                   <button 
                     onClick={handleSelectKasUmum} 
-                    className={`w-full px-4 py-3 rounded-lg text-[10px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between ${selectedProjectDraft === 'KAS UMUM' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}
+                    className={`w-full px-4 py-3 rounded-lg text-[10px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between ${selectedProjectDraft === 'KAS UMUM' ? 'bg-[#007CC2] text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}
                   >
                     <span>KAS UMUM</span>{selectedProjectDraft === 'KAS UMUM' && <Check size={12} />}
                   </button>
-                    <div className="px-3 py-1.5 text-[8px] font-black text-blue-400 uppercase tracking-[0.2em] border-b border-slate-100/50 my-1 mt-2">PROKER AKTIF</div>
+                    <div className="px-3 py-1.5 text-[8px] font-black text-[#007CC2] uppercase tracking-[0.2em] border-b border-slate-100/50 my-1 mt-2">PROKER AKTIF</div>
                   {allProjects.filter(p => p.status?.toLowerCase() === 'aktif' && p.name.toUpperCase() !== 'KAS UMUM').map((p) => (
-                    <button key={p.name} onClick={() => handleSelectProker(p.name)} className={`w-full px-4 py-3 rounded-lg text-[10px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between ${selectedProjectDraft === p.name ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}>
+                    <button key={p.name} onClick={() => handleSelectProker(p.name)} className={`w-full px-4 py-3 rounded-lg text-[10px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between ${selectedProjectDraft === p.name ? 'bg-[#007CC2] text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}>
                       <span>{p.name}</span>{selectedProjectDraft === p.name && <Check size={12} />}
                     </button>
                   ))}
@@ -1318,9 +1336,9 @@ const LaporanView: React.FC<LaporanViewProps> = ({
                 <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-1 block">Mode Laporan</label>
                 <button 
                   onClick={(e) => { e.stopPropagation(); setIsModePickerOpen(!isModePickerOpen); setIsProjectPickerOpen(false); setIsMonthPickerOpen(false); setIsQuarterPickerOpen(false); setIsCaturwulanPickerOpen(false); setIsSemesterPickerOpen(false); }} 
-                  className={`w-full px-5 py-4 bg-white border-2 rounded-xl text-[10px] sm:text-xs font-black text-left flex items-center justify-between transition-all active:scale-[0.98] ${isModePickerOpen ? 'border-blue-500 shadow-lg shadow-blue-500/10' : 'border-slate-100 shadow-sm'}`}
+                  className={`w-full px-5 py-4 bg-white border-2 rounded-xl text-[10px] sm:text-xs font-black text-left flex items-center justify-between transition-all active:scale-[0.98] ${isModePickerOpen ? 'border-[#007CC2] shadow-lg shadow-[#007CC2]/10' : 'border-slate-100 shadow-sm'}`}
                 >
-                  <div className="flex items-center space-x-3 text-blue-600">
+                  <div className="flex items-center space-x-3 text-[#007CC2]">
                     <CalendarSearch size={16} />
                     <span className="uppercase tracking-widest">{viewModeLabels[viewModeDraft]}</span>
                   </div>
@@ -1328,7 +1346,7 @@ const LaporanView: React.FC<LaporanViewProps> = ({
                 </button>
                 
                 {isModePickerOpen && (
-                  <div className="absolute top-[calc(100%+8px)] left-0 right-0 z-[150] bg-white/95 backdrop-blur-xl border border-blue-100 rounded-2xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-300 p-2">
+                  <div className="absolute top-[calc(100%+8px)] left-0 right-0 z-[150] bg-white/95 backdrop-blur-xl border border-sky-100 rounded-2xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-300 p-2">
                     <div className="grid grid-cols-1 gap-1">
                       {[
                         { id: 'monthly', label: 'Bulanan', desc: 'Laporan per satu bulan kalender' },
@@ -1341,11 +1359,11 @@ const LaporanView: React.FC<LaporanViewProps> = ({
                         <button 
                           key={opt.id}
                           onClick={() => { setViewModeDraft(opt.id as any); setIsModePickerOpen(false); }}
-                          className={`w-full px-4 py-3 rounded-xl text-left transition-all flex items-center justify-between group ${viewModeDraft === opt.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'hover:bg-slate-50'}`}
+                          className={`w-full px-4 py-3 rounded-xl text-left transition-all flex items-center justify-between group ${viewModeDraft === opt.id ? 'bg-[#007CC2] text-white shadow-lg shadow-[#007CC2]/20' : 'hover:bg-slate-50'}`}
                         >
                           <div className="flex flex-col">
                             <span className="text-[10px] font-black uppercase tracking-widest">{opt.label}</span>
-                            <span className={`text-[8px] font-bold ${viewModeDraft === opt.id ? 'text-blue-100' : 'text-slate-400'}`}>{opt.desc}</span>
+                            <span className={`text-[8px] font-bold ${viewModeDraft === opt.id ? 'text-sky-100' : 'text-slate-400'}`}>{opt.desc}</span>
                           </div>
                           {viewModeDraft === opt.id && <Check size={14} />}
                         </button>
@@ -1405,7 +1423,7 @@ const LaporanView: React.FC<LaporanViewProps> = ({
                   <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-1 block">Bulan</label>
                   <button 
                     onClick={(e) => { e.stopPropagation(); setIsMonthPickerOpen(!isMonthPickerOpen); setIsProjectPickerOpen(false); setIsModePickerOpen(false); setIsQuarterPickerOpen(false); setIsCaturwulanPickerOpen(false); setIsSemesterPickerOpen(false); }} 
-                    className={`w-full px-3 sm:px-5 py-3 sm:py-4 bg-slate-50 rounded-xl text-[10px] sm:text-xs md:text-sm font-black text-left border flex items-center justify-between transition-all active:scale-[0.98] ${isMonthPickerOpen ? 'border-blue-300 ring-2 ring-blue-50' : 'border-slate-100'}`}
+                    className={`w-full px-3 sm:px-5 py-3 sm:py-4 bg-slate-50 rounded-xl text-[10px] sm:text-xs md:text-sm font-black text-left border flex items-center justify-between transition-all active:scale-[0.98] ${isMonthPickerOpen ? 'border-sky-300 ring-2 ring-sky-50' : 'border-slate-100'}`}
                   >
                     <span className="truncate">{months[selectedMonthDraft]}</span>
                     <ChevronDown size={14} className={`text-slate-400 shrink-0 transition-transform duration-300 ${isMonthPickerOpen ? 'rotate-180' : ''}`} />
@@ -1414,7 +1432,7 @@ const LaporanView: React.FC<LaporanViewProps> = ({
                       <div className="absolute top-[calc(100%+8px)] left-0 right-0 z-[100] bg-white/80 backdrop-blur-xl border border-white/50 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-300">
                         <div className="p-2 sm:p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1 sm:gap-2">
                           {months.map((m, i) => (
-                            <button key={m} onClick={() => { setSelectedMonthDraft(i); setIsMonthPickerOpen(false); }} className={`px-4 py-2.5 sm:py-3 rounded-lg text-[9px] sm:text-[11px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between group ${selectedMonthDraft === i ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}><span>{m}</span>{selectedMonthDraft === i && <Check size={12} />}</button>
+                            <button key={m} onClick={() => { setSelectedMonthDraft(i); setIsMonthPickerOpen(false); }} className={`px-4 py-2.5 sm:py-3 rounded-lg text-[9px] sm:text-[11px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between group ${selectedMonthDraft === i ? 'bg-[#007CC2] text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}><span>{m}</span>{selectedMonthDraft === i && <Check size={12} />}</button>
                           ))}
                         </div>
                       </div>
@@ -1426,7 +1444,7 @@ const LaporanView: React.FC<LaporanViewProps> = ({
                   <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-1 block">Kuartal</label>
                   <button 
                     onClick={(e) => { e.stopPropagation(); setIsQuarterPickerOpen(!isQuarterPickerOpen); setIsProjectPickerOpen(false); setIsModePickerOpen(false); setIsMonthPickerOpen(false); setIsCaturwulanPickerOpen(false); setIsSemesterPickerOpen(false); }} 
-                    className={`w-full px-3 sm:px-5 py-3 sm:py-4 bg-slate-50 rounded-xl text-[10px] sm:text-xs md:text-sm font-black text-left border flex items-center justify-between transition-all active:scale-[0.98] ${isQuarterPickerOpen ? 'border-blue-300 ring-2 ring-blue-50' : 'border-slate-100'}`}
+                    className={`w-full px-3 sm:px-5 py-3 sm:py-4 bg-slate-50 rounded-xl text-[10px] sm:text-xs md:text-sm font-black text-left border flex items-center justify-between transition-all active:scale-[0.98] ${isQuarterPickerOpen ? 'border-sky-300 ring-2 ring-sky-50' : 'border-slate-100'}`}
                   >
                     <span className="truncate">Q{selectedQuarterDraft}</span>
                     <ChevronDown size={14} className={`text-slate-400 shrink-0 transition-transform duration-300 ${isQuarterPickerOpen ? 'rotate-180' : ''}`} />
@@ -1438,11 +1456,11 @@ const LaporanView: React.FC<LaporanViewProps> = ({
                           <button 
                             key={q.id} 
                             onClick={() => { setSelectedQuarterDraft(q.id); setIsQuarterPickerOpen(false); }} 
-                            className={`px-4 py-2.5 sm:py-3 rounded-lg text-[9px] sm:text-[11px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between group ${selectedQuarterDraft === q.id ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}
+                            className={`px-4 py-2.5 sm:py-3 rounded-lg text-[9px] sm:text-[11px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between group ${selectedQuarterDraft === q.id ? 'bg-[#007CC2] text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}
                           >
                             <div className="flex flex-col">
                               <span>{q.label}</span>
-                              <span className={`text-[8px] font-bold ${selectedQuarterDraft === q.id ? 'text-blue-100' : 'text-slate-400'}`}>{q.range}</span>
+                              <span className={`text-[8px] font-bold ${selectedQuarterDraft === q.id ? 'text-sky-100' : 'text-slate-400'}`}>{q.range}</span>
                             </div>
                             {selectedQuarterDraft === q.id && <Check size={12} />}
                           </button>
@@ -1457,7 +1475,7 @@ const LaporanView: React.FC<LaporanViewProps> = ({
                   <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-1 block">Caturwulan</label>
                   <button 
                     onClick={(e) => { e.stopPropagation(); setIsCaturwulanPickerOpen(!isCaturwulanPickerOpen); setIsProjectPickerOpen(false); setIsModePickerOpen(false); setIsMonthPickerOpen(false); setIsQuarterPickerOpen(false); setIsSemesterPickerOpen(false); }} 
-                    className={`w-full px-3 sm:px-5 py-3 sm:py-4 bg-slate-50 rounded-xl text-[10px] sm:text-xs md:text-sm font-black text-left border flex items-center justify-between transition-all active:scale-[0.98] ${isCaturwulanPickerOpen ? 'border-blue-300 ring-2 ring-blue-50' : 'border-slate-100'}`}
+                    className={`w-full px-3 sm:px-5 py-3 sm:py-4 bg-slate-50 rounded-xl text-[10px] sm:text-xs md:text-sm font-black text-left border flex items-center justify-between transition-all active:scale-[0.98] ${isCaturwulanPickerOpen ? 'border-sky-300 ring-2 ring-sky-50' : 'border-slate-100'}`}
                   >
                     <span className="truncate">C{selectedCaturwulanDraft}</span>
                     <ChevronDown size={14} className={`text-slate-400 shrink-0 transition-transform duration-300 ${isCaturwulanPickerOpen ? 'rotate-180' : ''}`} />
@@ -1469,11 +1487,11 @@ const LaporanView: React.FC<LaporanViewProps> = ({
                           <button 
                             key={c.id} 
                             onClick={() => { setSelectedCaturwulanDraft(c.id); setIsCaturwulanPickerOpen(false); }} 
-                            className={`px-4 py-2.5 sm:py-3 rounded-lg text-[9px] sm:text-[11px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between group ${selectedCaturwulanDraft === c.id ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}
+                            className={`px-4 py-2.5 sm:py-3 rounded-lg text-[9px] sm:text-[11px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between group ${selectedCaturwulanDraft === c.id ? 'bg-[#007CC2] text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}
                           >
                             <div className="flex flex-col">
                               <span>{c.label}</span>
-                              <span className={`text-[8px] font-bold ${selectedCaturwulanDraft === c.id ? 'text-blue-100' : 'text-slate-400'}`}>{c.range}</span>
+                              <span className={`text-[8px] font-bold ${selectedCaturwulanDraft === c.id ? 'text-sky-100' : 'text-slate-400'}`}>{c.range}</span>
                             </div>
                             {selectedCaturwulanDraft === c.id && <Check size={12} />}
                           </button>
@@ -1488,7 +1506,7 @@ const LaporanView: React.FC<LaporanViewProps> = ({
                   <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-1 block">Semester</label>
                   <button 
                     onClick={(e) => { e.stopPropagation(); setIsSemesterPickerOpen(!isSemesterPickerOpen); setIsProjectPickerOpen(false); setIsModePickerOpen(false); setIsMonthPickerOpen(false); setIsQuarterPickerOpen(false); setIsCaturwulanPickerOpen(false); }} 
-                    className={`w-full px-3 sm:px-5 py-3 sm:py-4 bg-slate-50 rounded-xl text-[10px] sm:text-xs md:text-sm font-black text-left border flex items-center justify-between transition-all active:scale-[0.98] ${isSemesterPickerOpen ? 'border-blue-300 ring-2 ring-blue-50' : 'border-slate-100'}`}
+                    className={`w-full px-3 sm:px-5 py-3 sm:py-4 bg-slate-50 rounded-xl text-[10px] sm:text-xs md:text-sm font-black text-left border flex items-center justify-between transition-all active:scale-[0.98] ${isSemesterPickerOpen ? 'border-sky-300 ring-2 ring-sky-50' : 'border-slate-100'}`}
                   >
                     <span className="truncate">S{selectedSemesterDraft}</span>
                     <ChevronDown size={14} className={`text-slate-400 shrink-0 transition-transform duration-300 ${isSemesterPickerOpen ? 'rotate-180' : ''}`} />
@@ -1500,11 +1518,11 @@ const LaporanView: React.FC<LaporanViewProps> = ({
                           <button 
                             key={s.id} 
                             onClick={() => { setSelectedSemesterDraft(s.id); setIsSemesterPickerOpen(false); }} 
-                            className={`px-4 py-2.5 sm:py-3 rounded-lg text-[9px] sm:text-[11px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between group ${selectedSemesterDraft === s.id ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}
+                            className={`px-4 py-2.5 sm:py-3 rounded-lg text-[9px] sm:text-[11px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between group ${selectedSemesterDraft === s.id ? 'bg-[#007CC2] text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}
                           >
                             <div className="flex flex-col">
                               <span>{s.label}</span>
-                              <span className={`text-[8px] font-bold ${selectedSemesterDraft === s.id ? 'text-blue-100' : 'text-slate-400'}`}>{s.range}</span>
+                              <span className={`text-[8px] font-bold ${selectedSemesterDraft === s.id ? 'text-sky-100' : 'text-slate-400'}`}>{s.range}</span>
                             </div>
                             {selectedSemesterDraft === s.id && <Check size={12} />}
                           </button>
@@ -1529,7 +1547,7 @@ const LaporanView: React.FC<LaporanViewProps> = ({
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-1 block">Mulai Bulan</label>
                     <button 
                       onClick={(e) => { e.stopPropagation(); setIsStartMonthPickerOpen(!isStartMonthPickerOpen); setIsEndMonthPickerOpen(false); setIsProjectPickerOpen(false); setIsModePickerOpen(false); setIsMonthPickerOpen(false); setIsQuarterPickerOpen(false); setIsCaturwulanPickerOpen(false); setIsSemesterPickerOpen(false); }} 
-                      className={`w-full px-3 sm:px-5 py-3 sm:py-4 bg-slate-50 rounded-xl text-[10px] sm:text-xs md:text-sm font-black text-left border flex items-center justify-between transition-all active:scale-[0.98] ${isStartMonthPickerOpen ? 'border-blue-300 ring-2 ring-blue-50' : 'border-slate-100'}`}
+                      className={`w-full px-3 sm:px-5 py-3 sm:py-4 bg-slate-50 rounded-xl text-[10px] sm:text-xs md:text-sm font-black text-left border flex items-center justify-between transition-all active:scale-[0.98] ${isStartMonthPickerOpen ? 'border-sky-300 ring-2 ring-sky-50' : 'border-slate-100'}`}
                     >
                       <span className="truncate">{months[customStartMonthDraft]} {customStartYearDraft}</span>
                       <ChevronDown size={14} className={`text-slate-400 shrink-0 transition-transform duration-300 ${isStartMonthPickerOpen ? 'rotate-180' : ''}`} />
@@ -1542,7 +1560,7 @@ const LaporanView: React.FC<LaporanViewProps> = ({
                           </div>
                           <div className="p-2 sm:p-3 grid grid-cols-2 lg:grid-cols-3 gap-1">
                             {months.map((m, i) => (
-                              <button key={m} onClick={() => { setCustomStartMonthDraft(i); setIsStartMonthPickerOpen(false); }} className={`px-4 py-2 rounded-lg text-[9px] sm:text-[10px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between group ${customStartMonthDraft === i ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}>
+                              <button key={m} onClick={() => { setCustomStartMonthDraft(i); setIsStartMonthPickerOpen(false); }} className={`px-4 py-2 rounded-lg text-[9px] sm:text-[10px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between group ${customStartMonthDraft === i ? 'bg-[#007CC2] text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}>
                                 <span className="hidden sm:inline">{m}</span>
                                 <span className="sm:hidden">{m.substring(0, 3)}</span>
                                 {customStartMonthDraft === i && <Check size={12} />}
@@ -1556,7 +1574,7 @@ const LaporanView: React.FC<LaporanViewProps> = ({
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-1 block">Sampai Bulan</label>
                     <button 
                       onClick={(e) => { e.stopPropagation(); setIsEndMonthPickerOpen(!isEndMonthPickerOpen); setIsStartMonthPickerOpen(false); setIsProjectPickerOpen(false); setIsModePickerOpen(false); setIsMonthPickerOpen(false); setIsQuarterPickerOpen(false); setIsCaturwulanPickerOpen(false); setIsSemesterPickerOpen(false); }} 
-                      className={`w-full px-3 sm:px-5 py-3 sm:py-4 bg-slate-50 rounded-xl text-[10px] sm:text-xs md:text-sm font-black text-left border flex items-center justify-between transition-all active:scale-[0.98] ${isEndMonthPickerOpen ? 'border-blue-300 ring-2 ring-blue-50' : 'border-slate-100'}`}
+                      className={`w-full px-3 sm:px-5 py-3 sm:py-4 bg-slate-50 rounded-xl text-[10px] sm:text-xs md:text-sm font-black text-left border flex items-center justify-between transition-all active:scale-[0.98] ${isEndMonthPickerOpen ? 'border-sky-300 ring-2 ring-sky-50' : 'border-slate-100'}`}
                     >
                       <span className="truncate">{months[customEndMonthDraft]} {customEndYearDraft}</span>
                       <ChevronDown size={14} className={`text-slate-400 shrink-0 transition-transform duration-300 ${isEndMonthPickerOpen ? 'rotate-180' : ''}`} />
@@ -1569,7 +1587,7 @@ const LaporanView: React.FC<LaporanViewProps> = ({
                           </div>
                           <div className="p-2 sm:p-3 grid grid-cols-2 lg:grid-cols-3 gap-1">
                             {months.map((m, i) => (
-                              <button key={m} onClick={() => { setCustomEndMonthDraft(i); setIsEndMonthPickerOpen(false); }} className={`px-4 py-2 rounded-lg text-[9px] sm:text-[10px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between group ${customEndMonthDraft === i ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}>
+                              <button key={m} onClick={() => { setCustomEndMonthDraft(i); setIsEndMonthPickerOpen(false); }} className={`px-4 py-2 rounded-lg text-[9px] sm:text-[10px] font-black uppercase tracking-tight text-left transition-all flex items-center justify-between group ${customEndMonthDraft === i ? 'bg-[#007CC2] text-white shadow-lg' : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}`}>
                                 <span className="hidden sm:inline">{m}</span>
                                 <span className="sm:hidden">{m.substring(0, 3)}</span>
                                 {customEndMonthDraft === i && <Check size={12} />}
@@ -1584,47 +1602,14 @@ const LaporanView: React.FC<LaporanViewProps> = ({
               {viewModeDraft !== 'custom' && (
                 <div className="relative">
                   <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-1 block">Tahun</label>
-                  <input type="number" value={selectedYearDraft} onChange={(e) => setSelectedYearDraft(parseInt(e.target.value))} className="w-full px-3 sm:px-5 py-3 sm:py-4 bg-slate-50 rounded-xl text-[10px] sm:text-xs md:text-sm font-black outline-none border border-slate-100 focus:bg-white focus:border-blue-100 transition-all" />
+                  <input type="number" value={selectedYearDraft} onChange={(e) => setSelectedYearDraft(parseInt(e.target.value))} className="w-full px-3 sm:px-5 py-3 sm:py-4 bg-slate-50 rounded-xl text-[10px] sm:text-xs md:text-sm font-black outline-none border border-slate-100 focus:bg-white focus:border-[#007CC2] transition-all" />
                 </div>
               )}
             </motion.div>
           )}
         </AnimatePresence>
 
-        <AnimatePresence>
-          {selectedProjectDraft === 'KAS UMUM' && (
-            <motion.div 
-              key="apply-filter"
-              className="pt-2 border-t border-slate-100 overflow-hidden"
-              initial={{ opacity: 0, height: 0, marginBottom: 0 }}
-              animate={{ opacity: 1, height: 'auto', marginBottom: 12 }}
-              exit={{ opacity: 0, height: 0, marginBottom: 0 }}
-              transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-            >
-              <button
-                onClick={handleApplyFilter}
-                disabled={!isFilterChanged || isRefreshing}
-                className={`w-full py-3 sm:py-4 rounded-xl font-black text-[clamp(9px,2.5vw,12px)] uppercase tracking-widest transition-all duration-300 shadow-md flex items-center justify-center space-x-2 ${
-                  isFilterChanged && !isRefreshing
-                    ? 'bg-blue-600 text-white hover:bg-blue-700 active:scale-[0.98] shadow-blue-500/10 cursor-pointer' 
-                    : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200 shadow-none'
-                }`}
-              >
-                {isRefreshing ? (
-                  <>
-                    <Loader2 size={16} className="animate-spin text-white" />
-                    <span>Menyelaraskan Data...</span>
-                  </>
-                ) : (
-                  <>
-                    <Filter size={16} className={isFilterChanged ? 'text-white font-black' : 'text-slate-400'} />
-                    <span>Terapkan Filter Laporan</span>
-                  </>
-                )}
-              </button>
-            </motion.div>
-          )}
-        </AnimatePresence>
+
 
         {!isLoading && !shouldShowReport && !isFuturePeriod && !isRefreshing && (
           <div className="mb-4 sm:mb-6 p-6 sm:p-8 border rounded-2xl flex flex-col items-center text-center space-y-3 sm:space-y-4 animate-in fade-in zoom-in bg-slate-50 border-slate-200">
@@ -1667,7 +1652,7 @@ const LaporanView: React.FC<LaporanViewProps> = ({
 
         <div className="flex flex-col gap-3 sm:gap-4">
           {canExport && (
-            <button onClick={exportToPDF} disabled={isExporting || isLoading || !canExport || (!isDeepScanMode && isFuturePeriod) || !shouldShowReport || isRefreshing} className="w-full flex items-center justify-center space-x-2 sm:space-x-3 py-3 sm:py-4 bg-blue-500 text-white rounded-xl font-black text-[clamp(9px,2.5vw,12px)] uppercase tracking-widest disabled:bg-slate-300 transition-all shadow-lg">
+            <button onClick={exportToPDF} disabled={isExporting || isLoading || !canExport || (!isDeepScanMode && isFuturePeriod) || !shouldShowReport || isRefreshing} className="w-full flex items-center justify-center space-x-2 sm:space-x-3 py-3 sm:py-4 bg-[#007CC2] text-white rounded-xl font-black text-[clamp(9px,2.5vw,12px)] uppercase tracking-widest disabled:bg-slate-300 transition-all shadow-lg hover:bg-[#007CC2]/95">
               {isExporting ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
               <span>UNDUH PDF LAPORAN</span>
             </button>
@@ -1715,81 +1700,132 @@ const LaporanView: React.FC<LaporanViewProps> = ({
 
       {(isLoading || isRefreshing) ? (
         <div className="py-24 text-center flex flex-col items-center justify-center space-y-6">
-          <div className="relative"><div className="absolute inset-0 bg-blue-500/20 rounded-full blur-xl animate-pulse" /><FileText size={40} className="relative animate-bounce text-blue-500" /></div>
+          <div className="relative"><div className="absolute inset-0 bg-[#007CC2]/20 rounded-full blur-xl animate-pulse" /><FileText size={40} className="relative animate-bounce text-[#007CC2]" /></div>
           <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-400">
             {isRefreshing ? 'Memperbarui Saldo Akhir...' : 'Menyinkronkan Data Proker...'}
           </p>
         </div>
-      ) : shouldShowReport && (
-        <motion.div
-          initial={{ opacity: 0, y: 15 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-          className="space-y-4 sm:space-y-8"
-        >
-          <div className="bg-white border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
-            <div className="p-4 sm:p-6 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-              <h4 className="text-[clamp(8px,2vw,11px)] font-black uppercase text-slate-400 tracking-widest flex items-center gap-2 sm:gap-3"><Wallet size={14} /> Ringkasan {selectedProject}</h4>
-              {!isDeepScanMode && (
-                <div className={`px-2 sm:px-4 py-1.5 rounded-full text-[clamp(6px,1.5vw,9px)] font-black uppercase tracking-widest flex items-center space-x-1.5 ${reportData.allApproved ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'}`}>{reportData.allApproved ? <Lock size={10} /> : <Unlock size={10} />}<span>{reportData.allApproved ? 'LOCKED' : 'OPEN'}</span></div>
-              )}
-              {isDeepScanMode && (
-                <div className="px-2 sm:px-4 py-1.5 rounded-full text-[clamp(6px,1.5vw,9px)] font-black uppercase tracking-widest bg-emerald-100 text-emerald-600 border border-emerald-200">HISTORI PENUH</div>
-              )}
-            </div>
-            <div className="divide-y divide-slate-50">
-              <div className="p-4 sm:p-6 flex justify-between items-center">
-                <div className="flex flex-col space-y-1">
-                  <span className="text-[clamp(9px,2.2vw,13px)] font-bold text-slate-500">{isDeepScanMode ? 'Saldo Awal (Dana Pertama)' : 'Saldo Awal'}</span>
-                  {!isDeepScanMode && (
-                    <span className="text-[8px] font-black uppercase tracking-wider flex items-center">
-                      {reportData.saldoAwalSource === 'closed_snapshot' ? (
-                        <span className="text-emerald-500 flex items-center gap-1">● Saldo Terkunci (Tutup Buku)</span>
-                      ) : reportData.saldoAwalSource === 'prev_closing_snapshot' ? (
-                        <span className="text-blue-500 flex items-center gap-1">● Peralihan Tutup Buku Bulan Lalu</span>
-                      ) : (
-                        <span className="text-slate-400 flex items-center gap-1">● Kalkulasi Berjalan</span>
-                      )}
-                    </span>
-                  )}
+      ) : (shouldShowReport || isFilterChanged) && (
+        <div className="grid grid-cols-1 relative">
+          
+          {/* ALERT PERINGATAN FILTER (Muncul terus dari awal, ditumpuk di bawah, z-0) */}
+          <div 
+            ref={warningRef}
+            className="row-start-1 col-start-1 z-0 self-start w-full transition-all duration-300 ease-out"
+            style={{ 
+              opacity: isFilterChanged ? 1 : 0, 
+              pointerEvents: isFilterChanged ? 'auto' : 'none'
+            }}
+          >
+            <div className="bg-amber-50 border border-amber-100 p-4 sm:p-5 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm text-amber-800">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 sm:p-2.5 bg-amber-100 rounded-xl text-amber-600 flex-shrink-0">
+                  <Clock size={16} className="animate-pulse" />
                 </div>
-                <span className="text-[clamp(10px,2.5vw,15px)] font-black">{formatIDR(reportData.saldoAwal)}</span>
+                <div className="space-y-0.5">
+                  <h5 className="text-[9px] sm:text-[11px] font-black uppercase tracking-wider">Tampilan Laporan Belum Diperbarui</h5>
+                  <p className="text-[8px] sm:text-[10px] font-bold opacity-90 leading-tight">
+                    Ada perubahan pada filter pencarian. Klik <strong className="font-extrabold text-amber-900 border-b border-amber-900/40">Terapkan Sekarang</strong> untuk menyelaraskan data.
+                  </p>
+                </div>
               </div>
-              <div className="p-4 sm:p-6 flex justify-between items-center bg-emerald-50/20"><span className="text-[clamp(9px,2.2vw,13px)] font-bold text-emerald-600">Total Penerimaan</span><span className="text-[clamp(10px,2.5vw,15px)] font-black text-emerald-500">{formatIDR(reportData.totalIncome)}</span></div>
-              <div className="p-4 sm:p-6 flex justify-between items-center bg-rose-50/20"><span className="text-[clamp(9px,2.2vw,13px)] font-bold text-rose-600">Total Pengeluaran</span><span className="text-[clamp(10px,2.5vw,15px)] font-black text-rose-500">{formatIDR(reportData.totalExpense)}</span></div>
-              <div className={`p-5 sm:p-6 flex justify-between items-center ${reportData.saldoAkhir >= 0 ? 'bg-slate-900' : 'bg-rose-600'} text-white`}><span className="text-[clamp(10px,2.5vw,14px)] font-black uppercase tracking-widest">Saldo Akhir</span><span className="text-[clamp(14px,4vw,24px)] font-black">{formatIDR(reportData.saldoAkhir)}</span></div>
+              <button
+                onClick={handleApplyFilter}
+                className="w-full sm:w-auto px-4 py-2 sm:py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-[8px] sm:text-[10px] font-black uppercase tracking-wider transition-all shadow-md hover:shadow-amber-600/10 active:scale-[0.97] cursor-pointer shrink-0 text-center"
+              >
+                Terapkan Sekarang
+              </button>
             </div>
           </div>
 
-          <div className="bg-white border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
-            <div className="p-4 sm:p-6 bg-slate-50 border-b border-slate-100"><h4 className="text-[clamp(8px,2vw,11px)] font-black uppercase text-slate-400 tracking-widest flex items-center gap-2 sm:gap-3"><FileText size={14} /> Jurnal Transaksi {isDeepScanMode && '(Semua Histori)'}</h4></div>
-            <div className="p-4 sm:p-8 md:p-10 space-y-6 sm:space-y-10">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-14">
-                <div className="flex flex-col space-y-3 sm:space-y-6">
-                  <div className="flex items-center space-x-2 text-emerald-600"><TrendingUp size={14} /><span className="text-[clamp(9px,2.2vw,12px)] font-black uppercase tracking-widest">Penerimaan</span></div>
-                  <div className="max-h-60 overflow-y-auto no-scrollbar border-l-2 border-emerald-50 space-y-3 pl-3">
-                    {reportData.incomeDetails.length === 0 ? <p className="text-[clamp(8px,1.8vw,10px)] font-bold text-slate-400 italic">Nihil</p> : reportData.incomeDetails.map(item => (<div key={item.id} className="flex justify-between items-start text-[clamp(8px,1.8vw,11px)] border-b border-slate-50 pb-2"><div className="flex flex-col max-w-[60%]"><span className="font-bold text-slate-700 uppercase truncate leading-tight">{item.description}</span><span className="text-[clamp(6px,1.5vw,8px)] text-slate-400">{item.category} • {item.id}</span></div><span className="font-black text-emerald-500">{formatIDR(item.amount)}</span></div>))}
-                  </div>
+          {/* KONTAINER RINGKASAN & JURNAL (Z-10, geser ke bawah reveal alert) */}
+          {shouldShowReport && (
+            <motion.div
+              layout
+              initial={{ opacity: 0, y: 15, scale: 1, filter: 'blur(0px) saturate(100%)' }}
+              animate={{ 
+                opacity: isFilterChanged ? 0.45 : 1, 
+                y: isFilterChanged ? warningHeight + 16 : 0,
+                scale: isFilterChanged ? 0.99 : 1,
+                filter: isFilterChanged ? 'blur(0.4px) saturate(45%)' : 'blur(0px) saturate(100%)'
+              }}
+              transition={{ 
+                type: 'spring', 
+                damping: 24, 
+                stiffness: 180,
+                layout: { type: 'spring', damping: 24, stiffness: 180 }
+              }}
+              className={`row-start-1 col-start-1 z-10 space-y-4 sm:space-y-8 bg-slate-50/5 border-t border-transparent ${
+                isFilterChanged 
+                  ? 'select-none pointer-events-none origin-top' 
+                  : ''
+              }`}
+            >
+              <div className="bg-white border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
+                <div className="p-4 sm:p-6 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                  <h4 className="text-[clamp(8px,2vw,11px)] font-black uppercase text-slate-400 tracking-widest flex items-center gap-2 sm:gap-3"><Wallet size={14} /> Ringkasan {selectedProject}</h4>
+                  {!isDeepScanMode && (
+                    <div className={`px-2 sm:px-4 py-1.5 rounded-full text-[clamp(6px,1.5vw,9px)] font-black uppercase tracking-widest flex items-center space-x-1.5 ${reportData.allApproved ? 'bg-emerald-100 text-emerald-600' : 'bg-sky-100 text-[#007CC2]'}`}>{reportData.allApproved ? <Lock size={10} /> : <Unlock size={10} />}<span>{reportData.allApproved ? 'LOCKED' : 'OPEN'}</span></div>
+                  )}
+                  {isDeepScanMode && (
+                    <div className="px-2 sm:px-4 py-1.5 rounded-full text-[clamp(6px,1.5vw,9px)] font-black uppercase tracking-widest bg-emerald-100 text-emerald-600 border border-emerald-200">HISTORI PENUH</div>
+                  )}
                 </div>
-                <div className="flex flex-col space-y-3 sm:space-y-6">
-                  <div className="flex items-center space-x-2 text-rose-600"><TrendingDown size={14} /><span className="text-[clamp(9px,2.2vw,12px)] font-black uppercase tracking-widest">Pengeluaran</span></div>
-                  <div className="max-h-60 overflow-y-auto no-scrollbar border-l-2 border-rose-50 space-y-3 pl-3">
-                    {reportData.expenseDetails.length === 0 ? <p className="text-[clamp(8px,1.8vw,10px)] font-bold text-slate-400 italic">Nihil</p> : reportData.expenseDetails.map(item => (<div key={item.id} className="flex justify-between items-start text-[clamp(8px,1.8vw,11px)] border-b border-slate-100 pb-2"><div className="flex flex-col max-w-[60%]"><span className="font-bold text-slate-700 uppercase truncate leading-tight">{item.description}</span><span className="text-[clamp(6px,1.5vw,8px)] text-slate-400">{item.category} • {item.id}</span></div><span className="font-black text-rose-500">{formatIDR(item.amount)}</span></div>))}
+                <div className="divide-y divide-slate-50">
+                  <div className="p-4 sm:p-6 flex justify-between items-center">
+                    <div className="flex flex-col space-y-1">
+                      <span className="text-[clamp(9px,2.2vw,13px)] font-bold text-slate-500">{isDeepScanMode ? 'Saldo Awal (Dana Pertama)' : 'Saldo Awal'}</span>
+                      {!isDeepScanMode && (
+                        <span className="text-[8px] font-black uppercase tracking-wider flex items-center">
+                          {reportData.saldoAwalSource === 'closed_snapshot' ? (
+                            <span className="text-emerald-500 flex items-center gap-1">● Saldo Terkunci (Tutup Buku)</span>
+                          ) : reportData.saldoAwalSource === 'prev_closing_snapshot' ? (
+                            <span className="text-[#007CC2] flex items-center gap-1">● Peralihan Tutup Buku Bulan Lalu</span>
+                          ) : (
+                            <span className="text-slate-400 flex items-center gap-1">● Kalkulasi Berjalan</span>
+                          )}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[clamp(10px,2.5vw,15px)] font-black">{formatIDR(reportData.saldoAwal)}</span>
+                  </div>
+                  <div className="p-4 sm:p-6 flex justify-between items-center bg-emerald-50/20"><span className="text-[clamp(9px,2.2vw,13px)] font-bold text-emerald-600">Total Penerimaan</span><span className="text-[clamp(10px,2.5vw,15px)] font-black text-emerald-500">{formatIDR(reportData.totalIncome)}</span></div>
+                  <div className="p-4 sm:p-6 flex justify-between items-center bg-rose-50/20"><span className="text-[clamp(9px,2.2vw,13px)] font-bold text-rose-600">Total Pengeluaran</span><span className="text-[clamp(10px,2.5vw,15px)] font-black text-rose-500">{formatIDR(reportData.totalExpense)}</span></div>
+                  <div className={`p-5 sm:p-6 flex justify-between items-center ${reportData.saldoAkhir >= 0 ? 'bg-[#007CC2]' : 'bg-rose-600'} text-white`}><span className="text-[clamp(10px,2.5vw,14px)] font-black uppercase tracking-widest">Saldo Akhir</span><span className="text-[clamp(14px,4vw,24px)] font-black">{formatIDR(reportData.saldoAkhir)}</span></div>
+                </div>
+              </div>
+
+              <div className="bg-white border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
+                <div className="p-4 sm:p-6 bg-slate-50 border-b border-slate-100"><h4 className="text-[clamp(8px,2vw,11px)] font-black uppercase text-slate-400 tracking-widest flex items-center gap-2 sm:gap-3"><FileText size={14} /> Jurnal Transaksi {isDeepScanMode && '(Semua Histori)'}</h4></div>
+                <div className="p-4 sm:p-8 md:p-10 space-y-6 sm:space-y-10">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-14">
+                    <div className="flex flex-col space-y-3 sm:space-y-6">
+                      <div className="flex items-center space-x-2 text-emerald-600"><TrendingUp size={14} /><span className="text-[clamp(9px,2.2vw,12px)] font-black uppercase tracking-widest">Penerimaan</span></div>
+                      <div className="max-h-60 overflow-y-auto no-scrollbar border-l-2 border-emerald-50 space-y-3 pl-3">
+                        {reportData.incomeDetails.length === 0 ? <p className="text-[clamp(8px,1.8vw,10px)] font-bold text-slate-400 italic">Nihil</p> : reportData.incomeDetails.map(item => (<div key={item.id} className="flex justify-between items-start text-[clamp(8px,1.8vw,11px)] border-b border-slate-50 pb-2"><div className="flex flex-col max-w-[60%]"><span className="font-bold text-slate-700 uppercase truncate leading-tight">{item.description}</span><span className="text-[clamp(6px,1.5vw,8px)] text-slate-400">{item.category} • {item.id}</span></div><span className="font-black text-emerald-500">{formatIDR(item.amount)}</span></div>))}
+                      </div>
+                    </div>
+                    <div className="flex flex-col space-y-3 sm:space-y-6">
+                      <div className="flex items-center space-x-2 text-rose-600"><TrendingDown size={14} /><span className="text-[clamp(9px,2.2vw,12px)] font-black uppercase tracking-widest">Pengeluaran</span></div>
+                      <div className="max-h-60 overflow-y-auto no-scrollbar border-l-2 border-rose-50 space-y-3 pl-3">
+                        {reportData.expenseDetails.length === 0 ? <p className="text-[clamp(8px,1.8vw,10px)] font-bold text-slate-400 italic">Nihil</p> : reportData.expenseDetails.map(item => (<div key={item.id} className="flex justify-between items-start text-[clamp(8px,1.8vw,11px)] border-b border-slate-100 pb-2"><div className="flex flex-col max-w-[60%]"><span className="font-bold text-slate-700 uppercase truncate leading-tight">{item.description}</span><span className="text-[clamp(6px,1.5vw,8px)] text-slate-400">{item.category} • {item.id}</span></div><span className="font-black text-rose-500">{formatIDR(item.amount)}</span></div>))}
+                      </div>
+                    </div>
+                  </div>
+                  <div className={`p-4 sm:p-6 rounded-xl flex flex-col items-center justify-center ${reportData.surplusDefisit >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                    <span className="text-[clamp(7px,1.5vw,10px)] font-black uppercase tracking-[0.2em] opacity-60 mb-2">
+                      {`Net ${reportData.surplusDefisit >= 0 ? 'Surplus' : 'Defisit'} ${selectedProject === 'KAS UMUM' ? 'Kas Harian' : `Proker ${selectedProject}`}`}
+                    </span>
+                    <div className="flex items-center space-x-3">
+                       {reportData.surplusDefisit >= 0 ? <TrendingUp size={28} /> : <TrendingDown size={28} />}
+                       <span className="text-[clamp(14px,4vw,28px)] font-black">{formatIDR(reportData.surplusDefisit)}</span>
+                    </div>
                   </div>
                 </div>
               </div>
-              <div className={`p-4 sm:p-6 rounded-xl flex flex-col items-center justify-center ${reportData.surplusDefisit >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
-                <span className="text-[clamp(7px,1.5vw,10px)] font-black uppercase tracking-[0.2em] opacity-60 mb-2">
-                  {`Net ${reportData.surplusDefisit >= 0 ? 'Surplus' : 'Defisit'} ${selectedProject === 'KAS UMUM' ? 'Kas Harian' : `Proker ${selectedProject}`}`}
-                </span>
-                <div className="flex items-center space-x-3">
-                   {reportData.surplusDefisit >= 0 ? <TrendingUp size={28} /> : <TrendingDown size={28} />}
-                   <span className="text-[clamp(14px,4vw,28px)] font-black">{formatIDR(reportData.surplusDefisit)}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </motion.div>
+            </motion.div>
+          )}
+        </div>
       )}
     </div>
   );

@@ -1,14 +1,14 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { onAuthStateChanged } from 'firebase/auth';
 import { LayoutDashboard, ReceiptText, Receipt, History, Wallet, RefreshCw, AlertCircle, FileText, Settings, Loader2, LogOut, ChevronsLeft, ChevronsRight, UserCircle, ShieldAlert, FileEdit, CheckCircle2, AlertTriangle, HelpCircle, User, Users, Fingerprint, Trash2, Layers, Filter, Info, X, Clock, ShieldCheck, Copy, Check, CalendarDays } from 'lucide-react';
-import { Transaction, DeletedTransaction, EditHistory, AppTab, GlobalStats, ProjectMetadata, AppType, AbsensiMember, AttendanceLog, DesaData, KelompokData, AgeCategoryData, DaerahData } from './types';
+import { Transaction, DeletedTransaction, EditHistory, AppTab, GlobalStats, ProjectMetadata, AppType, AbsensiMember, AttendanceLog, DesaData, KelompokData, AgeCategoryData, DaerahData, EventData, Family, FamilyRelationship } from './types';
 import Dashboard from './components/bendahara/DashboardBendahara';
 import TransactionForm from './components/bendahara/TransactionForm';
 import HistoryView from './components/bendahara/HistoryView';
 import LaporanView from './components/bendahara/LaporanView';
 import Login from './components/other/Login';
 import { SuperadminPanel } from './components/other/SuperadminPanel';
+import SetupGuide from './components/other/SetupGuide';
 import DeleteHistoryView from './components/bendahara/DeleteHistoryView';
 import EditAuditView from './components/bendahara/EditAuditView';
 import ChangePassword from './components/other/ChangePassword';
@@ -18,8 +18,10 @@ import {
   dbGetMembers, dbGetDesas, dbGetKelompoks, dbGetAgeCategories, 
   dbGetAttendanceLogs, dbGetDaerahs, initializeDynamicDb, activeAuth, db,
   dbSubscribeMembers, dbSubscribeDaerahs, dbSubscribeDesas, 
-  dbSubscribeKelompoks, dbSubscribeAgeCategories, dbSubscribeAttendanceLogs, dbSubscribeAttendanceSummaries
-} from './firebase';
+  dbSubscribeKelompoks, dbSubscribeAgeCategories, dbSubscribeAttendanceLogs,
+  dbGetEvents, dbSubscribeEvents, dbAddEvent, dbDeleteEvent,
+  dbGetFamilies, dbGetFamilyRelationships
+} from './supabase';
 
 // Absensi Components
 import DashboardAbsensi from './components/absensi/DashboardAbsensi';
@@ -59,10 +61,20 @@ const TabView: React.FC<{ id: AppTab; activeTab: AppTab; children: React.ReactNo
 const NavItem: React.FC<{ tab: AppTab, activeTab: AppTab, icon: any, label: string, sidebarCollapsed: boolean, setActiveTab: (tab: AppTab) => void }> = ({ tab, activeTab, icon: Icon, label, sidebarCollapsed, setActiveTab }) => (
   <button 
     onClick={() => setActiveTab(tab)} 
-    className={`w-full flex items-center px-4 rounded-xl transition-all duration-500 relative z-10 h-[42px] justify-start ${sidebarCollapsed ? 'gap-0' : 'gap-3'} ${activeTab === tab ? 'text-white' : 'text-slate-400 hover:text-white'}`}
+    className={`w-full flex items-center px-4 rounded-xl transition-all duration-500 relative z-10 h-[42px] justify-start ${activeTab === tab ? 'text-white' : 'text-slate-400 hover:text-white'}`}
   >
     <Icon size={18} className="flex-shrink-0" />
-    <span className={`text-[11px] md:text-xs font-black uppercase tracking-tight whitespace-nowrap overflow-hidden transition-all duration-500 ease-in-out ${sidebarCollapsed ? 'max-w-0 opacity-0' : 'max-w-[200px] opacity-100'}`}>{label}</span>
+    <span 
+      style={{
+        maxWidth: sidebarCollapsed ? '0px' : '200px',
+        opacity: sidebarCollapsed ? 0 : 1,
+        marginLeft: sidebarCollapsed ? '0px' : '12px',
+        transition: 'max-width 500ms cubic-bezier(0.4, 0, 0.2, 1), opacity 500ms, margin-left 500ms cubic-bezier(0.4, 0, 0.2, 1)'
+      }}
+      className="text-[11px] md:text-xs font-black uppercase tracking-tight whitespace-nowrap overflow-hidden"
+    >
+      {label}
+    </span>
   </button>
 );
 
@@ -114,7 +126,9 @@ const App: React.FC = () => {
           if (Array.isArray(parsed)) return parsed;
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      console.warn("Cached absensi members read failed:", e);
+    }
     return [];
   });
   const [rawMembers, setRawMembers] = useState<AbsensiMember[]>(() => {
@@ -127,7 +141,9 @@ const App: React.FC = () => {
           if (Array.isArray(parsed)) return parsed;
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      console.warn("Cached raw members read failed:", e);
+    }
     return [];
   });
   const [absensiLogs, setAbsensiLogs] = useState<AttendanceLog[]>(() => {
@@ -145,19 +161,72 @@ const App: React.FC = () => {
     }
     return [];
   });
-  const [absensiSummaries, setAbsensiSummaries] = useState<any[]>(() => {
-    try {
-      const inst = localStorage.getItem('instansi') || '';
-      if (inst) {
-        const cached = localStorage.getItem(`absensi_summaries_${inst}`);
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed)) return parsed;
-        }
+  const absensiSummaries = useMemo(() => {
+    const logsByDate: { [dateStr: string]: AttendanceLog[] } = {};
+    for (const log of absensiLogs) {
+      const rawDate = log.date || '';
+      const dateStr = rawDate.split(' ')[0] || rawDate.split('T')[0];
+      if (dateStr) {
+        if (!logsByDate[dateStr]) logsByDate[dateStr] = [];
+        logsByDate[dateStr].push(log);
       }
-    } catch (_) {}
-    return [];
-  });
+    }
+
+    return Object.entries(logsByDate).map(([dateStr, dateLogs]) => {
+      const totalCount = dateLogs.length;
+      const statusCounts = { Hadir: 0, Izin: 0, Sakit: 0, Alpa: 0 };
+      const genderCounts: { [gender: string]: any } = {};
+      const daerahCounts: { [daerahId: string]: any } = {};
+      const desaCounts: { [desaId: string]: any } = {};
+      const kelompokCounts: { [kelompokId: string]: any } = {};
+      const ageCategoryCounts: { [ageCategoryId: string]: any } = {};
+
+      for (const log of dateLogs) {
+        const status = log.status;
+        if (!status) continue;
+        
+        if (status === 'Hadir' || status === 'Izin' || status === 'Sakit' || status === 'Alpa') {
+          statusCounts[status]++;
+        }
+
+        const member = rawMembers.find(m => String(m.id) === String(log.memberId));
+        
+        const gender = (member?.jenis_kelamin || (log as any).gender || 'L').toUpperCase().startsWith('P') ? 'P' : 'L';
+        const ageId = member?.age_category_id || (log as any).ageCategoryId || log.ageName || 'Unknown';
+        const kelompokId = member?.kelompok_id || (log as any).kelompokId || log.kelompokName || 'Unknown';
+        const desaId = member?.desa_id || (log as any).desaId || log.desaName || 'Unknown';
+        const daerahId = member?.daerah_id || (log as any).daerahId || log.daerahName || 'Unknown';
+
+        const updateMap = (subMap: any, key: string) => {
+          const checkKey = key || 'Unknown';
+          if (!subMap[checkKey]) {
+            subMap[checkKey] = { Hadir: 0, Izin: 0, Sakit: 0, Alpa: 0 };
+          }
+          if (subMap[checkKey][status] !== undefined) {
+            subMap[checkKey][status]++;
+          }
+        };
+
+        updateMap(genderCounts, gender);
+        updateMap(daerahCounts, daerahId);
+        updateMap(desaCounts, desaId);
+        updateMap(kelompokCounts, kelompokId);
+        updateMap(ageCategoryCounts, ageId);
+      }
+
+      return {
+        id: dateStr,
+        date: dateStr,
+        totalCount,
+        statusCounts,
+        genderCounts,
+        daerahCounts,
+        desaCounts,
+        kelompokCounts,
+        ageCategoryCounts
+      };
+    });
+  }, [absensiLogs, rawMembers]);
   const [absensiDaerahs, setAbsensiDaerahs] = useState<DaerahData[]>(() => {
     try {
       const inst = localStorage.getItem('instansi') || '';
@@ -165,7 +234,9 @@ const App: React.FC = () => {
         const cached = localStorage.getItem(`absensi_daerahs_${inst}`);
         if (cached) return JSON.parse(cached);
       }
-    } catch (_) {}
+    } catch (e) {
+      console.warn("Cached daerahs read failed:", e);
+    }
     return [];
   });
   const [absensiDesas, setAbsensiDesas] = useState<DesaData[]>(() => {
@@ -175,7 +246,9 @@ const App: React.FC = () => {
         const cached = localStorage.getItem(`absensi_desas_${inst}`);
         if (cached) return JSON.parse(cached);
       }
-    } catch (_) {}
+    } catch (e) {
+      console.warn("Cached desas read failed:", e);
+    }
     return [];
   });
   const [absensiKelompoks, setAbsensiKelompoks] = useState<KelompokData[]>(() => {
@@ -185,7 +258,9 @@ const App: React.FC = () => {
         const cached = localStorage.getItem(`absensi_kelompoks_${inst}`);
         if (cached) return JSON.parse(cached);
       }
-    } catch (_) {}
+    } catch (e) {
+      console.warn("Cached kelompoks read failed:", e);
+    }
     return [];
   });
   const [absensiAges, setAbsensiAges] = useState<AgeCategoryData[]>(() => {
@@ -195,8 +270,40 @@ const App: React.FC = () => {
         const cached = localStorage.getItem(`absensi_ages_${inst}`);
         if (cached) return JSON.parse(cached);
       }
-    } catch (_) {}
+    } catch (e) {
+      console.warn("Cached ages read failed:", e);
+    }
     return [];
+  });
+  const [absensiEvents, setAbsensiEvents] = useState<EventData[]>(() => {
+    try {
+      const inst = localStorage.getItem('instansi') || '';
+      if (inst) {
+        const cached = localStorage.getItem(`absensi_events_${inst}`);
+        if (cached) return JSON.parse(cached);
+      }
+    } catch (e) {
+      console.warn("Cached events read failed:", e);
+    }
+    return [];
+  });
+  const [absensiFamilies, setAbsensiFamilies] = useState<Family[]>(() => {
+    try {
+      const inst = localStorage.getItem('userInstansi') || 'default';
+      const cached = localStorage.getItem(`absensi_families_${inst}`);
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [absensiRelationships, setAbsensiRelationships] = useState<FamilyRelationship[]>(() => {
+    try {
+      const inst = localStorage.getItem('userInstansi') || 'default';
+      const cached = localStorage.getItem(`absensi_relationships_${inst}`);
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
   });
   const [isAbsensiLoading, setIsAbsensiLoading] = useState(false);
 
@@ -222,6 +329,57 @@ const App: React.FC = () => {
       const desa = absensiDesas.find(d => String(d.id) === String(m.desa_id));
       const daerahId = m.daerah_id || desa?.daerah_id || '';
       const daerah = absensiDaerahs.find(reg => String(reg.id) === String(daerahId));
+      
+      const family = absensiFamilies.find(f => String(f.id) === String(m.family_id));
+      const relationship = absensiRelationships.find(r => String(r.id) === String(m.relationship_id));
+      
+      // Compute parent/wali details from family members automatically!
+      let computedNamaOrtu = m.nama_ortu || '';
+      let computedNoHpOrtu = m.no_hp_ortu || '';
+      let computedPekerjaanOrtu = m.pekerjaan_ortu || '';
+
+      if (m.family_id) {
+        const familyMembers = rawMembers.filter(other => other.id !== m.id && other.family_id === m.family_id);
+        
+        // Find Father (Ayah)
+        const ayahMember = familyMembers.find(other => {
+          const rel = absensiRelationships.find(r => String(r.id) === String(other.relationship_id));
+          return rel?.name?.toLowerCase() === 'ayah';
+        });
+
+        // Find Mother (Ibu)
+        const ibuMember = familyMembers.find(other => {
+          const rel = absensiRelationships.find(r => String(r.id) === String(other.relationship_id));
+          return rel?.name?.toLowerCase() === 'ibu';
+        });
+
+        // Find any guardian (is_wali === true)
+        const waliMember = familyMembers.find(other => {
+          const rel = absensiRelationships.find(r => String(r.id) === String(other.relationship_id));
+          return rel?.is_wali;
+        });
+
+        const fatherName = ayahMember?.nama_lengkap || '';
+        const motherName = ibuMember?.nama_lengkap || '';
+        const waliName = waliMember?.nama_lengkap || '';
+
+        if (fatherName && motherName) {
+          computedNamaOrtu = `${fatherName} & ${motherName}`;
+        } else if (fatherName) {
+          computedNamaOrtu = fatherName;
+        } else if (motherName) {
+          computedNamaOrtu = motherName;
+        } else if (waliName) {
+          computedNamaOrtu = waliName;
+        }
+
+        // Parent phone number automatically from Father, Mother, or Guardian
+        computedNoHpOrtu = ayahMember?.no_hp_anggota || ibuMember?.no_hp_anggota || waliMember?.no_hp_anggota || m.no_hp_ortu || '';
+
+        // Parent occupation automatically from Father, Mother, or Guardian
+        computedPekerjaanOrtu = ayahMember?.pekerjaan || ibuMember?.pekerjaan || waliMember?.pekerjaan || m.pekerjaan_ortu || '';
+      }
+
       return {
         ...m,
         daerah_id: daerahId,
@@ -229,44 +387,27 @@ const App: React.FC = () => {
         desa_name: desa?.nama_desa || 'Unknown',
         kelompok_name: absensiKelompoks.find(k => String(k.id) === String(m.kelompok_id))?.nama_kelompok || 'Unknown',
         age_category_name: absensiAges.find(a => String(a.id) === String(m.age_category_id))?.name || 'Unknown',
+        family_name: family?.nama_keluarga || 'Tidak Ada',
+        relationship_name: relationship?.name || 'Belum Diatur',
+        is_wali: relationship?.is_wali || false,
+        nama_ortu: computedNamaOrtu || m.nama_ortu || '-',
+        no_hp_ortu: computedNoHpOrtu || m.no_hp_ortu || '-',
+        pekerjaan_ortu: computedPekerjaanOrtu || m.pekerjaan_ortu || '-',
       };
     });
-    setAbsensiMembers(enriched);
+    Promise.resolve().then(() => {
+      setAbsensiMembers(enriched);
+    });
     const cacheKey = `absensi_members_${instansi}`;
     localStorage.setItem(cacheKey, JSON.stringify(enriched));
-  }, [rawMembers, absensiDaerahs, absensiDesas, absensiKelompoks, absensiAges, instansi]);
+  }, [rawMembers, absensiDaerahs, absensiDesas, absensiKelompoks, absensiAges, absensiFamilies, absensiRelationships, instansi]);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(activeAuth, async (firebaseUser) => {
-      if (firebaseUser && isLoggedIn) {
-        // Sync profile to active database
-        const userRole = localStorage.getItem('role') || 'Viewer';
-        const userFullName = localStorage.getItem('full_name') || firebaseUser.displayName || '';
-        const userOriginalRole = localStorage.getItem('original_role') || '';
-        const userInstansi = localStorage.getItem('instansi') || '';
-        const userWebAccess = localStorage.getItem('web_access') || 'bendahara';
-        try {
-          const { setDoc, doc } = await import('firebase/firestore');
-          const cleanUserDoc = {
-            email: firebaseUser.email || '',
-            full_name: userFullName,
-            role: userRole,
-            original_role: userOriginalRole,
-            status: 'Active',
-            instansi: userInstansi,
-            web_access: userWebAccess,
-            created_at: new Date().toISOString()
-          };
-          await setDoc(doc(db, 'users', firebaseUser.uid), cleanUserDoc);
-          console.log(`[Auth Sync] Profile of user ${firebaseUser.uid} synced to active database.`);
-        } catch (err) {
-          console.warn("[Auth Sync] Sinking profile was rejected or skipped:", err);
-        }
-      }
+    // Auth is instantly initialized as we rely on central Supabase accounts with secure passwords
+    Promise.resolve().then(() => {
       setIsAuthInitializing(false);
     });
-    return () => unsubscribe();
-  }, [isLoggedIn, db]);
+  }, []);
 
   const roleRaw = (currentRole || 'Viewer').toString().trim();
   const roleLower = roleRaw.toLowerCase();
@@ -942,22 +1083,80 @@ const App: React.FC = () => {
   // refreshAllData is moved below refreshAllAbsensi to avoid hoisting/initialization reference issues.
 
   const fetchAbsensiMaster = useCallback(async (isSilent = false) => {
-    // Preserved for backward compatibility. Real-time subscriptions are active.
-    return;
+    if (!isSilent) setIsAbsensiLoading(true);
+    try {
+      const instansi = localStorage.getItem('userInstansi') || 'default';
+      const [members, daerahs, desas, kelompoks, ages, events, families, relationships] = await Promise.all([
+        dbGetMembers(),
+        dbGetDaerahs(),
+        dbGetDesas(),
+        dbGetKelompoks(),
+        dbGetAgeCategories(),
+        dbGetEvents(),
+        dbGetFamilies(),
+        dbGetFamilyRelationships()
+      ]);
+
+      setRawMembers(members);
+      localStorage.setItem(`absensi_raw_members_${instansi}`, JSON.stringify(members));
+
+      setAbsensiDaerahs(daerahs);
+      localStorage.setItem(`absensi_daerahs_${instansi}`, JSON.stringify(daerahs));
+
+      setAbsensiDesas(desas);
+      localStorage.setItem(`absensi_desas_${instansi}`, JSON.stringify(desas));
+
+      setAbsensiKelompoks(kelompoks);
+      localStorage.setItem(`absensi_kelompoks_${instansi}`, JSON.stringify(kelompoks));
+
+      setAbsensiAges(ages);
+      localStorage.setItem(`absensi_ages_${instansi}`, JSON.stringify(ages));
+
+      setAbsensiEvents(events);
+      localStorage.setItem(`absensi_events_${instansi}`, JSON.stringify(events));
+
+      setAbsensiFamilies(families);
+      localStorage.setItem(`absensi_families_${instansi}`, JSON.stringify(families));
+
+      setAbsensiRelationships(relationships);
+      localStorage.setItem(`absensi_relationships_${instansi}`, JSON.stringify(relationships));
+    } catch (err) {
+      console.error("fetchAbsensiMaster error:", err);
+    } finally {
+      if (!isSilent) setIsAbsensiLoading(false);
+    }
   }, []);
 
   const fetchAbsensiLogs = useCallback(async (isSilent = false) => {
-    // Preserved for backward compatibility. Real-time subscriptions are active.
-    return;
-  }, []);
+    if (!isSilent) setIsAbsensiLoading(true);
+    try {
+      const instansi = localStorage.getItem('userInstansi') || 'default';
+      const membersCount = rawMembers.length || 100;
+      const fetchLimit = Math.min(2500, Math.max(1000, membersCount * 12));
+      const freshLogs = await dbGetAttendanceLogs(fetchLimit);
+
+      setAbsensiLogs(freshLogs);
+      localStorage.setItem(`absensi_logs_${instansi}`, JSON.stringify(freshLogs));
+    } catch (err) {
+      console.error("fetchAbsensiLogs error:", err);
+    } finally {
+      if (!isSilent) setIsAbsensiLoading(false);
+    }
+  }, [rawMembers]);
 
   const refreshAllAbsensi = useCallback(async (isSilent = false) => {
     if (!isSilent) setIsAbsensiLoading(true);
-    // Real-time subscriptions keep everything synced automatically. 
-    // We simulate a fast 500ms delay to provide immediate, satisfying UI feedback.
-    await new Promise(resolve => setTimeout(resolve, 500));
-    if (!isSilent) setIsAbsensiLoading(false);
-  }, []);
+    try {
+      await Promise.all([
+        fetchAbsensiMaster(true),
+        fetchAbsensiLogs(true)
+      ]);
+    } catch (err) {
+      console.error("refreshAllAbsensi error:", err);
+    } finally {
+      if (!isSilent) setIsAbsensiLoading(false);
+    }
+  }, [fetchAbsensiMaster, fetchAbsensiLogs]);
 
   const refreshAllData = useCallback(async () => {
     if (!isLoggedIn) return;
@@ -1042,9 +1241,11 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!isLoggedIn || currentApp !== 'absensi') return;
 
-    setIsAbsensiLoading(true);
+    Promise.resolve().then(() => {
+      setIsAbsensiLoading(true);
+    });
     let masterLoadedCount = 0;
-    const totalMasterToLoad = 5;
+    const totalMasterToLoad = 6;
 
     const checkMasterReady = () => {
       masterLoadedCount++;
@@ -1102,6 +1303,15 @@ const App: React.FC = () => {
       console.error("Real-time Ages Sync Error:", err);
     });
 
+    // 5b. Subscribe events
+    const unsubEvents = dbSubscribeEvents((eList) => {
+      setAbsensiEvents(eList);
+      localStorage.setItem(`absensi_events_${instansi}`, JSON.stringify(eList));
+      checkMasterReady();
+    }, (err) => {
+      console.error("Real-time Events Sync Error:", err);
+    });
+
     // 6. Subscribe attendance logs with a dynamic and smart safety limit
     const membersCount = rawMembers.length || 100;
     const fetchLimit = Math.min(2500, Math.max(1000, membersCount * 12));
@@ -1143,14 +1353,6 @@ const App: React.FC = () => {
       console.error("Real-time Logs Sync Error:", err);
     });
 
-    // 7. Subscribe to daily summaries
-    const unsubSummaries = dbSubscribeAttendanceSummaries((summaries) => {
-      setAbsensiSummaries(summaries);
-      localStorage.setItem(`absensi_summaries_${instansi}`, JSON.stringify(summaries));
-    }, (err) => {
-      console.error("Real-time Summaries Sync Error:", err);
-    });
-
     return () => {
       console.log("Unsubscribing and cleaning up Absensi real-time Snapshot Listeners...");
       unsubMembers();
@@ -1158,25 +1360,95 @@ const App: React.FC = () => {
       unsubDesas();
       unsubKelompoks();
       unsubAges();
+      unsubEvents();
       unsubLogs();
-      unsubSummaries();
     };
   }, [isLoggedIn, currentApp, instansi]); 
 
-  if (!isLoggedIn) return <Login portalUrl={PORTAL_SCRIPT_URL} onLoginSuccess={handleLoginSuccess} />;
+  const [showSetupGuide, setShowSetupGuide] = useState(false);
 
-  if (currentRole === 'Superadmin') {
+  if (!isLoggedIn) {
+    if (showSetupGuide) {
+      return (
+        <div className="fixed inset-0 bg-slate-50 flex flex-col overflow-hidden z-[500]">
+          <div className="bg-slate-950 text-white px-6 py-4 flex items-center justify-between shrink-0">
+            <h1 className="text-sm font-black uppercase tracking-[0.2em] text-white">CONFIG_PORTAL_MASTER</h1>
+            <button 
+              onClick={() => {
+                setShowSetupGuide(false);
+                window.location.reload();
+              }} 
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-black text-[9px] uppercase tracking-widest transition-all cursor-pointer"
+            >
+              Kembali ke Login
+            </button>
+          </div>
+          <div className="flex-1 overflow-auto">
+            <SetupGuide onLogout={() => { setShowSetupGuide(false); window.location.reload(); }} />
+          </div>
+        </div>
+      );
+    }
     return (
-      <SuperadminPanel 
-        onLogout={handleLogout} 
-        notify={(msg, type) => showToast(msg, type)} 
-        confirm={openConfirm} 
+      <Login 
+        portalUrl={PORTAL_SCRIPT_URL} 
+        onLoginSuccess={handleLoginSuccess} 
+        onOpenSetup={() => setShowSetupGuide(true)} 
       />
     );
   }
 
+  if (currentRole === 'Superadmin') {
+    return (
+      <>
+        <SuperadminPanel 
+          onLogout={handleLogout} 
+          notify={(msg, type) => showToast(msg, type)} 
+          confirm={openConfirm} 
+        />
+        {dialog.show && (
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-backdrop">
+            <div className="bg-white w-[calc(100%-2rem)] max-w-[340px] rounded-3xl shadow-2xl border border-white animate-dialog-bounce mx-auto">
+              <div className="relative pt-14 pb-5 px-6 flex flex-col items-center text-center">
+                <div className={`absolute -top-10 w-20 h-20 rounded-3xl shadow-2xl flex items-center justify-center transition-colors duration-300 ${dialog.isSuccess ? 'bg-emerald-600 text-white' : dialog.isDanger ? 'bg-rose-600 text-white' : 'bg-blue-600 text-white'}`}>
+                  {dialog.isSuccess ? <CheckCircle2 size={36} /> : dialog.isDanger ? <AlertTriangle size={36} /> : <HelpCircle size={36} />}
+                </div>
+                <h3 className="text-sm font-black uppercase tracking-[0.2em] mb-2">{dialog.isSuccess ? 'Berhasil' : dialog.title}</h3>
+                <p className="text-[10px] font-bold text-slate-500 leading-relaxed px-2">{dialog.isSuccess ? 'Aksi telah berhasil dieksekusi.' : dialog.msg}</p>
+              </div>
+              <div className="p-5 pt-2 space-y-2">
+                <button onClick={handleConfirmClick} disabled={dialog.isSubmitting} className={`w-full py-4 rounded-2xl text-[10px] font-black text-white uppercase tracking-widest shadow-xl transition-all ${dialog.isSuccess ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100' : dialog.isDanger ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-100' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-100'}`}>
+                  {dialog.isSubmitting ? <Loader2 size={16} className="animate-spin mx-auto" /> : <span>{dialog.isSuccess ? 'MENGERTI' : dialog.confirmText}</span>}
+                </button>
+                {!dialog.isSuccess && !dialog.isSubmitting && <button onClick={closeDialog} className="w-full py-3 text-[9px] font-black uppercase text-slate-400 hover:text-slate-600 transition-colors">Batal</button>}
+              </div>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  }
+
   return (
-    <div className="fixed inset-0 bg-slate-50 flex flex-col md:flex-row overflow-hidden">
+    <div className="fixed inset-0 bg-gradient-to-br from-[#DCEFFA] via-[#F3F9FD] to-[#C9E5F8] flex flex-col md:flex-row overflow-hidden">
+      {/* BACKGROUND DEKORASI CELESTIAL VERSI 3 (Biru Lebih Terasa & Lembut) */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden z-0 select-none">
+        {/* Soft Glowing Aurora Blobs */}
+        <div className="absolute -top-[10%] -right-[15%] w-[60vw] h-[60vw] rounded-full bg-gradient-to-br from-[#00AEEF]/15 to-[#007CC2]/10 blur-[130px]" />
+        <div className="absolute -bottom-[15%] left-[5%] w-[55vw] h-[55vw] rounded-full bg-gradient-to-tr from-[#007CC2]/10 to-[#004D90]/5 blur-[140px]" />
+        <div className="absolute top-[25%] -left-[10%] w-[45vw] h-[45vw] rounded-full bg-gradient-to-r from-[#00AEEF]/12 to-indigo-200/10 blur-[120px]" />
+        
+        {/* Micro Dot Matrix Grid Overlay */}
+        <svg className="w-full h-full opacity-[0.4]" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <pattern id="outerDotGrid" width="24" height="24" patternUnits="userSpaceOnUse">
+              <circle cx="2" cy="2" r="1.4" fill="#007cc2" opacity="0.2" />
+            </pattern>
+          </defs>
+          <rect width="100%" height="100%" fill="url(#outerDotGrid)" />
+        </svg>
+      </div>
+
       {dialog.show && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-backdrop">
           <div className="bg-white w-[calc(100%-2rem)] max-w-[340px] rounded-3xl shadow-2xl border border-white animate-dialog-bounce mx-auto">
@@ -1352,53 +1624,115 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <div className={`hidden md:flex flex-col bg-slate-900 z-[50] transition-all duration-500 ease-in-out relative ${sidebarCollapsed ? 'w-20' : 'w-64'}`}>
-        <button onClick={() => setSidebarCollapsed(!sidebarCollapsed)} className="absolute -right-3 top-24 w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center shadow-xl border-2 border-slate-50 hover:bg-blue-700 hover:scale-110 transition-all z-[60] cursor-pointer">
+      <div className={`hidden md:flex flex-col shrink-0 bg-gradient-to-b from-[#004D90] via-[#003B70] to-[#00254A] z-[50] transition-all duration-500 ease-in-out relative ${sidebarCollapsed ? 'w-20' : 'w-64'}`}>
+        {/* ABSOLUTE WRAPPER FOR SAFE CLIPPING (allowing outside elements like toggle button to render) */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none z-0">
+          {/* STARLIGHTS & METEORS BACKGROUND (1 Tema dengan Login) */}
+          <svg className="absolute inset-0 w-full h-full opacity-30" viewBox="0 0 200 800" preserveAspectRatio="none" fill="none">
+            <defs>
+              <linearGradient id="sidebarMeteorGrad" x1="1" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#ffffff" stopOpacity="0.95" />
+                <stop offset="40%" stopColor="#38bdf8" stopOpacity="0.5" />
+                <stop offset="100%" stopColor="#0284c7" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            <circle cx="30" cy="50" r="1.5" fill="#ffffff" opacity="0.8" />
+            <circle cx="120" cy="90" r="1" fill="#ffffff" opacity="0.6" />
+            <circle cx="80" cy="180" r="2" fill="#ffffff" opacity="0.9" />
+            <circle cx="150" cy="240" r="1.5" fill="#ffffff" opacity="0.5" />
+            <circle cx="45" cy="310" r="1" fill="#ffffff" opacity="0.7" />
+            <circle cx="160" cy="380" r="2" fill="#ffffff" opacity="0.85" />
+            <circle cx="70" cy="450" r="1" fill="#ffffff" opacity="0.4" />
+            <circle cx="130" cy="520" r="1.5" fill="#ffffff" opacity="0.9" />
+            <circle cx="50" cy="610" r="1.5" fill="#ffffff" opacity="0.6" />
+            <circle cx="140" cy="680" r="2" fill="#ffffff" opacity="0.8" />
+            <circle cx="85" cy="740" r="1" fill="#ffffff" opacity="0.5" />
+            <circle cx="110" cy="780" r="1.5" fill="#ffffff" opacity="0.7" />
+            <circle cx="35" cy="850" r="2" fill="#ffffff" opacity="0.9" />
+            <line x1="150" y1="120" x2="90" y2="170" stroke="url(#sidebarMeteorGrad)" strokeWidth="2" strokeLinecap="round" />
+            <line x1="170" y1="410" x2="110" y2="460" stroke="url(#sidebarMeteorGrad)" strokeWidth="2" strokeLinecap="round" />
+            <line x1="130" y1="670" x2="80" y2="720" stroke="url(#sidebarMeteorGrad)" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+
+          {/* OVERLAPPING CLOUDS FLOW (1 Tema dengan Login) */}
+          <svg className="absolute bottom-0 left-0 w-full h-[35%] opacity-20" viewBox="0 0 200 300" preserveAspectRatio="none" fill="none">
+            <defs>
+              <linearGradient id="sidebarCloudL1" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#00AEEF" />
+                <stop offset="100%" stopColor="#0054A6" />
+              </linearGradient>
+              <linearGradient id="sidebarCloudL2" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#009EE2" stopOpacity="0.85" />
+                <stop offset="100%" stopColor="#004D8C" />
+              </linearGradient>
+              <linearGradient id="sidebarCloudL3" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#0072BC" />
+                <stop offset="100%" stopColor="#003580" />
+              </linearGradient>
+            </defs>
+            <path d="M-50,180 Q40,100 120,150 T310,140 T550,160 L550,450 L-50,450 Z" fill="url(#sidebarCloudL1)" opacity="0.6" />
+            <path d="M-50,210 Q60,130 180,180 T400,160 T550,200 L550,450 L-50,450 Z" fill="url(#sidebarCloudL2)" opacity="0.7" />
+            <path d="M-50,240 Q100,180 250,230 T550,210 L550,450 L-50,450 Z" fill="url(#sidebarCloudL3)" opacity="0.8" />
+          </svg>
+        </div>
+
+        <button onClick={() => setSidebarCollapsed(!sidebarCollapsed)} className="absolute -right-3 top-24 w-6 h-6 bg-[#007CC2] text-white rounded-full flex items-center justify-center shadow-xl border-2 border-slate-50 hover:bg-[#009EE2] hover:scale-110 transition-all z-[60] cursor-pointer">
           {sidebarCollapsed ? <ChevronsRight size={14} strokeWidth={3} /> : <ChevronsLeft size={14} strokeWidth={3} />}
         </button>
-        <div className="flex flex-col transition-all duration-500 ease-in-out px-4 items-center py-8">
-          <div className={`bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-blue-500/20 transition-all duration-500 ${sidebarCollapsed ? 'w-10 h-10' : 'w-12 h-12 mb-4'}`}>
+        <div className="flex flex-col transition-all duration-500 ease-in-out px-4 items-center py-8 relative z-10">
+          <div className={`bg-[#007CC2] rounded-2xl flex items-center justify-center text-white shadow-lg shadow-sky-500/20 transition-all duration-500 ${sidebarCollapsed ? 'w-10 h-10' : 'w-12 h-12'}`}>
             <Wallet size={sidebarCollapsed ? 20 : 24} />
           </div>
-          <div className={`w-full overflow-hidden transition-all duration-500 ease-in-out flex flex-col items-center ${sidebarCollapsed ? 'max-h-0 opacity-0' : 'max-h-48 opacity-100 mt-4'}`}>
-            <h1 className="text-[10px] font-black uppercase tracking-[0.2em] text-white truncate text-center w-full">{instansi}</h1>
-            
-            {webAccessStrings.length > 1 && (
-              <div className="w-full px-2 mt-4 space-y-2">
-                <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest text-center">Ganti Aplikasi</p>
-                <div className="flex bg-slate-800 p-1 rounded-xl">
-                  <button 
-                    onClick={() => switchApp('bendahara')}
-                    className={`flex-1 py-2 rounded-lg text-[8px] font-black uppercase transition-all ${currentApp === 'bendahara' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
-                  >
-                    Bendahara
-                  </button>
-                  <button 
-                    onClick={() => switchApp('absensi')}
-                    className={`flex-1 py-2 rounded-lg text-[8px] font-black uppercase transition-all ${currentApp === 'absensi' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
-                  >
-                    Absensi
-                  </button>
-                </div>
-              </div>
-            )}
+          <div 
+            style={{
+              display: 'grid',
+              gridTemplateRows: sidebarCollapsed ? '0fr' : '1fr',
+              transition: 'grid-template-rows 500ms cubic-bezier(0.4, 0, 0.2, 1), opacity 500ms cubic-bezier(0.4, 0, 0.2, 1)'
+            }}
+            className={`w-full overflow-hidden flex flex-col items-center ${sidebarCollapsed ? 'opacity-0' : 'opacity-100'}`}
+          >
+            <div className="overflow-hidden w-full flex flex-col items-center">
+              <div className="pt-4 flex flex-col items-center w-full">
+                <h1 className="text-[10px] font-black uppercase tracking-[0.2em] text-white truncate text-center w-full">{instansi}</h1>
+                
+                {webAccessStrings.length > 1 && (
+                  <div className="w-full px-2 mt-4 space-y-2">
+                    <p className="text-[8px] font-black text-white/50 uppercase tracking-widest text-center">Ganti Aplikasi</p>
+                    <div className="flex bg-[#00254A]/60 p-1 rounded-xl border border-white/5">
+                      <button 
+                        onClick={() => switchApp('bendahara')}
+                        className={`flex-1 py-2 rounded-lg text-[8px] font-black uppercase transition-all ${currentApp === 'bendahara' ? 'bg-[#007CC2] text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
+                      >
+                        Bendahara
+                      </button>
+                      <button 
+                        onClick={() => switchApp('absensi')}
+                        className={`flex-1 py-2 rounded-lg text-[8px] font-black uppercase transition-all ${currentApp === 'absensi' ? 'bg-[#007CC2] text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
+                      >
+                        Absensi
+                      </button>
+                    </div>
+                  </div>
+                )}
 
-            <div className="pt-3 pb-1 border-t border-white/5 mt-3 flex flex-col items-center space-y-2 w-full">
-              <div className="flex items-center space-x-2 text-slate-400">
-                <User size={12} className="flex-shrink-0" />
-                <span className="text-[10px] font-black uppercase tracking-tight truncate">{fullName}</span>
-              </div>
-              <div className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-full border border-white/5 ${isAdmin ? 'bg-blue-600/20 text-blue-400' : 'bg-emerald-600/20 text-emerald-400'}`}>
-                 <Fingerprint size={10} />
-                 <span className="text-[8px] font-black uppercase tracking-[0.1em]">{displayRole}</span>
+                <div className="pt-3 pb-1 border-t border-white/5 mt-3 flex flex-col items-center space-y-2 w-full">
+                  <div className="flex items-center space-x-2 text-white/70">
+                    <User size={12} className="flex-shrink-0" />
+                    <span className="text-[10px] font-black uppercase tracking-tight truncate">{fullName}</span>
+                  </div>
+                  <div className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-full border border-white/5 ${isAdmin ? 'bg-[#007CC2]/20 text-sky-300' : 'bg-emerald-600/20 text-emerald-400'}`}>
+                     <Fingerprint size={10} />
+                     <span className="text-[8px] font-black uppercase tracking-[0.1em]">{displayRole}</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         </div>
-        <div className="flex-1 py-2 px-4 space-y-1.5 overflow-y-auto no-scrollbar relative">
+        <div className="flex-1 py-2 px-4 space-y-1.5 overflow-y-auto no-scrollbar relative z-10">
           {activeNavIndex !== -1 && (
             <div 
-              className="absolute left-4 right-4 h-[42px] top-2 bg-blue-600 rounded-xl shadow-lg shadow-blue-900/20 transition-all duration-500 ease-in-out z-0"
+              className="absolute left-4 right-4 h-[42px] top-2 bg-[#007CC2] rounded-xl shadow-lg shadow-sky-950/20 transition-all duration-500 ease-in-out z-0"
               style={{ transform: `translateY(${activeNavIndex * (42 + 6)}px)` }} 
             />
           )}
@@ -1411,17 +1745,37 @@ const App: React.FC = () => {
               label={item.label} 
               sidebarCollapsed={sidebarCollapsed} 
               setActiveTab={setActiveTab} 
-            />
+              />
           ))}
         </div>
-        <div className="border-t border-white/5 p-4 space-y-2">
-          <button onClick={refreshAllData} className={`w-full flex items-center rounded-xl bg-blue-600/10 text-blue-400 hover:bg-blue-600 hover:text-white transition-all duration-500 group h-[42px] px-4 justify-start ${sidebarCollapsed ? 'gap-0' : 'gap-3'}`}>
+        <div className="border-t border-white/5 p-4 space-y-2 relative z-10">
+          <button onClick={refreshAllData} className={`w-full flex items-center rounded-xl bg-white/5 text-sky-200 hover:bg-[#007CC2] hover:text-white transition-all duration-500 group h-[42px] px-4 justify-start`}>
             <RefreshCw size={18} className={`${(currentApp === 'absensi' ? isAbsensiLoading : isLoading) ? 'animate-spin' : ''} flex-shrink-0`} />
-            <span className={`text-[9px] md:text-xs font-black uppercase tracking-widest whitespace-nowrap overflow-hidden transition-all duration-500 ease-in-out ${sidebarCollapsed ? 'max-w-0 opacity-0' : 'max-w-[200px] opacity-100'}`}>Segarkan Data</span>
+            <span 
+              style={{
+                maxWidth: sidebarCollapsed ? '0px' : '200px',
+                opacity: sidebarCollapsed ? 0 : 1,
+                marginLeft: sidebarCollapsed ? '0px' : '12px',
+                transition: 'max-width 500ms cubic-bezier(0.4, 0, 0.2, 1), opacity 500ms, margin-left 500ms cubic-bezier(0.4, 0, 0.2, 1)'
+              }}
+              className="text-[9px] md:text-xs font-black uppercase tracking-widest whitespace-nowrap overflow-hidden"
+            >
+              Segarkan Data
+            </span>
           </button>
-          <button onClick={() => openConfirm("Keluar?", "Sesi akan diakhiri.", "Ya, Keluar", handleLogout, true)} className={`w-full flex items-center rounded-xl bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white transition-all duration-500 group h-[42px] px-4 justify-start ${sidebarCollapsed ? 'gap-0' : 'gap-3'}`}>
+          <button onClick={() => openConfirm("Keluar?", "Sesi akan diakhiri.", "Ya, Keluar", handleLogout, true)} className={`w-full flex items-center rounded-xl bg-rose-500/10 text-rose-300 hover:bg-rose-500 hover:text-white transition-all duration-500 group h-[42px] px-4 justify-start`}>
             <LogOut size={18} className="flex-shrink-0" />
-            <span className={`text-[9px] md:text-xs font-black uppercase tracking-widest whitespace-nowrap overflow-hidden transition-all duration-500 ease-in-out ${sidebarCollapsed ? 'max-w-0 opacity-0' : 'max-w-[200px] opacity-100'}`}>Keluar</span>
+            <span 
+              style={{
+                maxWidth: sidebarCollapsed ? '0px' : '200px',
+                opacity: sidebarCollapsed ? 0 : 1,
+                marginLeft: sidebarCollapsed ? '0px' : '12px',
+                transition: 'max-width 500ms cubic-bezier(0.4, 0, 0.2, 1), opacity 500ms, margin-left 500ms cubic-bezier(0.4, 0, 0.2, 1)'
+              }}
+              className="text-[9px] md:text-xs font-black uppercase tracking-widest whitespace-nowrap overflow-hidden"
+            >
+              Keluar
+            </span>
           </button>
         </div>
       </div>
@@ -1429,14 +1783,14 @@ const App: React.FC = () => {
       <div className="flex-1 relative flex flex-col min-w-0 h-full overflow-hidden">
         <div className="md:hidden flex items-center justify-between px-6 py-4 bg-white border-b border-slate-100 z-30 shadow-sm">
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-md"><Wallet size={18}/></div>
+            <div className="w-10 h-10 bg-[#007CC2] rounded-xl flex items-center justify-center text-white shadow-md"><Wallet size={18}/></div>
             <div className="flex flex-col">
               <span className="font-black text-[11px] uppercase text-slate-800 truncate max-w-[140px] leading-tight">{instansi}</span>
-              <span className="text-[9px] font-black text-blue-600 uppercase tracking-tight">{fullName} ({displayRole})</span>
+              <span className="text-[9px] font-black text-[#007CC2] uppercase tracking-tight">{fullName} ({displayRole})</span>
             </div>
           </div>
           <div className="flex items-center space-x-2">
-            <button onClick={refreshAllData} className="p-2 text-blue-600 bg-blue-50 rounded-xl transition-all border border-blue-100">
+            <button onClick={refreshAllData} className="p-2 text-[#007CC2] bg-sky-50 rounded-xl transition-all border border-sky-100">
               <RefreshCw size={18} className={(currentApp === 'absensi' ? isAbsensiLoading : isLoading) ? 'animate-spin' : ''} />
             </button>
             <button onClick={() => openConfirm("Keluar?", "Sesi akan diakhiri.", "Ya, Keluar", handleLogout, true)} className="p-2 text-rose-500 bg-rose-50 rounded-xl transition-all border border-rose-100"><LogOut size={18} /></button>
@@ -1481,10 +1835,10 @@ const App: React.FC = () => {
           ) : (
             <>
               <TabView id="dashboard" activeTab={activeTab}><DashboardAbsensi logs={absensiLogs} isLoading={isAbsensiLoading} username={fullName} summaries={absensiSummaries} ages={absensiAges} daerahs={absensiDaerahs} desas={absensiDesas} kelompoks={absensiKelompoks} /></TabView>
-              <TabView id="absensi_form" activeTab={activeTab}><AttendanceForm members={absensiMembers} logs={absensiLogs} logUrl={absensiLogUrl} username={fullName} notify={showToast} onSuccess={() => refreshAllAbsensi(true)} /></TabView>
-              <TabView id="absensi_members" activeTab={activeTab}><MemberManagement daerahs={absensiDaerahs} desas={absensiDesas} kelompoks={absensiKelompoks} ages={absensiAges} members={absensiMembers} setMembers={setAbsensiMembers} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} /></TabView>
-              <TabView id="absensi_groups" activeTab={activeTab}><GroupManagement daerahs={absensiDaerahs} setDaerahs={setAbsensiDaerahs} desas={absensiDesas} setDesas={setAbsensiDesas} kelompoks={absensiKelompoks} setKelompoks={setAbsensiKelompoks} ages={absensiAges} setAges={setAbsensiAges} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} /></TabView>
-              <TabView id="absensi_history" activeTab={activeTab}><AttendanceHistory logs={absensiLogs} isLoading={isAbsensiLoading} logUrl={absensiLogUrl} onRefresh={() => refreshAllAbsensi(true)} notify={showToast} /></TabView>
+              <TabView id="absensi_form" activeTab={activeTab}><AttendanceForm members={absensiMembers} logs={absensiLogs} logUrl={absensiLogUrl} username={fullName} notify={showToast} onSuccess={() => refreshAllAbsensi(true)} events={absensiEvents} /></TabView>
+              <TabView id="absensi_members" activeTab={activeTab}><MemberManagement daerahs={absensiDaerahs} desas={absensiDesas} kelompoks={absensiKelompoks} ages={absensiAges} members={absensiMembers} setMembers={setAbsensiMembers} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} families={absensiFamilies} relationships={absensiRelationships} /></TabView>
+              <TabView id="absensi_groups" activeTab={activeTab}><GroupManagement daerahs={absensiDaerahs} setDaerahs={setAbsensiDaerahs} desas={absensiDesas} setDesas={setAbsensiDesas} kelompoks={absensiKelompoks} setKelompoks={setAbsensiKelompoks} ages={absensiAges} setAges={setAbsensiAges} events={absensiEvents} setEvents={setAbsensiEvents} families={absensiFamilies} setFamilies={setAbsensiFamilies} relationships={absensiRelationships} setRelationships={setAbsensiRelationships} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} /></TabView>
+              <TabView id="absensi_history" activeTab={activeTab}><AttendanceHistory logs={absensiLogs} isLoading={isAbsensiLoading} logUrl={absensiLogUrl} onRefresh={() => refreshAllAbsensi(true)} notify={showToast} events={absensiEvents} /></TabView>
             </>
           )}
           {canChangePassword && (
@@ -1497,18 +1851,20 @@ const App: React.FC = () => {
                 currentApp={currentApp}
                 switchApp={switchApp}
                 webAccessStrings={webAccessStrings}
+                activeScriptUrl={activeScriptUrl}
+                setActiveScriptUrl={setActiveScriptUrl}
               />
             </TabView>
           )}
         </div>
-        <div className="md:hidden fixed bottom-0 left-0 right-0 w-full bg-slate-900/95 backdrop-blur-xl flex justify-around items-center h-[50px] px-2 shadow-[0_-4px_16px_rgba(0,0,0,0.15)] z-[50] border-t border-white/10">
+        <div className="md:hidden fixed bottom-0 left-0 right-0 w-full bg-[#00254A]/95 backdrop-blur-xl flex justify-around items-center h-[50px] px-2 shadow-[0_-4px_16px_rgba(0,0,0,0.15)] z-[50] border-t border-white/10">
           {navItems.map(t => (
-            <button key={t.id} onClick={() => setActiveTab(t.id as AppTab)} className={`flex flex-col items-center justify-center space-y-0.5 transition-all flex-1 h-full relative ${activeTab === t.id ? 'text-blue-400' : 'text-slate-400'}`}>
+            <button key={t.id} onClick={() => setActiveTab(t.id as AppTab)} className={`flex flex-col items-center justify-center space-y-0.5 transition-all flex-1 h-full relative ${activeTab === t.id ? 'text-[#00AEEF]' : 'text-slate-400'}`}>
               <div className={`transition-all duration-300 ${activeTab === t.id ? 'scale-105' : ''}`}>
                 <t.icon size={16} />
               </div>
               <span className={`text-[8px] font-extrabold uppercase tracking-tight transition-opacity duration-300 ${activeTab === t.id ? 'opacity-100' : 'opacity-60'}`}>{t.label}</span>
-              {activeTab === t.id && <div className="absolute bottom-0 w-6 h-[2.5px] bg-blue-400 rounded-full"></div>}
+              {activeTab === t.id && <div className="absolute bottom-0 w-6 h-[2.5px] bg-[#00AEEF] rounded-full"></div>}
             </button>
           ))}
         </div>

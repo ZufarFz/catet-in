@@ -47,7 +47,7 @@ export interface DeletedTransaction extends Transaction {
 }
 
 export interface EditHistory {
-  history_id: string;
+  id: string;
   transaction_id: string;
   project_name: string; // New field
   type: string;
@@ -64,6 +64,19 @@ export type AppTab = 'dashboard' | 'transaksi' | 'history' | 'laporan' | 'setup'
 
 export type AppType = 'bendahara' | 'absensi';
 
+export interface Family {
+  id: string;
+  nama_keluarga: string;
+  nomor_kk?: string;
+  created_at?: string;
+}
+
+export interface FamilyRelationship {
+  id: string;
+  name: string;
+  is_wali: boolean;
+}
+
 export interface AbsensiMember {
   id: string;
   daerah_id?: string;
@@ -75,17 +88,25 @@ export interface AbsensiMember {
   tanggal_lahir: string;
   no_hp_anggota: string;
   jenis_kelamin: string;
-  nama_ortu: string;
-  no_hp_ortu: string;
-  pekerjaan_ortu: string;
+  nama_ortu?: string;
+  no_hp_ortu?: string;
+  pekerjaan_ortu?: string;
   alamat_rumah: string;
   pendidikan: string;
   kelas: string;
+  rfid?: string;
+  rfid_ktp?: string;
+  family_id?: string;
+  relationship_id?: string;
+  pekerjaan?: string;
   // Join data
   daerah_name?: string;
   desa_name?: string;
   kelompok_name?: string;
   age_category_name?: string;
+  family_name?: string;
+  relationship_name?: string;
+  is_wali?: boolean;
 }
 
 export interface AttendanceLog {
@@ -100,6 +121,8 @@ export interface AttendanceLog {
   dateInput: string;
   status: 'Hadir' | 'Izin' | 'Sakit' | 'Alpa';
   note: string;
+  event_id?: string;
+  metode?: 'manual' | 'scan' | 'rfid';
 }
 
 export interface DaerahData {
@@ -129,4 +152,12 @@ export interface AgeCategoryData {
   id: string;
   name: string;
   description: string;
+}
+
+export interface EventData {
+  id: string;
+  nama_kegiatan: string;
+  tanggal_kegiatan?: string;
+  keterangan?: string;
+  created_at?: string;
 }

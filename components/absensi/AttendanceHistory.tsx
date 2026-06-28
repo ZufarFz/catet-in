@@ -20,10 +20,10 @@ import {
   User,
   Info
 } from 'lucide-react';
-import { AttendanceLog } from '../../types';
+import { AttendanceLog, EventData } from '../../types';
 import ModernSelect from '../ui/ModernSelect';
 import { motion, AnimatePresence } from 'motion/react';
-import { dbAddAttendanceLog, dbDeleteAttendanceLog } from '../../firebase';
+import { dbAddAttendanceLog, dbDeleteAttendanceLog } from '../../supabase';
 
 interface AttendanceHistoryProps {
   logs: AttendanceLog[];
@@ -31,12 +31,14 @@ interface AttendanceHistoryProps {
   logUrl: string;
   onRefresh: () => void;
   notify: (msg: string, type: 'success' | 'error') => void;
+  events?: EventData[];
 }
 
-const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, logUrl, onRefresh, notify }) => {
+const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, logUrl, onRefresh, notify, events = [] }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterKelompok, setFilterKelompok] = useState('');
+  const [filterEvent, setFilterEvent] = useState('');
   const [isProcessing, setIsProcessing] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [editingLog, setEditingLog] = useState<AttendanceLog | null>(null);
@@ -82,9 +84,10 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
       const matchSearch = (l.memberName || '').toLowerCase().includes(searchTerm.toLowerCase());
       const matchStatus = !filterStatus || l.status === filterStatus;
       const matchKelompok = !filterKelompok || l.kelompokName === filterKelompok;
-      return matchSearch && matchStatus && matchKelompok;
+      const matchEvent = !filterEvent || l.event_id === filterEvent;
+      return matchSearch && matchStatus && matchKelompok && matchEvent;
     });
-  }, [logs, searchTerm, filterStatus, filterKelompok]);
+  }, [logs, searchTerm, filterStatus, filterKelompok, filterEvent]);
 
   const uniqueKelompoks = useMemo(() => {
     const set = new Set<string>();
@@ -135,7 +138,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
         {/* Filters */}
         <div className="bg-white p-4 md:p-6 rounded-3xl border border-slate-100 shadow-sm space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-            <div className="md:col-span-6 relative group">
+            <div className="md:col-span-4 relative group">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 size-5" />
               <input 
                 type="text" 
@@ -145,7 +148,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                 className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-100 rounded-2xl text-[13px] font-bold text-slate-700 focus:bg-white focus:border-blue-500 outline-none transition-all"
               />
             </div>
-            <div className="md:col-span-3">
+            <div className="md:col-span-2">
               <ModernSelect 
                 value={filterStatus}
                 onChange={setFilterStatus}
@@ -172,6 +175,18 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                 placeholder="KELOMPOK"
               />
             </div>
+            <div className="md:col-span-3">
+              <ModernSelect 
+                value={filterEvent}
+                onChange={setFilterEvent}
+                options={[
+                  { value: '', label: 'SEMUA KEGIATAN' },
+                  ...events.map(evt => ({ value: evt.id, label: evt.nama_kegiatan.toUpperCase() }))
+                ]}
+                icon={CalendarDays}
+                placeholder="KEGIATAN"
+              />
+            </div>
           </div>
         </div>
 
@@ -193,8 +208,10 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                 <thead>
                   <tr className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] border-b border-slate-50 pb-2">
                     <th className="px-8 py-5">Identitas</th>
+                    <th className="px-8 py-5">Kegiatan</th>
                     <th className="px-8 py-5">Unit / Kelompok</th>
                     <th className="px-8 py-5 text-center">Status</th>
+                    <th className="px-8 py-5 text-center">Metode</th>
                     <th className="px-8 py-5">Keterangan</th>
                     <th className="px-8 py-5 text-right">Aksi</th>
                   </tr>
@@ -221,6 +238,18 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                         </div>
                       </td>
                       <td className="px-8 py-6">
+                        {(() => {
+                          const matchedEvent = (events || []).find(e => e.id === log.event_id);
+                          return (
+                            <div className="space-y-1">
+                              <p className="text-[10px] font-black text-rose-700 bg-rose-50/70 border border-rose-100/50 px-2 py-0.5 rounded-md inline-block max-w-[150px] truncate leading-none uppercase tracking-tight" title={matchedEvent ? matchedEvent.nama_kegiatan : 'Kegiatan Umum'}>
+                                📅 {matchedEvent ? matchedEvent.nama_kegiatan : 'Umum (Default)'}
+                              </p>
+                            </div>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-8 py-6">
                         <div className="space-y-1">
                           <p className="text-[10px] font-black text-slate-700 uppercase leading-none tracking-tight">{log.kelompokName}</p>
                           <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest pl-0">{log.desaName}</p>
@@ -235,6 +264,21 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                         }`}>
                           {log.status}
                         </span>
+                      </td>
+                      <td className="px-8 py-6 text-center">
+                        {log.metode === 'rfid' ? (
+                          <span className="px-2.5 py-1.5 bg-amber-50 text-amber-700 border border-amber-200/50 rounded-xl text-[9px] font-black uppercase tracking-wider inline-block">
+                            💳 RFID / NFC
+                          </span>
+                        ) : log.metode === 'scan' ? (
+                          <span className="px-2.5 py-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200/50 rounded-xl text-[9px] font-black uppercase tracking-wider inline-block">
+                            📷 SCANNER
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1.5 bg-slate-50 text-slate-600 border border-slate-200/50 rounded-xl text-[9px] font-black uppercase tracking-wider inline-block">
+                            ✍️ MANUAL
+                          </span>
+                        )}
                       </td>
                       <td className="px-8 py-6">
                         <div className="max-w-[150px] truncate">
