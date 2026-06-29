@@ -88,9 +88,6 @@ export interface AbsensiMember {
   tanggal_lahir: string;
   no_hp_anggota: string;
   jenis_kelamin: string;
-  nama_ortu?: string;
-  no_hp_ortu?: string;
-  pekerjaan_ortu?: string;
   alamat_rumah: string;
   pendidikan: string;
   kelas: string;
@@ -100,6 +97,9 @@ export interface AbsensiMember {
   relationship_id?: string;
   pekerjaan?: string;
   // Join data
+  nama_ortu?: string; // Virtual / Computed from family relationships
+  no_hp_ortu?: string; // Virtual / Computed from family relationships
+  pekerjaan_ortu?: string; // Virtual / Computed from family relationships
   daerah_name?: string;
   desa_name?: string;
   kelompok_name?: string;
