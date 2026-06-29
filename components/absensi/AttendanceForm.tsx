@@ -83,6 +83,10 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
   }>>([]);
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const [isScanningActive, setIsScanningActive] = useState(false);
+<<<<<<< HEAD
+=======
+  const [nfcBrowserState, setNfcBrowserState] = useState<'idle' | 'scanning' | 'error'>('idle');
+>>>>>>> 32a6d8fbb3b92b999e7fbe01485aac778753e9a0
   const submitTimeoutRef = useRef<any>(null);
 
   const changeAttendanceMode = (mode: 'manual' | 'scan') => {
@@ -358,6 +362,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
     notify
   ]);
 
+<<<<<<< HEAD
   useEffect(() => {
     const handleNfcRead = (e: Event) => {
       const customEvent = e as CustomEvent<{ uid: string }>;
@@ -375,6 +380,52 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
       window.removeEventListener('nfc-read', handleNfcRead);
     };
   }, [isScanningActive, attendanceMode, processBarcode]);
+=======
+  // WebNFC Scanner hook for native phone scanning
+  useEffect(() => {
+    let ndefCtrl: AbortController | null = null;
+    let isMounted = true;
+
+    async function autoNfcScan() {
+      if (!isScanningActive || nfcBrowserState !== 'scanning') return;
+      if (typeof window === 'undefined' || !('NDEFReader' in window)) return;
+
+      try {
+        ndefCtrl = new AbortController();
+        const reader = new (window as any).NDEFReader();
+        await reader.scan({ signal: ndefCtrl.signal });
+        
+        reader.addEventListener("reading", ({ serialNumber }: any) => {
+          if (!isMounted) return;
+          if (serialNumber) {
+            const formattedSerial = serialNumber.replace(/:/g, '').toUpperCase();
+            processBarcode(formattedSerial);
+          }
+        });
+
+        reader.addEventListener("readingerror", () => {
+          if (!isMounted) return;
+          notify("Gagal membaca kartu NFC. Coba lagi.", "error");
+        });
+      } catch (error) {
+        console.error("Failed WebNFC background scan:", error);
+        if (isMounted) {
+          setNfcBrowserState('error');
+          notify("Gagal mengaktifkan WebNFC. Izinkan akses NFC pada Chrome.", "error");
+        }
+      }
+    }
+
+    autoNfcScan();
+
+    return () => {
+      isMounted = false;
+      if (ndefCtrl) {
+        ndefCtrl.abort();
+      }
+    };
+  }, [isScanningActive, nfcBrowserState, processBarcode, notify]);
+>>>>>>> 32a6d8fbb3b92b999e7fbe01485aac778753e9a0
 
   const handleBarcodeScanSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1477,6 +1528,32 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                     </p>
                   </div>
 
+<<<<<<< HEAD
+=======
+                  {/* Browser Native NFC Button for Phones */}
+                  {typeof window !== 'undefined' && 'NDEFReader' in window && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (nfcBrowserState === 'scanning') {
+                          setNfcBrowserState('idle');
+                        } else {
+                          setNfcBrowserState('scanning');
+                        }
+                      }}
+                      className={`mt-4 z-30 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-2 border shadow-md ${
+                        nfcBrowserState === 'scanning'
+                          ? 'bg-violet-600 border-violet-500 text-white animate-pulse'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full ${nfcBrowserState === 'scanning' ? 'bg-emerald-400 animate-ping' : 'bg-slate-400'}`}></span>
+                      {nfcBrowserState === 'scanning' ? 'NFC HP Aktif: Dekatkan Kartu' : '📱 Aktifkan NFC HP (Browser)'}
+                    </button>
+                  )}
+
+>>>>>>> 32a6d8fbb3b92b999e7fbe01485aac778753e9a0
                   {/* Silent input in background to catch scans */}
                   <form onSubmit={handleBarcodeScanSubmit} className="absolute left-[-9999px] opacity-0 pointer-events-none" onClick={(e) => e.stopPropagation()}>
                     <input
