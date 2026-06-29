@@ -11,7 +11,7 @@ import * as XLSX from 'xlsx';
 import { AbsensiMember, DesaData, KelompokData, AgeCategoryData, DaerahData, Family, FamilyRelationship } from '../../types';
 import ModernSelect from '../ui/ModernSelect';
 import { motion, AnimatePresence } from 'motion/react';
-import { dbAddMember, dbUpdateMember, dbDeleteMember } from '../../supabase';
+import { dbAddMember, dbDeleteMember } from '../../supabase';
 import { downloadMemberCard } from '../utils/barcode128';
 
 interface MemberManagementProps {
@@ -82,9 +82,6 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
       tanggal_lahir: '',
       no_hp_anggota: '',
       jenis_kelamin: 'Laki-laki',
-      nama_ortu: '',
-      no_hp_ortu: '',
-      pekerjaan_ortu: '',
       alamat_rumah: '',
       pendidikan: '',
       kelas: '',
@@ -104,7 +101,6 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
 
   useEffect(() => {
     const handleNfcRead = (e: Event) => {
-      // eslint-disable-next-line no-undef
       const customEvent = e as CustomEvent<{ uid: string }>;
       const uid = customEvent.detail?.uid;
       if (!uid) return;
@@ -229,8 +225,6 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
       !!formData.no_hp_anggota || 
       !!formData.rfid || 
       !!formData.alamat_rumah ||
-      !!formData.nama_ortu ||
-      !!formData.no_hp_ortu ||
       !!formData.pendidikan ||
       !!formData.family_id
     );
@@ -323,11 +317,11 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
     };
 
     try {
+      await dbAddMember(payloadData);
+
       if (editingMember) {
-        await dbUpdateMember(editingMember.id, payloadData);
         setMembers(prev => prev.map(m => m.id === editingMember.id ? payloadData : m));
       } else {
-        await dbAddMember(payloadData);
         setMembers(prev => [payloadData, ...prev]);
         try {
           localStorage.removeItem('absensi_member_registration_draft');
@@ -337,16 +331,15 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
         setFormData({
           nama_lengkap: '', daerah_id: '', desa_id: '', kelompok_id: '', age_category_id: '',
           tempat_lahir: '', tanggal_lahir: '', no_hp_anggota: '', jenis_kelamin: 'Laki-laki',
-          nama_ortu: '', no_hp_ortu: '', pekerjaan_ortu: '', alamat_rumah: '', pendidikan: '', kelas: '',
+          alamat_rumah: '', pendidikan: '', kelas: '',
           rfid: '', rfid_ktp: '', family_id: '', relationship_id: '', pekerjaan: ''
         });
       }
 
       setShowModal(false);
       onRefresh();
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      window.alert(`Gagal menyimpan data ke database: ${err?.message || 'Koneksi bermasalah atau data tidak valid.'}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -835,7 +828,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                         setFormData({
                           nama_lengkap: '', daerah_id: '', desa_id: '', kelompok_id: '', age_category_id: '',
                           tempat_lahir: '', tanggal_lahir: '', no_hp_anggota: '', jenis_kelamin: 'Laki-laki',
-                          nama_ortu: '', no_hp_ortu: '', pekerjaan_ortu: '', alamat_rumah: '', pendidikan: '', kelas: '',
+                          alamat_rumah: '', pendidikan: '', kelas: '',
                           rfid: '', rfid_ktp: '', family_id: '', relationship_id: '', pekerjaan: ''
                         });
                       }
@@ -1899,7 +1892,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                           setFormData({
                             nama_lengkap: '', daerah_id: '', desa_id: '', kelompok_id: '', age_category_id: '',
                             tempat_lahir: '', tanggal_lahir: '', no_hp_anggota: '', jenis_kelamin: 'Laki-laki',
-                            nama_ortu: '', no_hp_ortu: '', pekerjaan_ortu: '', alamat_rumah: '', pendidikan: '', kelas: '',
+                            alamat_rumah: '', pendidikan: '', kelas: '',
                             rfid: '', rfid_ktp: '', family_id: '', relationship_id: '', pekerjaan: ''
                           });
                         }
@@ -2375,7 +2368,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                 setFormData({
                   nama_lengkap: '', daerah_id: '', desa_id: '', kelompok_id: '', age_category_id: '',
                   tempat_lahir: '', tanggal_lahir: '', no_hp_anggota: '', jenis_kelamin: 'Laki-laki',
-                  nama_ortu: '', no_hp_ortu: '', pekerjaan_ortu: '', alamat_rumah: '', pendidikan: '', kelas: '',
+                  alamat_rumah: '', pendidikan: '', kelas: '',
                   rfid: '', rfid_ktp: '', family_id: '', relationship_id: '', pekerjaan: ''
                 });
               }

@@ -289,7 +289,7 @@ const App: React.FC = () => {
   });
   const [absensiFamilies, setAbsensiFamilies] = useState<Family[]>(() => {
     try {
-      const inst = localStorage.getItem('userInstansi') || 'default';
+      const inst = localStorage.getItem('instansi') || 'default';
       const cached = localStorage.getItem(`absensi_families_${inst}`);
       return cached ? JSON.parse(cached) : [];
     } catch {
@@ -298,7 +298,7 @@ const App: React.FC = () => {
   });
   const [absensiRelationships, setAbsensiRelationships] = useState<FamilyRelationship[]>(() => {
     try {
-      const inst = localStorage.getItem('userInstansi') || 'default';
+      const inst = localStorage.getItem('instansi') || 'default';
       const cached = localStorage.getItem(`absensi_relationships_${inst}`);
       return cached ? JSON.parse(cached) : [];
     } catch {
@@ -334,9 +334,9 @@ const App: React.FC = () => {
       const relationship = absensiRelationships.find(r => String(r.id) === String(m.relationship_id));
       
       // Compute parent/wali details from family members automatically!
-      let computedNamaOrtu = m.nama_ortu || '';
-      let computedNoHpOrtu = m.no_hp_ortu || '';
-      let computedPekerjaanOrtu = m.pekerjaan_ortu || '';
+      let computedNamaOrtu = '';
+      let computedNoHpOrtu = '';
+      let computedPekerjaanOrtu = '';
 
       if (m.family_id) {
         const familyMembers = rawMembers.filter(other => other.id !== m.id && other.family_id === m.family_id);
@@ -374,10 +374,10 @@ const App: React.FC = () => {
         }
 
         // Parent phone number automatically from Father, Mother, or Guardian
-        computedNoHpOrtu = ayahMember?.no_hp_anggota || ibuMember?.no_hp_anggota || waliMember?.no_hp_anggota || m.no_hp_ortu || '';
+        computedNoHpOrtu = ayahMember?.no_hp_anggota || ibuMember?.no_hp_anggota || waliMember?.no_hp_anggota || '';
 
         // Parent occupation automatically from Father, Mother, or Guardian
-        computedPekerjaanOrtu = ayahMember?.pekerjaan || ibuMember?.pekerjaan || waliMember?.pekerjaan || m.pekerjaan_ortu || '';
+        computedPekerjaanOrtu = ayahMember?.pekerjaan || ibuMember?.pekerjaan || waliMember?.pekerjaan || '';
       }
 
       return {
@@ -390,9 +390,9 @@ const App: React.FC = () => {
         family_name: family?.nama_keluarga || 'Tidak Ada',
         relationship_name: relationship?.name || 'Belum Diatur',
         is_wali: relationship?.is_wali || false,
-        nama_ortu: computedNamaOrtu || m.nama_ortu || '-',
-        no_hp_ortu: computedNoHpOrtu || m.no_hp_ortu || '-',
-        pekerjaan_ortu: computedPekerjaanOrtu || m.pekerjaan_ortu || '-',
+        nama_ortu: computedNamaOrtu || '-',
+        no_hp_ortu: computedNoHpOrtu || '-',
+        pekerjaan_ortu: computedPekerjaanOrtu || '-',
       };
     });
     Promise.resolve().then(() => {
@@ -1113,7 +1113,7 @@ const App: React.FC = () => {
   const fetchAbsensiMaster = useCallback(async (isSilent = false) => {
     if (!isSilent) setIsAbsensiLoading(true);
     try {
-      const instansi = localStorage.getItem('userInstansi') || 'default';
+      const instansi = localStorage.getItem('instansi') || 'default';
       const [members, daerahs, desas, kelompoks, ages, events, families, relationships] = await Promise.all([
         dbGetMembers(),
         dbGetDaerahs(),
@@ -1158,7 +1158,7 @@ const App: React.FC = () => {
   const fetchAbsensiLogs = useCallback(async (isSilent = false) => {
     if (!isSilent) setIsAbsensiLoading(true);
     try {
-      const instansi = localStorage.getItem('userInstansi') || 'default';
+      const instansi = localStorage.getItem('instansi') || 'default';
       const membersCount = rawMembers.length || 100;
       const fetchLimit = Math.min(2500, Math.max(1000, membersCount * 12));
       const freshLogs = await dbGetAttendanceLogs(fetchLimit);
