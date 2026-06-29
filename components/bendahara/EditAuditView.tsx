@@ -68,7 +68,7 @@ const EditAuditView: React.FC<EditAuditViewProps> = ({ editHistory, isLoading, a
     const shouldAnimate = isApproved(log.edited_at);
     
     return (
-      <div key={log.history_id + i} className={`bg-white rounded-[1.5rem] p-5 shadow-sm border border-slate-100 flex flex-col md:flex-row gap-8 items-stretch group hover:shadow-lg transition-all duration-500 ${shouldAnimate ? 'animate-list-reveal' : ''}`}>
+      <div key={log.id + i} className={`bg-white rounded-[1.5rem] p-5 shadow-sm border border-slate-100 flex flex-col md:flex-row gap-8 items-stretch group hover:shadow-lg transition-all duration-500 ${shouldAnimate ? 'animate-list-reveal' : ''}`}>
         <div className="w-full md:w-52 shrink-0 flex flex-row md:flex-col justify-between md:justify-center border-b md:border-b-0 md:border-r border-slate-50 pb-3 md:pb-0 md:pr-8">
           <div className="space-y-1 flex-1 md:flex-none">
              <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block">ID Transaksi / REV</span>
@@ -76,7 +76,7 @@ const EditAuditView: React.FC<EditAuditViewProps> = ({ editHistory, isLoading, a
                 <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded-lg text-[9px] font-black border border-slate-200 block truncate max-w-[120px]">
                   {log.transaction_id}
                 </span>
-                <span className="bg-blue-600 text-white px-1.5 py-0.5 rounded text-[8px] font-black">#{log.version_number}</span>
+                <span className="bg-[#007CC2] text-white px-1.5 py-0.5 rounded text-[8px] font-black">#{log.version_number}</span>
                 <button onClick={(e) => handleCopyId(e, log.transaction_id)} className={`p-1.5 rounded-lg transition-all ${copiedId === log.transaction_id ? 'bg-emerald-500 text-white' : 'bg-slate-50 text-slate-400 hover:bg-slate-900 hover:text-white'}`}>
                    {copiedId === log.transaction_id ? <Check size={10} /> : <Copy size={10} />}
                 </button>
@@ -85,7 +85,7 @@ const EditAuditView: React.FC<EditAuditViewProps> = ({ editHistory, isLoading, a
           <div className="space-y-1 flex-1 md:flex-none text-right md:text-left mt-0 md:mt-3">
              <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block">Editor & Waktu</span>
              <div className="flex flex-col space-y-0.5">
-                <div className="flex items-center md:justify-start justify-end space-x-1.5 text-blue-600">
+                <div className="flex items-center md:justify-start justify-end space-x-1.5 text-[#007CC2]">
                    <User size={10} />
                    <span className="text-[10px] font-black uppercase tracking-tight truncate max-w-[150px]">@{log.edited_by}</span>
                 </div>
@@ -103,7 +103,7 @@ const EditAuditView: React.FC<EditAuditViewProps> = ({ editHistory, isLoading, a
               <ShieldCheck size={10} className="text-slate-300" />
               <span className="text-[8px] font-black text-slate-400 uppercase tracking-[0.2em]">Audit Keterangan</span>
             </div>
-            <span className={`px-2 py-0.5 rounded-full text-[7px] font-black uppercase tracking-widest border ${isKasUmum ? 'bg-blue-50 text-blue-500 border-blue-100' : 'bg-emerald-50 text-emerald-600 border-emerald-100'}`}>
+            <span className={`px-2 py-0.5 rounded-full text-[7px] font-black uppercase tracking-widest border ${isKasUmum ? 'bg-sky-50 text-[#007CC2] border-sky-100' : 'bg-emerald-50 text-emerald-600 border-emerald-100'}`}>
               {isKasUmum ? 'KAS UMUM' : `EVENT: ${log.project_name}`}
             </span>
           </div>
@@ -125,7 +125,7 @@ const EditAuditView: React.FC<EditAuditViewProps> = ({ editHistory, isLoading, a
 
         <div className="w-full md:w-60 shrink-0 flex flex-col justify-center space-y-4 border-t md:border-t-0 md:border-l border-slate-50 pt-4 md:pt-0 md:pl-8">
           <div className="flex items-center space-x-1.5">
-             <div className="w-1 h-2.5 bg-blue-500 rounded-full"></div>
+             <div className="w-1 h-2.5 bg-[#007CC2] rounded-full"></div>
              <span className="text-[8px] font-black text-slate-400 uppercase tracking-[0.2em]">Audit Nominal</span>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-1 gap-4">
@@ -151,7 +151,7 @@ const EditAuditView: React.FC<EditAuditViewProps> = ({ editHistory, isLoading, a
     <div className="h-full w-full overflow-hidden flex flex-col">
       {isLoading && editHistory.length === 0 ? (
         <div className="flex-1 py-10 flex flex-col items-center justify-center space-y-6">
-          <div className="relative"><div className="absolute inset-0 bg-blue-500/20 rounded-full blur-xl animate-pulse" /><FileEdit size={40} className="relative animate-bounce text-blue-500" /></div>
+          <div className="relative"><div className="absolute inset-0 bg-[#007CC2]/20 rounded-full blur-xl animate-pulse" /><FileEdit size={40} className="relative animate-bounce text-[#007CC2]" /></div>
           <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-400">Memuat Log...</p>
         </div>
       ) : (
@@ -187,7 +187,7 @@ const EditAuditView: React.FC<EditAuditViewProps> = ({ editHistory, isLoading, a
                       {logs.map((log, i) => {
                          const isKasUmum = (log.project_name || "").toUpperCase() === 'KAS UMUM';
                          return (
-                          <button key={log.history_id + i} onClick={() => onSelect(log)} className={`flex items-center justify-between w-full bg-white border border-slate-100 rounded-xl px-3 py-3 active:scale-[0.98] transition-all shadow-sm ${isApproved(log.edited_at) ? 'animate-list-reveal' : ''}`}>
+                          <button key={log.id + i} onClick={() => onSelect(log)} className={`flex items-center justify-between w-full bg-white border border-slate-100 rounded-xl px-3 py-3 active:scale-[0.98] transition-all shadow-sm ${isApproved(log.edited_at) ? 'animate-list-reveal' : ''}`}>
                             <div className="flex items-center space-x-3 min-w-0">
                               <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${log.type === 'masuk' ? 'bg-emerald-50 text-emerald-500' : 'bg-rose-50 text-rose-500'}`}>
                                 {log.type === 'masuk' ? <TrendingUp size={16} /> : <TrendingDown size={16} />}

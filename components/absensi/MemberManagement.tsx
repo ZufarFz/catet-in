@@ -5,13 +5,14 @@ import {
   MapPin, Users, User, Smartphone, Calendar, 
   GraduationCap, Phone, Home, CheckCircle2,
   Briefcase, AlertCircle, RotateCcw, Upload, Download,
-  LayoutGrid, SlidersHorizontal
+  LayoutGrid, SlidersHorizontal, CreditCard, Minimize2
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { AbsensiMember, DesaData, KelompokData, AgeCategoryData, DaerahData } from '../../types';
+import { AbsensiMember, DesaData, KelompokData, AgeCategoryData, DaerahData, Family, FamilyRelationship } from '../../types';
 import ModernSelect from '../ui/ModernSelect';
 import { motion, AnimatePresence } from 'motion/react';
-import { dbAddMember, dbDeleteMember } from '../../firebase';
+import { dbAddMember, dbDeleteMember } from '../../supabase';
+import { downloadMemberCard } from '../utils/barcode128';
 
 interface MemberManagementProps {
   daerahs: DaerahData[];
@@ -20,6 +21,8 @@ interface MemberManagementProps {
   desas: DesaData[];
   kelompoks: KelompokData[];
   ages: AgeCategoryData[];
+  families?: Family[];
+  relationships?: FamilyRelationship[];
   appScriptMaster: string;
   canWrite: boolean;
   onRefresh: () => void;
@@ -28,6 +31,7 @@ interface MemberManagementProps {
 
 const MemberManagement: React.FC<MemberManagementProps> = ({ 
   daerahs, members, setMembers, desas, kelompoks, ages, 
+  families = [], relationships = [],
   appScriptMaster, canWrite, onRefresh, isLoading 
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -37,6 +41,8 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
   const [selectedMember, setSelectedMember] = useState<AbsensiMember | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [isScanningRfid, setIsScanningRfid] = useState(false);
+  const [isScanningRfidKtp, setIsScanningRfidKtp] = useState(false);
 
   // States for importing via file
   const [showImportModal, setShowImportModal] = useState(false);
@@ -57,23 +63,65 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
     return filterDaerah !== 'All' || filterDesa !== 'All' || filterKelompok !== 'All' || filterAge !== 'All';
   }, [filterDaerah, filterDesa, filterKelompok, filterAge]);
 
-  const [formData, setFormData] = useState<Partial<AbsensiMember>>({
-    nama_lengkap: '',
-    daerah_id: '',
-    desa_id: '',
-    kelompok_id: '',
-    age_category_id: '',
-    tempat_lahir: '',
-    tanggal_lahir: '',
-    no_hp_anggota: '',
-    jenis_kelamin: 'Laki-laki',
-    nama_ortu: '',
-    no_hp_ortu: '',
-    pekerjaan_ortu: '',
-    alamat_rumah: '',
-    pendidikan: '',
-    kelas: ''
+  const [formData, setFormData] = useState<Partial<AbsensiMember>>(() => {
+    try {
+      const saved = localStorage.getItem('absensi_member_registration_draft');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {
+      console.error('Failed to load registration draft', e);
+    }
+    return {
+      nama_lengkap: '',
+      daerah_id: '',
+      desa_id: '',
+      kelompok_id: '',
+      age_category_id: '',
+      tempat_lahir: '',
+      tanggal_lahir: '',
+      no_hp_anggota: '',
+      jenis_kelamin: 'Laki-laki',
+      nama_ortu: '',
+      no_hp_ortu: '',
+      pekerjaan_ortu: '',
+      alamat_rumah: '',
+      pendidikan: '',
+      kelas: '',
+      rfid: '',
+      rfid_ktp: '',
+      family_id: '',
+      relationship_id: '',
+      pekerjaan: ''
+    };
   });
+
+  useEffect(() => {
+    if (editingMember === null) {
+      localStorage.setItem('absensi_member_registration_draft', JSON.stringify(formData));
+    }
+  }, [formData, editingMember]);
+
+  useEffect(() => {
+    const handleNfcRead = (e: Event) => {
+      const customEvent = e as CustomEvent<{ uid: string }>;
+      const uid = customEvent.detail?.uid;
+      if (!uid) return;
+
+      if (isScanningRfid) {
+        setFormData(prev => ({ ...prev, rfid: uid }));
+        setIsScanningRfid(false);
+      } else if (isScanningRfidKtp) {
+        setFormData(prev => ({ ...prev, rfid_ktp: uid }));
+        setIsScanningRfidKtp(false);
+      }
+    };
+
+    window.addEventListener('nfc-read', handleNfcRead);
+    return () => {
+      window.removeEventListener('nfc-read', handleNfcRead);
+    };
+  }, [isScanningRfid, isScanningRfidKtp]);
 
   const filteredMembers = useMemo(() => {
     return members.filter(m => {
@@ -124,6 +172,14 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
   const [activeDesas, setActiveDesas] = useState<Record<string, string>>({});
 
   useEffect(() => {
+    if (!showModal) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setIsScanningRfid(false);
+      setIsScanningRfidKtp(false);
+    }
+  }, [showModal]);
+
+  useEffect(() => {
     const observerOptions = {
       root: null,
       rootMargin: '-120px 0px -80% 0px', // Focused around the top header sticky zone
@@ -164,6 +220,20 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
       female: members.filter(m => m.jenis_kelamin === 'Perempuan').length,
     };
   }, [members]);
+
+  const hasDraftContent = useMemo(() => {
+    return editingMember === null && (
+      !!formData.nama_lengkap || 
+      !!formData.tempat_lahir || 
+      !!formData.no_hp_anggota || 
+      !!formData.rfid || 
+      !!formData.alamat_rumah ||
+      !!formData.nama_ortu ||
+      !!formData.no_hp_ortu ||
+      !!formData.pendidikan ||
+      !!formData.family_id
+    );
+  }, [formData, editingMember]);
 
   const formatDisplayDate = (dateVal: any) => {
     if (!dateVal || dateVal === '-' || dateVal === '?') return '';
@@ -258,6 +328,17 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
         setMembers(prev => prev.map(m => m.id === editingMember.id ? payloadData : m));
       } else {
         setMembers(prev => [payloadData, ...prev]);
+        try {
+          localStorage.removeItem('absensi_member_registration_draft');
+        } catch (e) {
+          console.error(e);
+        }
+        setFormData({
+          nama_lengkap: '', daerah_id: '', desa_id: '', kelompok_id: '', age_category_id: '',
+          tempat_lahir: '', tanggal_lahir: '', no_hp_anggota: '', jenis_kelamin: 'Laki-laki',
+          nama_ortu: '', no_hp_ortu: '', pekerjaan_ortu: '', alamat_rumah: '', pendidikan: '', kelas: '',
+          rfid: '', rfid_ktp: '', family_id: '', relationship_id: '', pekerjaan: ''
+        });
       }
 
       setShowModal(false);
@@ -285,6 +366,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
     const headers = [
       'Nama Lengkap',
       'Jenis Kelamin',
+      'ID Daerah (Opsional)',
       'ID Desa',
       'ID Kelompok',
       'ID Kategori Usia',
@@ -303,6 +385,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
       [
         'Ahmad Fauzi',
         'Laki-laki',
+        daerahs[0]?.id || 'DAE-CONTOH',
         desas[0]?.id || 'DES-CONTOH',
         kelompoks[0]?.id || 'KLP-CONTOH',
         ages[0]?.id || 'AGE-REMAJA',
@@ -319,6 +402,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
       [
         'Siti Aminah',
         'Perempuan',
+        daerahs[0]?.id || 'DAE-CONTOH',
         desas[0]?.id || 'DES-CONTOH',
         kelompoks[0]?.id || 'KLP-CONTOH',
         ages[1]?.id || 'AGE-CABON',
@@ -400,18 +484,29 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
         
         const idxNama = findIndex(['nama lengkap', 'nama_lengkap', 'nama']);
         const idxJK = findIndex(['jenis kelamin', 'jenis_kelamin', 'gender', 'jk']);
+        const idxDaerah = findIndex(['id daerah', 'daerah']);
         const idxDesa = findIndex(['id desa', 'desa']);
         const idxKelompok = findIndex(['id kelompok', 'kelompok']);
         const idxUsia = findIndex(['id kategori usia', 'kategori usia', 'kategori_usia', 'usia', 'kategori']);
         const idxTempat = findIndex(['tempat lahir', 'tempat_lahir', 'tempat']);
         const idxTanggal = findIndex(['tanggal lahir', 'tanggal_lahir', 'tgl lahir', 'tgl_lahir', 'tanggal']);
-        const idxHPAnggota = findIndex(['no hp anggota', 'no_hp_anggota', 'no hp', 'hp anggota', 'hp']);
-        const idxNamaOrtu = findIndex(['nama ortu', 'nama_ortu', 'nama orang tua', 'orang tua', 'ortu']);
-        const idxHPOrtu = findIndex(['no hp ortu', 'no_hp_ortu', 'hp ortu', 'nomor hp ortu']);
-        const idxPekerjaanOrtu = findIndex(['pekerjaan ortu', 'pekerjaan_ortu', 'pekerjaan']);
+        const idxHPOrtu = findIndex(['no hp orang tua', 'nomor hp orang tua', 'hp orang tua', 'no hp ortu', 'no_hp_ortu', 'hp ortu', 'nomor hp ortu']);
+        let idxHPAnggota = findIndex(['no hp anggota', 'no_hp_anggota', 'hp anggota', 'no hp', 'hp', 'no_hp']);
+        const idxNamaOrtu = findIndex(['nama orang tua', 'nama ortu', 'nama_ortu', 'orang tua', 'ortu']);
+        const idxPekerjaanOrtu = findIndex(['pekerjaan orang tua', 'pekerjaan_ortu', 'pekerjaan ortu', 'pekerjaan']);
         const idxAlamat = findIndex(['alamat rumah', 'alamat_rumah', 'alamat']);
         const idxPendidikan = findIndex(['pendidikan terkahir', 'pendidikan terakhir', 'pendidikan_terakhir', 'pendidikan']);
         const idxKelas = findIndex(['kelas atau semester', 'kelas_atau_semester', 'kelas', 'semester']);
+        const idxRFID = findIndex(['rfid', 'nfc', 'kartu rfid', 'rfid_code', 'rfid code']);
+        const idxRFIDKtp = findIndex(['rfid ktp', 'rfid_ktp', 'nfc ktp', 'nfc_ktp', 'e-ktp', 'ektp', 'kartu ktp', 'ktp rfid', 'nfc_ktp_code']);
+
+        if (idxHPAnggota === idxHPOrtu && idxHPOrtu !== -1) {
+          idxHPAnggota = headersRow.findIndex((h, idx) => idx !== idxHPOrtu && (h.includes('anggota') || h.includes('member') || h === 'hp' || h === 'no hp' || h === 'no_hp'));
+        }
+        let finalIdxNama = idxNama;
+        if (idxNama === idxNamaOrtu && idxNamaOrtu !== -1) {
+          finalIdxNama = headersRow.findIndex((h, idx) => idx !== idxNamaOrtu && (h.includes('lengkap') || h.includes('member') || h === 'nama' || h === 'name'));
+        }
 
         const parsedRows: any[] = [];
         const errorsList: string[] = [];
@@ -428,8 +523,9 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
             return row[idx] !== undefined && row[idx] !== null ? String(row[idx]).trim() : fallback;
           };
           
-          const nama = getValue(idxNama);
+          const nama = getValue(finalIdxNama);
           const jk = getValue(idxJK);
+          const daerahRaw = getValue(idxDaerah);
           const desaRaw = getValue(idxDesa);
           const kelompokRaw = getValue(idxKelompok);
           const usiaRaw = getValue(idxUsia);
@@ -442,6 +538,8 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
           const alamat = getValue(idxAlamat);
           const pendidikan = getValue(idxPendidikan);
           const kelas = getValue(idxKelas);
+          const rfid = getValue(idxRFID);
+          const rfidKtp = getValue(idxRFIDKtp);
           
           if (!nama) {
             errorsList.push(`Baris ${i + 1}: Nama Lengkap kosong.`);
@@ -613,7 +711,10 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
           }
 
           const parsedDesa = desas.find(d => String(d.id) === String(matchedDesaId));
-          const parsedDaerahId = parsedDesa?.daerah_id || '';
+          let parsedDaerahId = daerahRaw;
+          if (!parsedDaerahId) {
+            parsedDaerahId = parsedDesa?.daerah_id || '';
+          }
           const parsedDaerahName = (daerahs || []).find(da => String(da.id) === String(parsedDaerahId))?.nama_daerah || '';
 
           parsedRows.push({
@@ -635,7 +736,9 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
             pekerjaan_ortu: pekerjaanOrtu,
             alamat_rumah: alamat,
             pendidikan: pendidikan,
-            kelas: kelas
+            kelas: kelas,
+            rfid: rfid,
+            rfid_ktp: rfidKtp
           });
         }
 
@@ -722,11 +825,21 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                 <button 
                   onClick={() => {
                     setEditingMember(null);
-                    setFormData({
-                      nama_lengkap: '', daerah_id: '', desa_id: '', kelompok_id: '', age_category_id: '',
-                      tempat_lahir: '', tanggal_lahir: '', no_hp_anggota: '', jenis_kelamin: 'Laki-laki',
-                      nama_ortu: '', no_hp_ortu: '', pekerjaan_ortu: '', alamat_rumah: '', pendidikan: '', kelas: ''
-                    });
+                    try {
+                      const savedDraft = localStorage.getItem('absensi_member_registration_draft');
+                      if (savedDraft) {
+                        setFormData(JSON.parse(savedDraft));
+                      } else {
+                        setFormData({
+                          nama_lengkap: '', daerah_id: '', desa_id: '', kelompok_id: '', age_category_id: '',
+                          tempat_lahir: '', tanggal_lahir: '', no_hp_anggota: '', jenis_kelamin: 'Laki-laki',
+                          nama_ortu: '', no_hp_ortu: '', pekerjaan_ortu: '', alamat_rumah: '', pendidikan: '', kelas: '',
+                          rfid: '', rfid_ktp: '', family_id: '', relationship_id: '', pekerjaan: ''
+                        });
+                      }
+                    } catch (e) {
+                      console.error(e);
+                    }
                     setShowModal(true);
                   }}
                   className="hidden md:flex px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold items-center justify-center gap-2 transition-all shadow-lg shadow-blue-200"
@@ -1023,7 +1136,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
             />
             <motion.div 
               initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative bg-white w-full md:max-w-3xl h-full md:h-auto md:max-h-[85vh] rounded-2xl md:rounded-3xl shadow-2xl flex flex-col overflow-hidden"
+              className={`relative bg-white w-full ${importPreview.length > 0 ? 'md:max-w-7xl md:max-h-[92vh]' : 'md:max-w-3xl md:max-h-[85vh]'} h-full md:h-auto rounded-2xl md:rounded-3xl shadow-2xl flex flex-col overflow-hidden transition-all duration-300`}
             >
               {/* Header */}
               <div className="px-5 md:px-8 py-4 border-b border-slate-100 flex items-center justify-between shrink-0">
@@ -1046,55 +1159,186 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
 
               {/* Scrollable Content */}
               <div className="flex-1 overflow-y-auto p-5 md:p-8 space-y-6 no-scrollbar">
-                {/* Step 1: Download Template */}
-                <div className="bg-blue-50/50 border border-blue-100/60 rounded-xl p-4 md:p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <h4 className="text-xs md:text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                      <Download size={16} className="text-blue-600" />
-                      1. Unduh Template Format
-                    </h4>
-                    <p className="text-[10px] md:text-xs text-slate-500">Gunakan format Excel standar agar data terpetakan otomatis ke sistem database.</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleDownloadTemplate}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white rounded-lg text-xs font-bold shadow-sm shadow-blue-100 transition-all shrink-0 self-start md:self-auto"
-                  >
-                    <Download size={14} />
-                    Unduh Template
-                  </button>
-                </div>
-
-                {/* Step 2: Upload Area */}
-                <div className="space-y-2">
-                  <h4 className="text-xs md:text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                    <Upload size={16} className="text-blue-600" />
-                    2. Pilih atau Seret File Anda
-                  </h4>
-                  
-                  <div 
-                    onDragOver={handleDragOver}
-                    onDrop={handleDrop}
-                    className="border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-xl p-6 md:p-10 text-center cursor-pointer transition-colors relative bg-slate-50/30 group"
-                  >
-                    <input 
-                      type="file" 
-                      accept=".xlsx, .xls, .csv" 
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) parseAndPreviewFile(file);
-                      }}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    />
-                    <div className="space-y-2 pointer-events-none">
-                      <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center mx-auto shadow-sm border border-slate-100 text-slate-400 group-hover:text-blue-500 transition-all">
-                        <Upload size={20} />
+                
+                {/* PREVIEW OF SUCCESSFULLY PARSED RECORDS - HIGHEST PRIORITY AT THE TOP */}
+                {importPreview.length > 0 && (
+                  <div className="space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-emerald-50/50 border border-emerald-100/50 p-3 rounded-xl">
+                      <div>
+                        <h4 className="text-xs md:text-sm font-black text-slate-800 flex items-center gap-2">
+                          <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                          Pratinjau Data yang Terbaca ({importPreview.length} Anggota)
+                        </h4>
+                        <p className="text-[10px] text-slate-500 mt-0.5">Semua data kolom di bawah berhasil dibaca dari excel Anda. Silakan verifikasi kecocokannya.</p>
                       </div>
-                      <p className="text-xs font-bold text-slate-700">Klik untuk memilih file, atau seret ke sini</p>
-                      <p className="text-[10px] text-slate-400">Mendukung format .XLSX, .XLS, dan .CSV</p>
+                      <span className="text-[9px] w-fit uppercase tracking-widest text-emerald-700 bg-emerald-100/70 font-black px-2.5 py-1 rounded-lg border border-emerald-200">
+                        Siap Diimpor
+                      </span>
+                    </div>
+                    
+                    <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[380px] overflow-y-auto overflow-x-auto shadow-sm custom-scrollbar bg-slate-50">
+                      <table className="w-full text-left text-xs border-collapse font-sans bg-white min-w-[1500px]">
+                        <thead className="sticky top-0 bg-slate-100 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-slate-200 z-10 shadow-sm">
+                          <tr>
+                            <th className="p-3 text-center w-12 bg-slate-100">No</th>
+                            <th className="p-3 whitespace-nowrap min-w-[200px] bg-slate-100">Nama Lengkap</th>
+                            <th className="p-3 whitespace-nowrap min-w-[110px] text-center">Jenis Kelamin</th>
+                            <th className="p-3 whitespace-nowrap min-w-[140px]">ID Daerah (Opsional)</th>
+                            <th className="p-3 whitespace-nowrap min-w-[150px]">ID Desa</th>
+                            <th className="p-3 whitespace-nowrap min-w-[150px]">ID Kelompok</th>
+                            <th className="p-3 whitespace-nowrap min-w-[150px]">ID Kategori Usia</th>
+                            <th className="p-3 whitespace-nowrap min-w-[130px]">No. HP Anggota</th>
+                            <th className="p-3 whitespace-nowrap min-w-[150px]">Nama Orang Tua</th>
+                            <th className="p-3 whitespace-nowrap min-w-[130px]">No. HP Orang Tua</th>
+                            <th className="p-3 whitespace-nowrap min-w-[140px]">Pekerjaan Orang Tua</th>
+                            <th className="p-3 whitespace-nowrap min-w-[130px]">Pendidikan Terakhir</th>
+                            <th className="p-3 whitespace-nowrap min-w-[110px] text-center">Kelas/Sem</th>
+                            <th className="p-3 whitespace-nowrap min-w-[130px]">Tempat Lahir</th>
+                            <th className="p-3 whitespace-nowrap min-w-[110px] text-center">Tgl Lahir</th>
+                            <th className="p-3 whitespace-nowrap min-w-[250px]">Alamat Rumah</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-[11px] font-medium text-slate-700">
+                          {importPreview.map((row, rIdx) => (
+                            <tr key={rIdx} className="hover:bg-blue-50/20 transition-colors leading-relaxed">
+                              <td className="p-3 text-center text-slate-400 font-mono text-[10px] border-r border-slate-100 bg-slate-50/50">{rIdx + 1}</td>
+                              <td className="p-3 font-bold uppercase text-slate-900 border-r border-slate-100 sticky left-0 bg-white hover:bg-slate-50">{row.nama_lengkap}</td>
+                              <td className="p-3 whitespace-nowrap text-center">
+                                <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${row.jenis_kelamin === 'Laki-laki' ? 'bg-blue-50 text-blue-600' : 'bg-rose-50 text-rose-600'}`}>
+                                  {row.jenis_kelamin}
+                                </span>
+                              </td>
+                              <td className="p-3 whitespace-nowrap">
+                                <div className="text-[10px] font-bold text-slate-700">{row.daerah_name || '-'}</div>
+                                <div className="text-[8px] text-slate-400 font-mono">{row.daerah_id || '-'}</div>
+                              </td>
+                              <td className="p-3 whitespace-nowrap">
+                                <div className="text-[10px] font-bold text-slate-850">{row.desa_name || '-'}</div>
+                                <div className="text-[8px] text-slate-400 font-mono">{row.desa_id || '-'}</div>
+                              </td>
+                              <td className="p-3 whitespace-nowrap">
+                                <div className="text-[10px] font-bold text-slate-850">{row.kelompok_name || '-'}</div>
+                                <div className="text-[8px] text-slate-400 font-mono">{row.kelompok_id || '-'}</div>
+                              </td>
+                              <td className="p-3 whitespace-nowrap">
+                                <div className="text-[10px] font-bold text-slate-850">{row.age_category_name || '-'}</div>
+                                <div className="text-[8px] text-slate-400 font-mono">{row.age_category_id || '-'}</div>
+                              </td>
+                              <td className="p-3 font-mono text-[10.5px] text-slate-600 whitespace-nowrap">{row.no_hp_anggota || '-'}</td>
+                              <td className="p-3 text-slate-800 whitespace-nowrap uppercase font-bold text-[10px]">{row.nama_ortu || '-'}</td>
+                              <td className="p-3 font-mono text-[10.5px] text-slate-600 whitespace-nowrap bg-amber-50/30">{row.no_hp_ortu || '-'}</td>
+                              <td className="p-3 text-slate-600 text-[10px] whitespace-nowrap">{row.pekerjaan_ortu || '-'}</td>
+                              <td className="p-3 text-slate-600 text-[10px] whitespace-nowrap">{row.pendidikan || '-'}</td>
+                              <td className="p-3 text-slate-600 text-[10px] text-center whitespace-nowrap">{row.kelas || '-'}</td>
+                              <td className="p-3 text-slate-600 text-[10px] whitespace-nowrap">{row.tempat_lahir || '-'}</td>
+                              <td className="p-3 font-mono text-[10px] text-center text-slate-600 whitespace-nowrap">{row.tanggal_lahir || '-'}</td>
+                              <td className="p-3 text-slate-500 text-[10px] max-w-[250px] truncate" title={row.alamat_rumah}>{row.alamat_rumah || '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
-                </div>
+                )}
+
+                {/* STEPS 1 & 2: Dynamic Layout (Collapsed if Preview has Data) */}
+                {importPreview.length > 0 ? (
+                  <div className="bg-slate-50 rounded-2xl border border-slate-150 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Opsi Tambahan / Unggah Ulang</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {/* Step 1 download compact */}
+                      <div className="bg-white border border-slate-100 rounded-xl p-3.5 flex items-center justify-between hover:shadow-sm transition-shadow">
+                        <div className="min-w-0 pr-2">
+                          <p className="text-xs font-bold text-slate-700 truncate">Template Format Excel</p>
+                          <p className="text-[9px] text-slate-400 font-semibold mt-0.5">Gunakan format standar agar tidak salah terbaca.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleDownloadTemplate}
+                          className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 hover:bg-blue-100 active:scale-95 text-blue-600 rounded-lg text-xs font-bold transition-all shrink-0"
+                        >
+                          <Download size={12} />
+                          Unduh
+                        </button>
+                      </div>
+
+                      {/* Step 2 upload again compact */}
+                      <div className="bg-white border border-slate-100 rounded-xl p-3.5 flex items-center justify-between hover:border-blue-300 hover:shadow-sm transition-all relative cursor-pointer group">
+                        <input 
+                          type="file" 
+                          accept=".xlsx, .xls, .csv" 
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) parseAndPreviewFile(file);
+                          }}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        />
+                        <div className="min-w-0 pr-21">
+                          <p className="text-xs font-bold text-slate-700 truncate">Unggah File Lain</p>
+                          <p className="text-[9px] text-slate-400 font-semibold mt-0.5">Ganti dengan file excel yang telah dikoordinir.</p>
+                        </div>
+                        <div className="flex items-center gap-1.5 px-3 py-2 bg-slate-50 text-slate-600 rounded-lg text-xs font-bold group-hover:bg-blue-50 group-hover:text-blue-500 transition-colors">
+                          <Upload size={12} />
+                          Pilih File
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* Step 1: Download Template */}
+                    <div className="bg-blue-50/50 border border-blue-100/60 rounded-xl p-4 md:p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                      <div className="space-y-1">
+                        <h4 className="text-xs md:text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                          <Download size={16} className="text-blue-600" />
+                          1. Unduh Template Format
+                        </h4>
+                        <p className="text-[10px] md:text-xs text-slate-500">Gunakan format Excel standar agar data terpetakan otomatis ke sistem database.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleDownloadTemplate}
+                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white rounded-lg text-xs font-bold shadow-sm shadow-blue-100 transition-all shrink-0 self-start md:self-auto"
+                      >
+                        <Download size={14} />
+                        Unduh Template
+                      </button>
+                    </div>
+
+                    {/* Step 2: Upload Area */}
+                    <div className="space-y-2">
+                      <h4 className="text-xs md:text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                        <Upload size={16} className="text-blue-600" />
+                        2. Pilih atau Seret File Anda
+                      </h4>
+                      
+                      <div 
+                        onDragOver={handleDragOver}
+                        onDrop={handleDrop}
+                        className="border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-xl p-6 md:p-10 text-center cursor-pointer transition-colors relative bg-slate-50/30 group"
+                      >
+                        <input 
+                          type="file" 
+                          accept=".xlsx, .xls, .csv" 
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) parseAndPreviewFile(file);
+                          }}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        />
+                        <div className="space-y-2 pointer-events-none">
+                          <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center mx-auto shadow-sm border border-slate-100 text-slate-400 group-hover:text-blue-500 transition-all">
+                            <Upload size={20} />
+                          </div>
+                          <p className="text-xs font-bold text-slate-700">Klik untuk memilih file, atau seret ke sini</p>
+                          <p className="text-[10px] text-slate-400">Mendukung format .XLSX, .XLS, dan .CSV</p>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 {/* Parsing Status indicator */}
                 {isParsing && (
@@ -1128,45 +1372,6 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                       ))}
                     </div>
                     <p className="text-[9px] text-amber-600/80">Sistem melakukan pemetaan otomatis ke Desa, Kelompok, atau Kategori Usia terdekat bila penulisan sedikit berbeda.</p>
-                  </div>
-                )}
-
-                {/* Preview of successfully parsed records */}
-                {importPreview.length > 0 && (
-                  <div className="space-y-2">
-                    <h4 className="text-xs md:text-sm font-bold text-slate-800 flex items-center justify-between">
-                      <span>3. Pratinjau Data ({importPreview.length} Anggota)</span>
-                      <span className="text-[9px] uppercase tracking-widest text-emerald-600 font-black px-2 py-0.5 bg-emerald-50 rounded-full border border-emerald-100">Siap Diimpor</span>
-                    </h4>
-                    
-                    <div className="border border-slate-100 rounded-xl overflow-hidden max-h-[220px] overflow-y-auto custom-scrollbar">
-                      <table className="w-full text-left text-xs border-collapse font-sans bg-white">
-                        <thead className="sticky top-0 bg-slate-50 text-[9px] font-black text-slate-500 uppercase tracking-wider border-b border-slate-100">
-                          <tr>
-                            <th className="p-2.5">Nama Lengkap</th>
-                            <th className="p-2.5">Desa</th>
-                            <th className="p-2.5">Kelompok</th>
-                            <th className="p-2.5">Kategori Usia</th>
-                            <th className="p-2.5">Jenis Kelamin</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50 text-[11px] font-medium text-slate-700">
-                          {importPreview.map((row, rIdx) => (
-                            <tr key={rIdx} className="hover:bg-slate-50/50">
-                              <td className="p-2.5 font-bold uppercase">{row.nama_lengkap}</td>
-                              <td className="p-2.5">{row.desa_name || '-'}</td>
-                              <td className="p-2.5">{row.kelompok_name || '-'}</td>
-                              <td className="p-2.5 font-bold">{row.age_category_name || '-'}</td>
-                              <td className="p-2.5">
-                                <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${row.jenis_kelamin === 'Laki-laki' ? 'bg-blue-50 text-blue-600' : 'bg-rose-50 text-rose-600'}`}>
-                                  {row.jenis_kelamin}
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
                   </div>
                 )}
               </div>
@@ -1222,12 +1427,33 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
             >
               <div className="px-4 md:px-12 py-4 md:py-8 border-b border-slate-100 flex items-center justify-between shrink-0">
                 <div>
-                  <h3 className="text-lg md:text-2xl font-black text-slate-900 leading-tight">{editingMember ? 'Metamorfosis Data' : 'Pendaftaran Anggota'}</h3>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-lg md:text-2xl font-black text-slate-900 leading-tight">
+                      {editingMember ? 'Metamorfosis Data' : 'Pendaftaran Anggota'}
+                    </h3>
+                    {editingMember === null && (
+                      <span className="px-2 py-0.5 bg-emerald-50 text-emerald-600 text-[8px] md:text-[9px] font-black uppercase rounded-full border border-emerald-200 animate-pulse tracking-wider">
+                        📝 Draft Aktif
+                      </span>
+                    )}
+                  </div>
                   <p className="text-[9px] md:text-xs text-slate-400 mt-0.5 md:mt-1 uppercase font-black tracking-[0.2em]">Formulir Digital Administrasi</p>
                 </div>
-                <button onClick={() => setShowModal(false)} className="w-10 h-10 md:w-12 md:h-12 bg-slate-50 text-slate-400 hover:bg-rose-50 hover:text-rose-500 rounded-full flex items-center justify-center transition-all active:scale-90">
-                  <X size={20} />
-                </button>
+                <div className="flex items-center gap-1.5 md:gap-2">
+                  {editingMember === null && (
+                    <button 
+                      type="button" 
+                      onClick={() => setShowModal(false)} 
+                      className="w-10 h-10 md:w-12 md:h-12 bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-slate-800 rounded-full flex items-center justify-center transition-all active:scale-90"
+                      title="Minimalkan ke Draft"
+                    >
+                      <Minimize2 size={16} />
+                    </button>
+                  )}
+                  <button onClick={() => setShowModal(false)} className="w-10 h-10 md:w-12 md:h-12 bg-slate-50 text-slate-400 hover:bg-rose-50 hover:text-rose-500 rounded-full flex items-center justify-center transition-all active:scale-90" title="Tutup">
+                    <X size={20} />
+                  </button>
+                </div>
               </div>
 
               <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 md:p-12 space-y-8 md:space-y-12 no-scrollbar">
@@ -1299,6 +1525,165 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                          options={ages.map(a => ({ value: String(a.id), label: a.name }))}
                          placeholder="Pilih Kategori"
                        />
+                    </div>
+                    <div className="col-span-1 md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                      {/* RFID Card */}
+                      <div className="space-y-1 md:space-y-2">
+                         <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Registrasi ID Card RFID / NFC</label>
+                         {formData.rfid ? (
+                           <div className="flex items-center justify-between p-3 bg-emerald-50 border border-emerald-200 rounded-xl md:rounded-2xl">
+                             <div className="flex items-center gap-2.5">
+                               <div className="w-6 h-6 rounded-lg bg-emerald-500 text-white flex items-center justify-center shadow-sm">
+                                 <CheckCircle2 size={12} />
+                               </div>
+                               <div>
+                                 <p className="text-[10px] font-black text-emerald-800 uppercase tracking-wider">ID Card Terhubung</p>
+                                 <p className="text-[9px] text-emerald-600 font-bold uppercase tracking-tight font-mono">{formData.rfid}</p>
+                               </div>
+                             </div>
+                             <button
+                               type="button"
+                               onClick={() => setFormData(prev => ({ ...prev, rfid: '' }))}
+                               className="text-[10px] font-black text-rose-500 hover:text-rose-700 uppercase tracking-widest px-2.5 py-1 bg-white border border-rose-100 rounded-lg hover:shadow-sm transition-all"
+                             >
+                               Hapus
+                             </button>
+                           </div>
+                         ) : isScanningRfid ? (
+                           <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl md:rounded-2xl space-y-2.5">
+                             <div className="flex items-center justify-between">
+                               <div className="flex items-center gap-2">
+                                 <span className="relative flex h-2 w-2">
+                                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                                   <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                                 </span>
+                                 <p className="text-[10px] font-black text-blue-800 uppercase tracking-wider">Menunggu Tap ID Card...</p>
+                               </div>
+                               <button
+                                 type="button"
+                                 onClick={() => setIsScanningRfid(false)}
+                                 className="text-[9px] font-black text-slate-400 hover:text-slate-600 uppercase tracking-widest"
+                                >
+                                 Batal
+                               </button>
+                             </div>
+                             <div className="relative">
+                               <CreditCard className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400 animate-pulse" size={12} />
+                               <input 
+                                 type="text"
+                                 autoFocus
+                                 onKeyDown={e => {
+                                   if (e.key === 'Enter') {
+                                     e.preventDefault();
+                                     e.stopPropagation();
+                                     const val = (e.target as HTMLInputElement).value.trim();
+                                     if (val) {
+                                       setFormData(prev => ({ ...prev, rfid: val }));
+                                       setIsScanningRfid(false);
+                                     }
+                                   }
+                                 }}
+                                 className="w-full pl-9 pr-3 py-2 bg-white border border-blue-300 rounded-xl outline-none focus:border-blue-500 transition-all text-xs font-bold text-slate-800"
+                                 placeholder="Tap kartu ke Reader..."
+                               />
+                             </div>
+                             <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider leading-relaxed text-center">
+                               Dekatkan kartu RFID pada reader. Kode akan otomatis terinput.
+                             </p>
+                           </div>
+                         ) : (
+                           <button
+                             type="button"
+                             onClick={() => {
+                               setIsScanningRfid(true);
+                               setIsScanningRfidKtp(false);
+                             }}
+                             className="w-full flex items-center justify-center gap-2 py-3.5 bg-slate-50 border border-dashed border-slate-300 hover:border-blue-400 hover:bg-blue-50/20 rounded-xl md:rounded-2xl transition-all group"
+                           >
+                             <CreditCard className="text-slate-400 group-hover:text-blue-500 transition-colors" size={14} />
+                             <span className="text-xs font-black text-slate-500 group-hover:text-blue-600 uppercase tracking-widest">Daftarkan ID Card</span>
+                           </button>
+                         )}
+                      </div>
+
+                      {/* E-KTP NFC Card */}
+                      <div className="space-y-1 md:space-y-2">
+                         <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Registrasi E-KTP / NFC Card</label>
+                         {formData.rfid_ktp ? (
+                           <div className="flex items-center justify-between p-3 bg-violet-50 border border-violet-200 rounded-xl md:rounded-2xl">
+                             <div className="flex items-center gap-2.5">
+                               <div className="w-6 h-6 rounded-lg bg-violet-500 text-white flex items-center justify-center shadow-sm">
+                                 <CheckCircle2 size={12} />
+                               </div>
+                               <div>
+                                 <p className="text-[10px] font-black text-violet-800 uppercase tracking-wider">E-KTP Terhubung</p>
+                                 <p className="text-[9px] text-violet-600 font-bold uppercase tracking-tight font-mono">{formData.rfid_ktp}</p>
+                               </div>
+                             </div>
+                             <button
+                               type="button"
+                               onClick={() => setFormData(prev => ({ ...prev, rfid_ktp: '' }))}
+                               className="text-[10px] font-black text-rose-500 hover:text-rose-700 uppercase tracking-widest px-2.5 py-1 bg-white border border-rose-100 rounded-lg hover:shadow-sm transition-all"
+                             >
+                               Hapus
+                             </button>
+                           </div>
+                         ) : isScanningRfidKtp ? (
+                           <div className="p-3 bg-violet-50 border border-violet-200 rounded-xl md:rounded-2xl space-y-2.5">
+                             <div className="flex items-center justify-between">
+                               <div className="flex items-center gap-2">
+                                 <span className="relative flex h-2 w-2">
+                                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75"></span>
+                                   <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500"></span>
+                                 </span>
+                                 <p className="text-[10px] font-black text-violet-800 uppercase tracking-wider">Menunggu Tap E-KTP...</p>
+                               </div>
+                               <button
+                                 type="button"
+                                 onClick={() => setIsScanningRfidKtp(false)}
+                                 className="text-[9px] font-black text-slate-400 hover:text-slate-600 uppercase tracking-widest"
+                               >
+                                 Batal
+                               </button>
+                             </div>
+                             <div className="relative">
+                               <CreditCard className="absolute left-3 top-1/2 -translate-y-1/2 text-violet-400 animate-pulse" size={12} />
+                               <input 
+                                 type="text"
+                                 autoFocus
+                                 onKeyDown={e => {
+                                   if (e.key === 'Enter') {
+                                     e.preventDefault();
+                                     e.stopPropagation();
+                                     const val = (e.target as HTMLInputElement).value.trim();
+                                     if (val) {
+                                       setFormData(prev => ({ ...prev, rfid_ktp: val }));
+                                       setIsScanningRfidKtp(false);
+                                     }
+                                   }
+                                 }}
+                                 className="w-full pl-9 pr-3 py-2 bg-white border border-violet-300 rounded-xl outline-none focus:border-violet-500 transition-all text-xs font-bold text-slate-800"
+                                 placeholder="Tap E-KTP ke Reader..."
+                               />
+                             </div>
+                             <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider leading-relaxed text-center">
+                               Dekatkan E-KTP pada reader. Kode NFC akan otomatis terinput.
+                             </p>
+                           </div>
+                         ) : (
+                           <button
+                             type="button"
+                             onClick={() => {
+                               setIsScanningRfidKtp(true);
+                               setIsScanningRfid(false);
+                             }}
+                             className="w-full flex items-center justify-center gap-2 py-3.5 bg-slate-50 border border-dashed border-slate-300 hover:border-violet-400 hover:bg-violet-50/20 rounded-xl md:rounded-2xl transition-all group"
+                           >
+                             <CreditCard className="text-slate-400 group-hover:text-violet-500 transition-colors" size={14} />
+                             <span className="text-xs font-black text-slate-500 group-hover:text-violet-600 uppercase tracking-widest">Daftarkan E-KTP (NFC)</span>
+                           </button>
+                         )}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1382,48 +1767,86 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                   </div>
                 </div>
 
-                {/* Section: Informasi Orang Tua */}
+                {/* Section: Keluarga & Peranan */}
                 <div className="space-y-6 md:space-y-8">
                   <div className="flex items-center gap-3 md:gap-4">
                     <div className="w-8 h-8 md:w-10 md:h-10 bg-amber-50 text-amber-600 rounded-xl md:rounded-2xl flex items-center justify-center shrink-0">
                       <Users size={16} className="md:w-5 md:h-5" />
                     </div>
-                    <h4 className="text-[10px] md:text-sm font-black text-slate-700 uppercase tracking-widest">Keluarga</h4>
+                    <h4 className="text-[10px] md:text-sm font-black text-slate-700 uppercase tracking-widest">Keluarga &amp; Peranan</h4>
                     <div className="h-px bg-slate-100 flex-1"></div>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-8">
                     <div className="space-y-1 md:space-y-2">
-                       <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Nama Orang Tua</label>
-                        <input 
-                          type="text" value={formData.nama_ortu}
-                          onChange={e => setFormData({...formData, nama_ortu: e.target.value})}
-                          className="w-full px-4 md:px-5 py-3 md:py-4 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold"
-                          placeholder="Nama Ayah/Ibu"
-                        />
-                    </div>
-                    <div className="space-y-1 md:space-y-2">
-                       <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Kontak Orang Tua</label>
-                       <input 
-                         type="text" value={formData.no_hp_ortu}
-                         onChange={e => setFormData({...formData, no_hp_ortu: e.target.value})}
-                         className="w-full px-4 md:px-5 py-3 md:py-4 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold"
-                         placeholder="085123xxx"
+                       <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Hubungkan Keluarga / KK</label>
+                       <ModernSelect 
+                         value={String(formData.family_id || '')}
+                         onChange={val => setFormData({...formData, family_id: val})}
+                         options={[
+                           { value: '', label: '-- Tanpa Keluarga (Pribadi) --' },
+                           ...(families || []).map(f => ({ 
+                             value: String(f.id), 
+                             label: `${f.nama_keluarga} ${f.nomor_kk ? `(KK: ${f.nomor_kk})` : ''}` 
+                           }))
+                         ]}
+                         placeholder="Pilih Keluarga"
                        />
                     </div>
                     <div className="space-y-1 md:space-y-2">
-                       <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Pekerjaan O.T</label>
+                       <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Peranan / Hubungan</label>
+                       <ModernSelect 
+                         value={String(formData.relationship_id || '')}
+                         onChange={val => setFormData({...formData, relationship_id: val})}
+                         options={[
+                           { value: '', label: '-- Tanpa Hubungan --' },
+                           ...(relationships || []).map(r => ({ 
+                             value: String(r.id), 
+                             label: `${r.name} ${r.is_wali ? '(👑 Wali)' : ''}` 
+                           }))
+                         ]}
+                         placeholder="Pilih Peranan"
+                       />
+                    </div>
+                    <div className="space-y-1 md:space-y-2">
+                       <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Pekerjaan Anggota</label>
                        <div className="relative">
                           <Briefcase className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-slate-300" size={14} />
                           <input 
-                            type="text" value={formData.pekerjaan_ortu}
-                            onChange={e => setFormData({...formData, pekerjaan_ortu: e.target.value})}
+                            type="text" value={formData.pekerjaan || ''}
+                            onChange={e => setFormData({...formData, pekerjaan: e.target.value})}
                             className="w-full pl-10 md:pl-12 pr-4 md:pr-5 py-3 md:py-4 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold"
-                            placeholder="PNS, dsb"
+                            placeholder="Wiraswasta, Pelajar, dsb"
                           />
                        </div>
                     </div>
                   </div>
+
+                  {formData.family_id && (
+                    <div className="p-4 bg-amber-50/30 border border-amber-100 rounded-2xl space-y-2">
+                      <p className="text-[10px] font-black text-amber-800 uppercase tracking-wider">Deteksi Otomatis Orang Tua / Wali:</p>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div className="bg-white/80 p-2.5 rounded-xl border border-amber-100/40">
+                          <p className="text-[8px] font-bold text-slate-400 uppercase">Nama Ayah (Wali)</p>
+                          <p className="text-xs font-black text-slate-700">{
+                            members.find(m => m.family_id === formData.family_id && relationships.find(r => r.id === m.relationship_id)?.name.toLowerCase() === 'ayah')?.nama_lengkap || '-'
+                          }</p>
+                        </div>
+                        <div className="bg-white/80 p-2.5 rounded-xl border border-amber-100/40">
+                          <p className="text-[8px] font-bold text-slate-400 uppercase">Nama Ibu (Wali)</p>
+                          <p className="text-xs font-black text-slate-700">{
+                            members.find(m => m.family_id === formData.family_id && relationships.find(r => r.id === m.relationship_id)?.name.toLowerCase() === 'ibu')?.nama_lengkap || '-'
+                          }</p>
+                        </div>
+                        <div className="bg-white/80 p-2.5 rounded-xl border border-amber-100/40">
+                          <p className="text-[8px] font-bold text-slate-400 uppercase">No. HP Wali Utama</p>
+                          <p className="text-xs font-black text-slate-700">{
+                            members.find(m => m.family_id === formData.family_id && relationships.find(r => r.id === m.relationship_id)?.is_wali)?.no_hp_anggota || '-'
+                          }</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Section: Pendidikan */}
@@ -1459,14 +1882,53 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                 </div>
               </form>
 
-              <div className="p-4 md:px-12 bg-slate-50 border-t border-slate-100 flex flex-col md:flex-row items-center justify-end gap-3 md:gap-0 shrink-0">
-                <button 
-                  onClick={handleSubmit} disabled={isSubmitting}
-                  className="w-full md:w-auto px-6 md:px-10 py-3 md:py-4 bg-blue-600 text-white rounded-xl md:rounded-2xl font-black text-[10px] md:text-xs uppercase tracking-[0.2em] flex items-center justify-center gap-3 shadow-xl shadow-blue-600/30 active:scale-95 transition-all disabled:opacity-50"
-                >
-                  {isSubmitting ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
-                  Simpan Data
-                </button>
+              <div className="p-4 md:px-12 bg-slate-50 border-t border-slate-100 flex flex-col md:flex-row items-center justify-between gap-3 shrink-0">
+                <div className="flex items-center gap-2 w-full md:w-auto">
+                  {editingMember === null && hasDraftContent && (
+                    <button 
+                      type="button"
+                      onClick={() => {
+                        if (window.confirm("Apakah Anda yakin ingin menghapus seluruh isi formulir ini dan mulai baru?")) {
+                          try {
+                            localStorage.removeItem('absensi_member_registration_draft');
+                          } catch (e) {
+                            console.error(e);
+                          }
+                          setFormData({
+                            nama_lengkap: '', daerah_id: '', desa_id: '', kelompok_id: '', age_category_id: '',
+                            tempat_lahir: '', tanggal_lahir: '', no_hp_anggota: '', jenis_kelamin: 'Laki-laki',
+                            nama_ortu: '', no_hp_ortu: '', pekerjaan_ortu: '', alamat_rumah: '', pendidikan: '', kelas: '',
+                            rfid: '', rfid_ktp: '', family_id: '', relationship_id: '', pekerjaan: ''
+                          });
+                        }
+                      }}
+                      className="w-full md:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700 rounded-xl font-bold text-[9px] md:text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all active:scale-95 border border-slate-200"
+                    >
+                      <RotateCcw size={14} />
+                      Mulai Baru (Reset)
+                    </button>
+                  )}
+                </div>
+                
+                <div className="flex flex-col md:flex-row items-center gap-2.5 w-full md:w-auto justify-end">
+                  {editingMember === null && (
+                    <button 
+                      type="button"
+                      onClick={() => setShowModal(false)}
+                      className="w-full md:w-auto px-5 py-3 md:py-4 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 rounded-xl md:rounded-2xl text-[10px] md:text-xs font-black uppercase tracking-wider transition-all active:scale-95 flex items-center justify-center gap-2"
+                    >
+                      <Minimize2 size={14} />
+                      Minimalkan Form
+                    </button>
+                  )}
+                  <button 
+                    onClick={handleSubmit} disabled={isSubmitting}
+                    className="w-full md:w-auto px-6 md:px-10 py-3 md:py-4 bg-blue-600 text-white rounded-xl md:rounded-2xl font-black text-[10px] md:text-xs uppercase tracking-[0.2em] flex items-center justify-center gap-3 shadow-xl shadow-blue-600/30 active:scale-95 transition-all disabled:opacity-50"
+                  >
+                    {isSubmitting ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+                    Simpan Data
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>
@@ -1563,6 +2025,46 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                             <p className="text-xs md:text-sm font-medium text-slate-700">{selectedMember.pendidikan ? `${selectedMember.pendidikan} (Kls ${selectedMember.kelas || '-'})` : 'Belum terdata'}</p>
                          </div>
                       </div>
+
+                      {/* RFID / NFC Card */}
+                      <div className="flex gap-3 items-start">
+                         <div className={`w-9 h-9 md:w-12 md:h-12 rounded-xl flex items-center justify-center shrink-0 border shadow-sm transition-all ${selectedMember.rfid ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-slate-50 text-slate-400 border-slate-100'}`}>
+                            <CreditCard size={18} />
+                         </div>
+                         <div className="min-w-0">
+                            <p className="text-[8px] md:text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">ID Card RFID / NFC</p>
+                            {selectedMember.rfid ? (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-black uppercase tracking-wider border border-emerald-200/50">
+                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                                {selectedMember.rfid}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 text-slate-500 text-[10px] font-black uppercase tracking-wider border border-slate-200">
+                                Belum Terdaftar
+                              </span>
+                            )}
+                         </div>
+                      </div>
+
+                      {/* E-KTP NFC Card */}
+                      <div className="flex gap-3 items-start">
+                         <div className={`w-9 h-9 md:w-12 md:h-12 rounded-xl flex items-center justify-center shrink-0 border shadow-sm transition-all ${selectedMember.rfid_ktp ? 'bg-violet-50 text-violet-600 border-violet-100' : 'bg-slate-50 text-slate-400 border-slate-100'}`}>
+                            <CreditCard size={18} />
+                         </div>
+                         <div className="min-w-0">
+                            <p className="text-[8px] md:text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">E-KTP NFC Card</p>
+                            {selectedMember.rfid_ktp ? (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-violet-50 text-violet-700 text-[10px] font-black uppercase tracking-wider border border-violet-200/50">
+                                <span className="h-1.5 w-1.5 rounded-full bg-violet-500"></span>
+                                {selectedMember.rfid_ktp}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 text-slate-500 text-[10px] font-black uppercase tracking-wider border border-slate-200">
+                                Belum Terdaftar
+                              </span>
+                            )}
+                         </div>
+                      </div>
                    </div>
 
                    {/* Secondary Info: Family & Address */}
@@ -1571,22 +2073,36 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                       <div className="bg-slate-50/50 rounded-2xl p-4 md:p-6 space-y-4 border border-slate-100/50">
                          <div className="flex items-center gap-2 text-slate-400 mb-1">
                             <Users size={14} />
-                            <span className="text-[9px] md:text-[10px] font-bold uppercase tracking-wider">Informasi Keluarga</span>
+                            <span className="text-[9px] md:text-[10px] font-bold uppercase tracking-wider">Keluarga &amp; Peranan</span>
                          </div>
                          <div className="grid grid-cols-1 gap-3">
+                            <div className="grid grid-cols-2 gap-2">
+                               <div>
+                                  <p className="text-[8px] md:text-[9px] font-bold text-slate-400 uppercase tracking-wider leading-none mb-1">Keluarga / KK</p>
+                                  <p className="text-xs md:text-sm font-black text-slate-700 truncate">{selectedMember.family_name || 'Mandiri / Pribadi'}</p>
+                               </div>
+                               <div>
+                                  <p className="text-[8px] md:text-[9px] font-bold text-slate-400 uppercase tracking-wider leading-none mb-1">Hubungan / Peranan</p>
+                                  <p className="text-xs md:text-sm font-black text-slate-700 truncate">
+                                    {selectedMember.relationship_name || '-'}
+                                    {selectedMember.is_wali && <span className="ml-1 text-amber-500 font-extrabold" title="Wali">👑</span>}
+                                  </p>
+                                </div>
+                            </div>
+                            <div className="border-t border-dashed border-slate-200/60 my-1"></div>
                             <div>
-                               <p className="text-[8px] md:text-[9px] font-bold text-slate-400 uppercase tracking-wider leading-none mb-1">Orang Tua</p>
+                               <p className="text-[8px] md:text-[9px] font-bold text-slate-400 uppercase tracking-wider leading-none mb-1">Deteksi Orang Tua / Wali</p>
                                <p className="text-xs md:text-sm font-medium text-slate-700 truncate">{selectedMember.nama_ortu || '-'}</p>
                             </div>
                             <div className="grid grid-cols-2 gap-2">
                                <div>
-                                  <p className="text-[8px] md:text-[9px] font-bold text-slate-400 uppercase tracking-wider leading-none mb-1">Kontak O.T</p>
+                                  <p className="text-[8px] md:text-[9px] font-bold text-slate-400 uppercase tracking-wider leading-none mb-1">Kontak Wali</p>
                                   <p className="text-xs md:text-sm font-medium text-slate-700">{selectedMember.no_hp_ortu || '-'}</p>
-                               </div>
-                               <div>
-                                  <p className="text-[8px] md:text-[9px] font-bold text-slate-400 uppercase tracking-wider leading-none mb-1">Pekerjaan</p>
-                                  <p className="text-xs md:text-sm font-medium text-slate-700 truncate">{selectedMember.pekerjaan_ortu || '-'}</p>
-                               </div>
+                                </div>
+                                <div>
+                                   <p className="text-[8px] md:text-[9px] font-bold text-slate-400 uppercase tracking-wider leading-none mb-1">Pekerjaan Anggota</p>
+                                   <p className="text-xs md:text-sm font-medium text-slate-700 truncate">{selectedMember.pekerjaan || '-'}</p>
+                                </div>
                             </div>
                          </div>
                       </div>
@@ -1620,6 +2136,15 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                   className="md:hidden text-[10px] font-bold text-slate-400 uppercase tracking-widest"
                 >
                   Tutup
+                </button>
+                
+                <button 
+                  onClick={() => downloadMemberCard(selectedMember)}
+                  className="px-4 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 rounded-xl font-bold text-[10px] md:text-xs uppercase tracking-wider flex items-center gap-2 transition-all active:scale-95 shadow-xs"
+                  title="Unduh Kartu & Barcode Code 128"
+                >
+                  <Download size={14} />
+                  <span>Unduh Barcode</span>
                 </button>
                 
                 {canWrite && (
@@ -1840,11 +2365,21 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
           whileTap={{ scale: 0.9 }}
           onClick={() => {
             setEditingMember(null);
-            setFormData({
-              nama_lengkap: '', daerah_id: '', desa_id: '', kelompok_id: '', age_category_id: '',
-              tempat_lahir: '', tanggal_lahir: '', no_hp_anggota: '', jenis_kelamin: 'Laki-laki',
-              nama_ortu: '', no_hp_ortu: '', pekerjaan_ortu: '', alamat_rumah: '', pendidikan: '', kelas: ''
-            });
+            try {
+              const savedDraft = localStorage.getItem('absensi_member_registration_draft');
+              if (savedDraft) {
+                setFormData(JSON.parse(savedDraft));
+              } else {
+                setFormData({
+                  nama_lengkap: '', daerah_id: '', desa_id: '', kelompok_id: '', age_category_id: '',
+                  tempat_lahir: '', tanggal_lahir: '', no_hp_anggota: '', jenis_kelamin: 'Laki-laki',
+                  nama_ortu: '', no_hp_ortu: '', pekerjaan_ortu: '', alamat_rumah: '', pendidikan: '', kelas: '',
+                  rfid: '', rfid_ktp: '', family_id: '', relationship_id: '', pekerjaan: ''
+                });
+              }
+            } catch (e) {
+              console.error(e);
+            }
             setShowModal(true);
           }}
           className="md:hidden fixed right-6 bottom-24 z-40 w-14 h-14 bg-blue-600 text-white rounded-full shadow-2xl flex items-center justify-center active:scale-95 transition-all"

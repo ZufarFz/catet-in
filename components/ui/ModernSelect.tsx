@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ChevronDown, Check, Search, X } from 'lucide-react';
+import { ChevronDown, Check, Search, X, Plus } from 'lucide-react';
 
 interface Option {
   value: string;
@@ -18,6 +18,7 @@ interface ModernSelectProps {
   className?: string;
   disabled?: boolean;
   noAnimation?: boolean;
+  onAddNew?: (newValue: string) => void | Promise<void>;
 }
 
 const ModernSelect: React.FC<ModernSelectProps> = ({
@@ -28,7 +29,8 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
   icon: TriggerIcon,
   className = '',
   disabled = false,
-  noAnimation = false
+  noAnimation = false,
+  onAddNew
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -88,8 +90,8 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
               className="absolute z-[600] top-full left-0 min-w-full w-max max-w-[90vw] md:max-w-md bg-white border-2 border-slate-100 rounded-2xl shadow-2xl shadow-slate-900/10 overflow-hidden flex flex-col max-h-[320px] mt-2"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Search Input inside dropdown if options are many */}
-              {options.length > 5 && (
+              {/* Search Input inside dropdown if options are many or adding is enabled */}
+              {(options.length > 5 || onAddNew) && (
                 <div className="p-3 border-b border-slate-100 sticky top-0 bg-white">
                   <div className="relative">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={14} />
@@ -98,11 +100,12 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                       type="text"
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      placeholder="Pencarian..."
+                      placeholder={onAddNew ? "Cari atau tambah baru..." : "Pencarian..."}
                       className="w-full pl-9 pr-8 py-2 bg-slate-50 border border-slate-100 rounded-xl text-[10px] font-bold text-slate-700 focus:bg-white focus:border-emerald-500 transition-all outline-none"
                     />
                     {searchTerm && (
                       <button 
+                        type="button"
                         onClick={() => setSearchTerm('')}
                         className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-300 hover:text-slate-500"
                       >
@@ -113,7 +116,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                 </div>
               )}
 
-              <div className="overflow-y-auto no-scrollbar py-2">
+              <div className="overflow-y-auto no-scrollbar py-2 flex-1">
                 {filteredOptions.length > 0 ? (
                   filteredOptions.map((option) => {
                     const isSelected = String(option.value) === String(value);
@@ -144,12 +147,28 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                     );
                   })
                 ) : (
-                  <div className="px-4 py-10 text-center">
+                  <div className="px-4 py-8 text-center">
                     <div className="w-10 h-10 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-2">
                       <Search size={16} className="text-slate-200" />
                     </div>
                     <p className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Tidak ditemukan</p>
                   </div>
+                )}
+
+                {onAddNew && searchTerm && !options.some(opt => opt.label.trim().toUpperCase() === searchTerm.trim().toUpperCase()) && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const label = searchTerm.trim();
+                      await onAddNew(label);
+                      setSearchTerm('');
+                      setIsOpen(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-4 py-3 text-left transition-all text-emerald-600 hover:bg-emerald-50 text-[8px] md:text-[10px] font-black uppercase tracking-widest border-t border-slate-100"
+                  >
+                    <Plus size={14} className="shrink-0" />
+                    <span>Tambah "{searchTerm}"</span>
+                  </button>
                 )}
               </div>
             </div>
@@ -160,12 +179,12 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                 animate={{ opacity: 1, y: 8, scale: 1 }}
                 exit={{ opacity: 0, y: 12, scale: 0.95 }}
                 transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
-                className="absolute z-[600] top-full left-0 min-w-full w-max max-w-[90vw] md:max-w-md bg-white/80 backdrop-blur-2xl border border-white/50 rounded-2xl shadow-2xl shadow-slate-900/10 overflow-hidden flex flex-col max-h-[320px]"
+                className="absolute z-[600] top-full left-0 min-w-full w-max max-w-[90vw] md:max-w-md bg-white border border-slate-200 rounded-2xl shadow-2xl shadow-slate-900/10 overflow-hidden flex flex-col max-h-[320px]"
                 onClick={(e) => e.stopPropagation()}
               >
-                {/* Search Input inside dropdown if options are many */}
-                {options.length > 5 && (
-                  <div className="p-3 border-b border-white/20 sticky top-0 bg-white/40 backdrop-blur-md">
+                {/* Search Input inside dropdown if options are many or adding is enabled */}
+                {(options.length > 5 || onAddNew) && (
+                  <div className="p-3 border-b border-slate-100 sticky top-0 bg-white">
                     <div className="relative">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={14} />
                       <input
@@ -173,11 +192,12 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                         type="text"
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
-                        placeholder="Pencarian..."
-                        className="w-full pl-9 pr-8 py-2 bg-white/80 border border-slate-100 rounded-xl text-[10px] font-bold text-slate-700 focus:bg-white focus:border-emerald-500 transition-all outline-none shadow-inner"
+                        placeholder={onAddNew ? "Cari atau tambah baru..." : "Pencarian..."}
+                        className="w-full pl-9 pr-8 py-2 bg-slate-50 border border-slate-100 rounded-xl text-[10px] font-bold text-slate-700 focus:bg-white focus:border-emerald-500 transition-all outline-none"
                       />
                       {searchTerm && (
                         <button 
+                          type="button"
                           onClick={() => setSearchTerm('')}
                           className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-300 hover:text-slate-500"
                         >
@@ -188,7 +208,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                   </div>
                 )}
 
-                <div className="overflow-y-auto no-scrollbar py-2">
+                <div className="overflow-y-auto no-scrollbar py-2 flex-1">
                   {filteredOptions.length > 0 ? (
                     filteredOptions.map((option) => {
                       const isSelected = String(option.value) === String(value);
@@ -219,12 +239,28 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                       );
                     })
                   ) : (
-                    <div className="px-4 py-10 text-center">
+                    <div className="px-4 py-8 text-center">
                       <div className="w-10 h-10 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-2">
                         <Search size={16} className="text-slate-200" />
                       </div>
                       <p className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Tidak ditemukan</p>
                     </div>
+                  )}
+
+                  {onAddNew && searchTerm && !options.some(opt => opt.label.trim().toUpperCase() === searchTerm.trim().toUpperCase()) && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const label = searchTerm.trim();
+                        await onAddNew(label);
+                        setSearchTerm('');
+                        setIsOpen(false);
+                      }}
+                      className="w-full flex items-center gap-2 px-4 py-3 text-left transition-all text-emerald-600 hover:bg-emerald-50 text-[8px] md:text-[10px] font-black uppercase tracking-widest border-t border-slate-100"
+                    >
+                      <Plus size={14} className="shrink-0" />
+                      <span>Tambah "{searchTerm}"</span>
+                    </button>
                   )}
                 </div>
               </motion.div>
