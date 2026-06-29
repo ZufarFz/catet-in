@@ -102,7 +102,6 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
     }
   }, [formData, editingMember]);
 
-<<<<<<< HEAD
   useEffect(() => {
     const handleNfcRead = (e: Event) => {
       const customEvent = e as CustomEvent<{ uid: string }>;
@@ -124,8 +123,6 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
     };
   }, [isScanningRfid, isScanningRfidKtp]);
 
-=======
->>>>>>> 32a6d8fbb3b92b999e7fbe01485aac778753e9a0
   const filteredMembers = useMemo(() => {
     return members.filter(m => {
       const matchesSearch = (m.nama_lengkap || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -182,55 +179,6 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
     }
   }, [showModal]);
 
-<<<<<<< HEAD
-=======
-  // Web NFC Scan integration for Member Registration
-  useEffect(() => {
-    let ndefCtrl: AbortController | null = null;
-    let isMounted = true;
-
-    async function startNfcScan() {
-      if (!isScanningRfid && !isScanningRfidKtp) return;
-      if (typeof window === 'undefined' || !('NDEFReader' in window)) return;
-
-      try {
-        ndefCtrl = new AbortController();
-        const reader = new (window as any).NDEFReader();
-        await reader.scan({ signal: ndefCtrl.signal });
-        
-        reader.addEventListener("reading", ({ serialNumber }: any) => {
-          if (!isMounted) return;
-          if (serialNumber) {
-            const formattedSerial = serialNumber.replace(/:/g, '').toUpperCase();
-            if (isScanningRfid) {
-              setFormData(prev => ({ ...prev, rfid: formattedSerial }));
-              setIsScanningRfid(false);
-            } else if (isScanningRfidKtp) {
-              setFormData(prev => ({ ...prev, rfid_ktp: formattedSerial }));
-              setIsScanningRfidKtp(false);
-            }
-          }
-        });
-
-        reader.addEventListener("readingerror", () => {
-          console.warn("NFC Reading error - please try again");
-        });
-      } catch (error) {
-        console.error("Failed to scan NFC via WebNFC API:", error);
-      }
-    }
-
-    startNfcScan();
-
-    return () => {
-      isMounted = false;
-      if (ndefCtrl) {
-        ndefCtrl.abort();
-      }
-    };
-  }, [isScanningRfid, isScanningRfidKtp]);
-
->>>>>>> 32a6d8fbb3b92b999e7fbe01485aac778753e9a0
   useEffect(() => {
     const observerOptions = {
       root: null,
@@ -1640,11 +1588,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                />
                              </div>
                              <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider leading-relaxed text-center">
-<<<<<<< HEAD
                                Dekatkan kartu RFID pada reader. Kode akan otomatis terinput.
-=======
-                               {typeof window !== 'undefined' && 'NDEFReader' in window ? "📱 NFC BROWSER HP AKTIF: CUKUP TEMPEL KARTU KE BELAKANG HP ANDA!" : "Dekatkan kartu RFID pada reader. Kode akan otomatis terinput."}
->>>>>>> 32a6d8fbb3b92b999e7fbe01485aac778753e9a0
                              </p>
                            </div>
                          ) : (
@@ -1723,11 +1667,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                />
                              </div>
                              <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider leading-relaxed text-center">
-<<<<<<< HEAD
                                Dekatkan E-KTP pada reader. Kode NFC akan otomatis terinput.
-=======
-                               {typeof window !== 'undefined' && 'NDEFReader' in window ? "📱 NFC BROWSER HP AKTIF: CUKUP TEMPEL E-KTP KE BELAKANG HP ANDA!" : "Dekatkan E-KTP pada reader. Kode NFC akan otomatis terinput."}
->>>>>>> 32a6d8fbb3b92b999e7fbe01485aac778753e9a0
                              </p>
                            </div>
                          ) : (
