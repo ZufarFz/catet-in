@@ -492,27 +492,25 @@ export async function dbGetMembers() {
 }
 
 export async function dbAddMember(mbr: AbsensiMember) {
-  try {
-    const client = getActiveDb();
-    const { daerah_name, desa_name, kelompok_name, age_category_name, family_name, relationship_name, is_wali, ...cleanMbr } = mbr;
-    const { error } = await client.from('members').upsert([cleanMbr]);
-    if (error) return handleSupabaseError(error, OperationType.WRITE, `members/${mbr.id}`);
-    return true;
-  } catch (err) {
-    return false;
+  const client = getActiveDb();
+  const { daerah_name, desa_name, kelompok_name, age_category_name, family_name, relationship_name, is_wali, ...cleanMbr } = mbr;
+  const { error } = await client.from('members').upsert([cleanMbr]);
+  if (error) {
+    console.error(`[Supabase Error] During write on members/${mbr.id}:`, error.message);
+    throw new Error(error.message);
   }
+  return true;
 }
 
 export async function dbUpdateMember(id: string, mbr: Partial<AbsensiMember>) {
-  try {
-    const client = getActiveDb();
-    const { daerah_name, desa_name, kelompok_name, age_category_name, family_name, relationship_name, is_wali, ...cleanMbr } = mbr as any;
-    const { error } = await client.from('members').update(cleanMbr).eq('id', id);
-    if (error) return handleSupabaseError(error, OperationType.UPDATE, `members/${id}`);
-    return true;
-  } catch (err) {
-    return false;
+  const client = getActiveDb();
+  const { daerah_name, desa_name, kelompok_name, age_category_name, family_name, relationship_name, is_wali, ...cleanMbr } = mbr as any;
+  const { error } = await client.from('members').update(cleanMbr).eq('id', id);
+  if (error) {
+    console.error(`[Supabase Error] During update on members/${id}:`, error.message);
+    throw new Error(error.message);
   }
+  return true;
 }
 
 // 8b. Families & Family Relationships
