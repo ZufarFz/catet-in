@@ -1,6 +1,6 @@
 {
-  "name": "catet-in (alternatif database)",
-  "description": "Aplikasi Pintar untuk manajemen keuangan dan Absensi Digital untuk manajemen anggota \u0026 kehadiran real-time.",
+  "name": "Catet-In V2",
+  "description": "Manage family financial records and attendance using a Supabase database with integrated member and family tracking.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

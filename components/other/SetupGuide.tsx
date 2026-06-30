@@ -671,8 +671,12 @@ create policy "Strict Operational Families RLS" on public.families for all
 create table if not exists public.family_relationships (
   id text primary key,
   name text not null,
-  is_wali boolean default false
+  is_wali text default '4' -- Nilai 1 s/d 6 (1: KK Pria, 2: KK Wanita, 3: Istri, 4: Anak, 5: Anggota Lain, 6: Wali Lainnya)
 );
+
+-- JIKA TABEL SUDAH ADA, JALANKAN PERINTAH ALTER BERIKUT DI SQL EDITOR SUPABASE:
+-- alter table public.family_relationships alter column is_wali type text using (case when is_wali = true then '1' else '4' end);
+-- alter table public.family_relationships alter column is_wali set default '4';
 alter table public.family_relationships enable row level security;
 drop policy if exists "Strict Operational Family Relationships RLS" on public.family_relationships;
 create policy "Strict Operational Family Relationships RLS" on public.family_relationships for all 
@@ -699,7 +703,8 @@ create table if not exists public.members (
   rfid_ktp text,
   family_id text,
   relationship_id text,
-  pekerjaan text
+  pekerjaan text,
+  status text
 );
 alter table public.members enable row level security;
 drop policy if exists "Allow members CRUD" on public.members;
@@ -734,6 +739,7 @@ alter table public.members add column if not exists rfid_ktp text;
 alter table public.members add column if not exists family_id text;
 alter table public.members add column if not exists relationship_id text;
 alter table public.members add column if not exists pekerjaan text;
+alter table public.members add column if not exists status text;
 
 alter table public.attendance_logs enable row level security;
 drop policy if exists "Allow logs CRUD" on public.attendance_logs;

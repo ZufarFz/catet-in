@@ -83,7 +83,6 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
   }>>([]);
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const [isScanningActive, setIsScanningActive] = useState(false);
-  const [nfcBrowserState, setNfcBrowserState] = useState<'idle' | 'scanning' | 'error'>('idle');
   const submitTimeoutRef = useRef<any>(null);
 
   const changeAttendanceMode = (mode: 'manual' | 'scan') => {
@@ -359,50 +358,23 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
     notify
   ]);
 
-  // WebNFC Scanner hook for native phone scanning
   useEffect(() => {
-    let ndefCtrl: AbortController | null = null;
-    let isMounted = true;
+    const handleNfcRead = (e: Event) => {
+      const customEvent = e as CustomEvent<{ uid: string }>;
+      const uid = customEvent.detail?.uid;
+      if (!uid) return;
 
-    async function autoNfcScan() {
-      if (!isScanningActive || nfcBrowserState !== 'scanning') return;
-      if (typeof window === 'undefined' || !('NDEFReader' in window)) return;
-
-      try {
-        ndefCtrl = new AbortController();
-        const reader = new (window as any).NDEFReader();
-        await reader.scan({ signal: ndefCtrl.signal });
-        
-        reader.addEventListener("reading", ({ serialNumber }: any) => {
-          if (!isMounted) return;
-          if (serialNumber) {
-            const formattedSerial = serialNumber.replace(/:/g, '').toUpperCase();
-            processBarcode(formattedSerial);
-          }
-        });
-
-        reader.addEventListener("readingerror", () => {
-          if (!isMounted) return;
-          notify("Gagal membaca kartu NFC. Coba lagi.", "error");
-        });
-      } catch (error) {
-        console.error("Failed WebNFC background scan:", error);
-        if (isMounted) {
-          setNfcBrowserState('error');
-          notify("Gagal mengaktifkan WebNFC. Izinkan akses NFC pada Chrome.", "error");
-        }
-      }
-    }
-
-    autoNfcScan();
-
-    return () => {
-      isMounted = false;
-      if (ndefCtrl) {
-        ndefCtrl.abort();
+      if (isScanningActive && attendanceMode === 'scan') {
+        console.log("NFC Read triggered in AttendanceForm:", uid);
+        processBarcode(uid);
       }
     };
-  }, [isScanningActive, nfcBrowserState, processBarcode, notify]);
+
+    window.addEventListener('nfc-read', handleNfcRead);
+    return () => {
+      window.removeEventListener('nfc-read', handleNfcRead);
+    };
+  }, [isScanningActive, attendanceMode, processBarcode]);
 
   const handleBarcodeScanSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -671,7 +643,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
       {/* INITIAL FILTER POPUP MODAL */}
       <AnimatePresence>
         {showInitialFilterModal && (
-          <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[1000] flex items-start md:items-center justify-center p-3 pt-2 pb-[88px] md:p-4 overflow-y-auto no-scrollbar">
             {/* Backdrop */}
             <motion.div 
               initial={{ opacity: 0 }}
@@ -687,7 +659,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 15 }}
               transition={{ duration: 0.25, ease: 'easeOut' }}
-              className="relative w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl border border-slate-100 flex flex-col space-y-4 overflow-visible"
+              className="relative w-full max-w-md bg-white rounded-3xl p-5 md:p-6 shadow-2xl border border-slate-100 flex flex-col space-y-4 overflow-visible my-auto z-10"
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -756,7 +728,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                 </div>
 
                 {/* 1b. Kegiatan/Event Name */}
-                <div className="space-y-1">
+                <div className="space-y-1 relative z-40">
                   <span className="text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Kegiatan (Acara) *</span>
                   <ModernSelect 
                     value={selectedEventId}
@@ -777,10 +749,10 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                       animate={{ opacity: 1, height: 'auto' }}
                       exit={{ opacity: 0, height: 0 }}
                       transition={{ duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
-                      className="space-y-3.5 overflow-hidden"
+                      className="space-y-3.5 overflow-visible"
                     >
                       {/* Daerah & Unit Desa */}
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-2 gap-3 relative z-30">
                         <div className="space-y-1 min-w-0">
                           <span className="text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Daerah</span>
                           <ModernSelect 
@@ -804,7 +776,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                       </div>
 
                       {/* Kelompok & Kategori Usia */}
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-2 gap-3 relative z-20">
                         <div className="space-y-1 min-w-0">
                           <span className="text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Kelompok</span>
                           <ModernSelect 
@@ -828,7 +800,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                       </div>
 
                       {/* Gender Toggle Buttons */}
-                      <div className="space-y-1.5">
+                      <div className="space-y-1.5 relative z-10">
                         <span className="text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Gender</span>
                         <div className="grid grid-cols-3 bg-slate-100 p-1 rounded-xl border border-slate-200/55 shadow-xs select-none">
                           <button
@@ -1504,29 +1476,6 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                       Sandingkan barcode atau tempelkan kartu RFID/NFC kapan saja. Nama anggota dan kehadiran akan otomatis langsung terdata.
                     </p>
                   </div>
-
-                  {/* Browser Native NFC Button for Phones */}
-                  {typeof window !== 'undefined' && 'NDEFReader' in window && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (nfcBrowserState === 'scanning') {
-                          setNfcBrowserState('idle');
-                        } else {
-                          setNfcBrowserState('scanning');
-                        }
-                      }}
-                      className={`mt-4 z-30 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-2 border shadow-md ${
-                        nfcBrowserState === 'scanning'
-                          ? 'bg-violet-600 border-violet-500 text-white animate-pulse'
-                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-                      }`}
-                    >
-                      <span className={`h-1.5 w-1.5 rounded-full ${nfcBrowserState === 'scanning' ? 'bg-emerald-400 animate-ping' : 'bg-slate-400'}`}></span>
-                      {nfcBrowserState === 'scanning' ? 'NFC HP Aktif: Dekatkan Kartu' : '📱 Aktifkan NFC HP (Browser)'}
-                    </button>
-                  )}
 
                   {/* Silent input in background to catch scans */}
                   <form onSubmit={handleBarcodeScanSubmit} className="absolute left-[-9999px] opacity-0 pointer-events-none" onClick={(e) => e.stopPropagation()}>

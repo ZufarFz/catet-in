@@ -18,6 +18,9 @@ const ChangePassword: React.FC<ChangePasswordProps> = ({
   currentUsername, 
   onLogout, 
   notify,
+  currentApp,
+  switchApp,
+  webAccessStrings = [],
 }) => {
   const [step, setStep] = useState<'verify' | 'new'>('verify');
   const [oldPassword, setOldPassword] = useState('');
@@ -147,6 +150,31 @@ const ChangePassword: React.FC<ChangePasswordProps> = ({
 
   return (
     <div className="h-full w-full overflow-y-auto no-scrollbar p-4 md:p-10 pb-32">
+      {/* Mobile-Only App Switcher in Profile Tab */}
+      {webAccessStrings.length > 1 && switchApp && currentApp && (
+        <div className="max-w-md mx-auto mb-4 bg-white rounded-3xl p-4 shadow-xl border border-slate-100 md:hidden animate-in fade-in slide-in-from-top-3">
+          <div className="flex flex-col space-y-2">
+            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider ml-1">Pindah Aplikasi</span>
+            <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+              <button 
+                type="button"
+                onClick={() => switchApp('bendahara')}
+                className={`flex-1 py-2.5 rounded-lg text-[10px] font-black uppercase transition-all flex items-center justify-center space-x-1.5 ${currentApp === 'bendahara' ? 'bg-[#007CC2] text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                <span>💰 Bendahara</span>
+              </button>
+              <button 
+                type="button"
+                onClick={() => switchApp('absensi')}
+                className={`flex-1 py-2.5 rounded-lg text-[10px] font-black uppercase transition-all flex items-center justify-center space-x-1.5 ${currentApp === 'absensi' ? 'bg-[#007CC2] text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                <span>📝 Absensi</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-md mx-auto bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
         <div className={`p-6 text-white flex items-center space-x-3 ${step === 'verify' ? 'bg-slate-800' : 'bg-blue-600'}`}>
            {step === 'verify' ? <ShieldCheck size={20} /> : <KeyRound size={20} />}

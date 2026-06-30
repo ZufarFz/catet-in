@@ -208,12 +208,12 @@ export async function seedInitialDataIfNeeded() {
       
       // Seed default family relationships
       await client.from('family_relationships').upsert([
-        { id: 'r1', name: 'Ayah', is_wali: true },
-        { id: 'r2', name: 'Ibu', is_wali: true },
-        { id: 'r3', name: 'Anak', is_wali: false },
-        { id: 'r4', name: 'Kakek', is_wali: false },
-        { id: 'r5', name: 'Nenek', is_wali: false },
-        { id: 'r6', name: 'Wali Lainnya', is_wali: true }
+        { id: 'r1', name: 'Ayah', is_wali: '1' },
+        { id: 'r2', name: 'Ibu', is_wali: '3' },
+        { id: 'r3', name: 'Anak', is_wali: '4' },
+        { id: 'r4', name: 'Kakek', is_wali: '6' },
+        { id: 'r5', name: 'Nenek', is_wali: '6' },
+        { id: 'r6', name: 'Wali Lainnya', is_wali: '6' }
       ]);
 
       console.log('Seeded Supabase successfully with initial admin account and default projects.');
@@ -487,6 +487,7 @@ export async function dbGetMembers() {
     if (error) return handleSupabaseError(error, OperationType.LIST, 'members');
     return (data || []) as AbsensiMember[];
   } catch (err) {
+    console.error("Error inside dbGetMembers:", err);
     return [];
   }
 }
@@ -494,7 +495,7 @@ export async function dbGetMembers() {
 export async function dbAddMember(mbr: AbsensiMember) {
   try {
     const client = getActiveDb();
-    const { daerah_name, desa_name, kelompok_name, age_category_name, family_name, relationship_name, is_wali, ...cleanMbr } = mbr;
+    const { daerah_name, desa_name, kelompok_name, age_category_name, family_name, relationship_name, is_wali, nama_ortu, no_hp_ortu, pekerjaan_ortu, ...cleanMbr } = mbr;
     const { error } = await client.from('members').upsert([cleanMbr]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `members/${mbr.id}`);
     return true;
@@ -506,7 +507,7 @@ export async function dbAddMember(mbr: AbsensiMember) {
 export async function dbUpdateMember(id: string, mbr: Partial<AbsensiMember>) {
   try {
     const client = getActiveDb();
-    const { daerah_name, desa_name, kelompok_name, age_category_name, family_name, relationship_name, is_wali, ...cleanMbr } = mbr as any;
+    const { daerah_name, desa_name, kelompok_name, age_category_name, family_name, relationship_name, is_wali, nama_ortu, no_hp_ortu, pekerjaan_ortu, ...cleanMbr } = mbr as any;
     const { error } = await client.from('members').update(cleanMbr).eq('id', id);
     if (error) return handleSupabaseError(error, OperationType.UPDATE, `members/${id}`);
     return true;
@@ -523,6 +524,7 @@ export async function dbGetFamilies() {
     if (error) return handleSupabaseError(error, OperationType.LIST, 'families');
     return (data || []) as Family[];
   } catch (err) {
+    console.error("Error inside dbGetFamilies:", err);
     return [];
   }
 }
@@ -556,6 +558,7 @@ export async function dbGetFamilyRelationships() {
     if (error) return handleSupabaseError(error, OperationType.LIST, 'family_relationships');
     return (data || []) as FamilyRelationship[];
   } catch (err) {
+    console.error("Error inside dbGetFamilyRelationships:", err);
     return [];
   }
 }
@@ -665,6 +668,7 @@ export async function dbGetEvents() {
     if (error) return handleSupabaseError(error, OperationType.LIST, 'events');
     return (data || []) as EventData[];
   } catch (err) {
+    console.error("Error inside dbGetEvents:", err);
     return [];
   }
 }
@@ -705,6 +709,7 @@ export async function dbGetDaerahs() {
     if (error) return handleSupabaseError(error, OperationType.LIST, 'daerahs');
     return (data || []) as DaerahData[];
   } catch (err) {
+    console.error("Error inside dbGetDaerahs:", err);
     return [];
   }
 }
@@ -739,6 +744,7 @@ export async function dbGetDesas() {
     if (error) return handleSupabaseError(error, OperationType.LIST, 'desas');
     return (data || []) as DesaData[];
   } catch (err) {
+    console.error("Error inside dbGetDesas:", err);
     return [];
   }
 }
@@ -773,6 +779,7 @@ export async function dbGetKelompoks() {
     if (error) return handleSupabaseError(error, OperationType.LIST, 'kelompoks');
     return (data || []) as KelompokData[];
   } catch (err) {
+    console.error("Error inside dbGetKelompoks:", err);
     return [];
   }
 }
@@ -807,6 +814,7 @@ export async function dbGetAgeCategories() {
     if (error) return handleSupabaseError(error, OperationType.LIST, 'age_categories');
     return (data || []) as AgeCategoryData[];
   } catch (err) {
+    console.error("Error inside dbGetAgeCategories:", err);
     return [];
   }
 }
@@ -883,6 +891,16 @@ export function dbSubscribeKelompoks(callback: (data: KelompokData[]) => void, o
 export function dbSubscribeAgeCategories(callback: (data: AgeCategoryData[]) => void, onError: (err: any) => void) {
   // Free tier budget optimization: Only load age categories once on mount, no active subscription
   dbGetAgeCategories().then(callback).catch(onError);
+  return () => {};
+}
+
+export function dbSubscribeFamilies(callback: (data: Family[]) => void, onError: (err: any) => void) {
+  dbGetFamilies().then(callback).catch(onError);
+  return () => {};
+}
+
+export function dbSubscribeFamilyRelationships(callback: (data: FamilyRelationship[]) => void, onError: (err: any) => void) {
+  dbGetFamilyRelationships().then(callback).catch(onError);
   return () => {};
 }
 

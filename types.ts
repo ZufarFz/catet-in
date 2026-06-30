@@ -74,7 +74,7 @@ export interface Family {
 export interface FamilyRelationship {
   id: string;
   name: string;
-  is_wali: boolean;
+  is_wali: string; // "1" | "2" | "3" | "4" | "5" | "6"
 }
 
 export interface AbsensiMember {
@@ -88,9 +88,6 @@ export interface AbsensiMember {
   tanggal_lahir: string;
   no_hp_anggota: string;
   jenis_kelamin: string;
-  nama_ortu?: string;
-  no_hp_ortu?: string;
-  pekerjaan_ortu?: string;
   alamat_rumah: string;
   pendidikan: string;
   kelas: string;
@@ -99,7 +96,11 @@ export interface AbsensiMember {
   family_id?: string;
   relationship_id?: string;
   pekerjaan?: string;
+  status?: string;
   // Join data
+  nama_ortu?: string; // Virtual / Computed from family relationships
+  no_hp_ortu?: string; // Virtual / Computed from family relationships
+  pekerjaan_ortu?: string; // Virtual / Computed from family relationships
   daerah_name?: string;
   desa_name?: string;
   kelompok_name?: string;

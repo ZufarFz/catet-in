@@ -35,6 +35,23 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
+  const url = new URL(event.request.url);
+
+  // Prevent caching external APIs (Supabase, Google Apps Script, Google Fonts, etc.)
+  if (url.origin !== self.location.origin) {
+    return; // Let the browser handle external requests normally
+  }
+
+  // Skip caching for development files, APIs, hot module replacement, or other local API routes
+  if (
+    url.pathname.includes('/api/') || 
+    url.pathname.includes('node_modules') || 
+    url.pathname.includes('@vite') ||
+    url.pathname.includes('/@fs/')
+  ) {
+    return;
+  }
+
   event.respondWith(
     fetch(event.request)
       .then((response) => {

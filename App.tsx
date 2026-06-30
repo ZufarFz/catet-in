@@ -20,7 +20,7 @@ import {
   dbSubscribeMembers, dbSubscribeDaerahs, dbSubscribeDesas, 
   dbSubscribeKelompoks, dbSubscribeAgeCategories, dbSubscribeAttendanceLogs,
   dbGetEvents, dbSubscribeEvents, dbAddEvent, dbDeleteEvent,
-  dbGetFamilies, dbGetFamilyRelationships
+  dbGetFamilies, dbGetFamilyRelationships, dbSubscribeFamilies, dbSubscribeFamilyRelationships
 } from './supabase';
 
 // Absensi Components
@@ -90,7 +90,12 @@ const App: React.FC = () => {
   const [absensiMasterUrl, setAbsensiMasterUrl] = useState<string>(() => (localStorage.getItem('absensiMasterUrl') || '').trim());
   const [absensiLogUrl, setAbsensiLogUrl] = useState<string>(() => (localStorage.getItem('absensiLogUrl') || '').trim());
   const [webAccessStrings, setWebAccessStrings] = useState<string[]>(() => (localStorage.getItem('web_access') || 'bendahara').split(',').map(s => s.trim()));
-  const [currentApp, setCurrentApp] = useState<AppType>(() => (localStorage.getItem('currentApp') as AppType) || (localStorage.getItem('web_access')?.includes('absensi') && !localStorage.getItem('web_access')?.includes('bendahara') ? 'absensi' : 'bendahara'));
+  const [currentApp, setCurrentApp] = useState<AppType>(() => {
+    const hash = typeof window !== 'undefined' ? window.location.hash : '';
+    if (hash === '#/treasurer' || hash === '#/bendahara') return 'bendahara';
+    if (hash === '#/attendance' || hash === '#/absensi') return 'absensi';
+    return (localStorage.getItem('currentApp') as AppType) || (localStorage.getItem('web_access')?.includes('absensi') && !localStorage.getItem('web_access')?.includes('bendahara') ? 'absensi' : 'bendahara');
+  });
   
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [availableProjects, setAvailableProjects] = useState<ProjectMetadata[]>([]);
@@ -289,7 +294,7 @@ const App: React.FC = () => {
   });
   const [absensiFamilies, setAbsensiFamilies] = useState<Family[]>(() => {
     try {
-      const inst = localStorage.getItem('userInstansi') || 'default';
+      const inst = localStorage.getItem('instansi') || 'default';
       const cached = localStorage.getItem(`absensi_families_${inst}`);
       return cached ? JSON.parse(cached) : [];
     } catch {
@@ -298,7 +303,7 @@ const App: React.FC = () => {
   });
   const [absensiRelationships, setAbsensiRelationships] = useState<FamilyRelationship[]>(() => {
     try {
-      const inst = localStorage.getItem('userInstansi') || 'default';
+      const inst = localStorage.getItem('instansi') || 'default';
       const cached = localStorage.getItem(`absensi_relationships_${inst}`);
       return cached ? JSON.parse(cached) : [];
     } catch {
@@ -334,29 +339,52 @@ const App: React.FC = () => {
       const relationship = absensiRelationships.find(r => String(r.id) === String(m.relationship_id));
       
       // Compute parent/wali details from family members automatically!
-      let computedNamaOrtu = m.nama_ortu || '';
-      let computedNoHpOrtu = m.no_hp_ortu || '';
-      let computedPekerjaanOrtu = m.pekerjaan_ortu || '';
+      let computedNamaOrtu = '';
+      let computedNoHpOrtu = '';
+      let computedPekerjaanOrtu = '';
 
       if (m.family_id) {
         const familyMembers = rawMembers.filter(other => other.id !== m.id && other.family_id === m.family_id);
         
-        // Find Father (Ayah)
+        // Find Father (Ayah / Kepala Keluarga Laki-laki)
         const ayahMember = familyMembers.find(other => {
           const rel = absensiRelationships.find(r => String(r.id) === String(other.relationship_id));
-          return rel?.name?.toLowerCase() === 'ayah';
+          if (!rel) return false;
+          const is_wali_val = String(rel.is_wali);
+          const relNameLower = rel.name?.toLowerCase() || '';
+          return is_wali_val === '1' || 
+                 relNameLower.startsWith('1') || 
+                 relNameLower.includes('kepala keluarga (laki-laki)') || 
+                 relNameLower.includes('kepala keluarga (pria)') || 
+                 relNameLower === 'ayah' || 
+                 relNameLower === 'bapak';
         });
 
-        // Find Mother (Ibu)
+        // Find Mother (Ibu / Istri atau Kepala Keluarga Perempuan)
         const ibuMember = familyMembers.find(other => {
           const rel = absensiRelationships.find(r => String(r.id) === String(other.relationship_id));
-          return rel?.name?.toLowerCase() === 'ibu';
+          if (!rel) return false;
+          const is_wali_val = String(rel.is_wali);
+          const relNameLower = rel.name?.toLowerCase() || '';
+          return is_wali_val === '2' || 
+                 is_wali_val === '3' || 
+                 relNameLower.startsWith('3') || 
+                 relNameLower.startsWith('2') || 
+                 relNameLower.includes('istri') || 
+                 relNameLower.includes('kepala keluarga (perempuan)') || 
+                 relNameLower.includes('kepala keluarga (wanita)') || 
+                 relNameLower === 'ibu';
         });
 
-        // Find any guardian (is_wali === true)
+        // Find any guardian (is_wali is 1, 2, 3, or 6)
         const waliMember = familyMembers.find(other => {
           const rel = absensiRelationships.find(r => String(r.id) === String(other.relationship_id));
-          return rel?.is_wali;
+          if (!rel) return false;
+          const is_wali_val = String(rel.is_wali);
+          const relNameLower = rel.name?.toLowerCase() || '';
+          return ['1', '2', '3', '6'].includes(is_wali_val) || 
+                 relNameLower.startsWith('6') || 
+                 relNameLower.includes('wali');
         });
 
         const fatherName = ayahMember?.nama_lengkap || '';
@@ -374,10 +402,10 @@ const App: React.FC = () => {
         }
 
         // Parent phone number automatically from Father, Mother, or Guardian
-        computedNoHpOrtu = ayahMember?.no_hp_anggota || ibuMember?.no_hp_anggota || waliMember?.no_hp_anggota || m.no_hp_ortu || '';
+        computedNoHpOrtu = ayahMember?.no_hp_anggota || ibuMember?.no_hp_anggota || waliMember?.no_hp_anggota || '';
 
         // Parent occupation automatically from Father, Mother, or Guardian
-        computedPekerjaanOrtu = ayahMember?.pekerjaan || ibuMember?.pekerjaan || waliMember?.pekerjaan || m.pekerjaan_ortu || '';
+        computedPekerjaanOrtu = ayahMember?.pekerjaan || ibuMember?.pekerjaan || waliMember?.pekerjaan || '';
       }
 
       return {
@@ -389,10 +417,10 @@ const App: React.FC = () => {
         age_category_name: absensiAges.find(a => String(a.id) === String(m.age_category_id))?.name || 'Unknown',
         family_name: family?.nama_keluarga || 'Tidak Ada',
         relationship_name: relationship?.name || 'Belum Diatur',
-        is_wali: relationship?.is_wali || false,
-        nama_ortu: computedNamaOrtu || m.nama_ortu || '-',
-        no_hp_ortu: computedNoHpOrtu || m.no_hp_ortu || '-',
-        pekerjaan_ortu: computedPekerjaanOrtu || m.pekerjaan_ortu || '-',
+        is_wali: ['1', '2', '3', '6'].includes(String(relationship?.is_wali || '')),
+        nama_ortu: computedNamaOrtu || '-',
+        no_hp_ortu: computedNoHpOrtu || '-',
+        pekerjaan_ortu: computedPekerjaanOrtu || '-',
       };
     });
     Promise.resolve().then(() => {
@@ -530,6 +558,34 @@ const App: React.FC = () => {
     setToast({ show: true, msg, type });
     setTimeout(() => setToast(prev => ({ ...prev, show: false })), 3000);
   };
+
+  useEffect(() => {
+    // Define global NFC reader callback for native Android bridge
+    (window as any).onNfcRead = (uid: string) => {
+      console.log("RFID UID terdeteksi secara native: " + uid);
+      
+      // Dispatch custom event so active scanning components can react instantly
+      const event = new CustomEvent("nfc-read", { detail: { uid } });
+      window.dispatchEvent(event);
+      
+      // Play modern alert sound or notify user of successful read
+      showToast(`Kartu NFC/RFID Terbaca: ${uid}`, 'success');
+    };
+
+    // Log native NFC interface status
+    if ((window as any).AndroidNFC) {
+      try {
+        const status = (window as any).AndroidNFC.getStatus();
+        console.log("Status NFC Native Android: " + status);
+      } catch (e) {
+        console.warn("Failed to get native NFC status", e);
+      }
+    }
+
+    return () => {
+      delete (window as any).onNfcRead;
+    };
+  }, []);
 
   const openConfirm = (title: string, msg: string, confirmText: string, onConfirm: () => void, isDanger = false) => {
     setDialog({ show: true, title, msg, confirmText, onConfirm, isDanger, isSubmitting: false, isSuccess: false });
@@ -1085,7 +1141,7 @@ const App: React.FC = () => {
   const fetchAbsensiMaster = useCallback(async (isSilent = false) => {
     if (!isSilent) setIsAbsensiLoading(true);
     try {
-      const instansi = localStorage.getItem('userInstansi') || 'default';
+      const instansi = localStorage.getItem('instansi') || 'default';
       const [members, daerahs, desas, kelompoks, ages, events, families, relationships] = await Promise.all([
         dbGetMembers(),
         dbGetDaerahs(),
@@ -1130,7 +1186,7 @@ const App: React.FC = () => {
   const fetchAbsensiLogs = useCallback(async (isSilent = false) => {
     if (!isSilent) setIsAbsensiLoading(true);
     try {
-      const instansi = localStorage.getItem('userInstansi') || 'default';
+      const instansi = localStorage.getItem('instansi') || 'default';
       const membersCount = rawMembers.length || 100;
       const fetchLimit = Math.min(2500, Math.max(1000, membersCount * 12));
       const freshLogs = await dbGetAttendanceLogs(fetchLimit);
@@ -1212,15 +1268,54 @@ const App: React.FC = () => {
     setWebAccessStrings(accessList);
     setCurrentApp(defaultApp);
     localStorage.setItem('currentApp', defaultApp);
+    window.location.hash = defaultApp === 'bendahara' ? '#/treasurer' : '#/attendance';
     setIsLoggedIn(true);
   };
 
   const switchApp = (app: AppType) => {
     setCurrentApp(app);
     localStorage.setItem('currentApp', app);
+    window.location.hash = app === 'bendahara' ? '#/treasurer' : '#/attendance';
     setActiveTab('dashboard'); // Always go to dashboard when switching app
     showToast(`Berpindah ke Aplikasi ${app.toUpperCase()}`, "success");
   };
+
+  // Synchronize hash routing with current app state
+  useEffect(() => {
+    if (isLoggedIn) {
+      const expectedHash = currentApp === 'bendahara' ? '#/treasurer' : '#/attendance';
+      if (window.location.hash !== expectedHash) {
+        window.location.hash = expectedHash;
+      }
+    }
+  }, [isLoggedIn, currentApp]);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      if (!isLoggedIn) return;
+      const hash = window.location.hash;
+      if (hash === '#/treasurer' || hash === '#/bendahara') {
+        if (currentApp !== 'bendahara') {
+          setCurrentApp('bendahara');
+          localStorage.setItem('currentApp', 'bendahara');
+          setActiveTab('dashboard');
+          showToast("Berpindah ke Aplikasi BENDAHARA", "success");
+        }
+      } else if (hash === '#/attendance' || hash === '#/absensi') {
+        if (currentApp !== 'absensi') {
+          setCurrentApp('absensi');
+          localStorage.setItem('currentApp', 'absensi');
+          setActiveTab('dashboard');
+          showToast("Berpindah ke Aplikasi ABSENSI", "success");
+        }
+      }
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+    };
+  }, [isLoggedIn, currentApp]);
 
   useEffect(() => { 
     if (isLoggedIn) {
@@ -1241,19 +1336,18 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!isLoggedIn || currentApp !== 'absensi') return;
 
-    Promise.resolve().then(() => {
-      setIsAbsensiLoading(true);
-    });
-    let masterLoadedCount = 0;
-    const totalMasterToLoad = 6;
+    setIsAbsensiLoading(true);
 
-    const checkMasterReady = () => {
-      masterLoadedCount++;
-      if (masterLoadedCount >= totalMasterToLoad) {
+    // Atomic initial retrieval of all 8 master lists first
+    fetchAbsensiMaster(true)
+      .then(() => {
         setIsAbsensiLoading(false);
         setHasLoadedAbsensi(true);
-      }
-    };
+      })
+      .catch((err) => {
+        console.error("Failed to load initial absensi master lists:", err);
+        setIsAbsensiLoading(false);
+      });
 
     console.log("Registering cost-optimized real-time Snapshot Listeners for Absensi app...");
 
@@ -1261,17 +1355,14 @@ const App: React.FC = () => {
     const unsubMembers = dbSubscribeMembers((mList) => {
       setRawMembers(mList);
       localStorage.setItem(`absensi_raw_members_${instansi}`, JSON.stringify(mList));
-      checkMasterReady();
     }, (err) => {
       console.error("Real-time Members Sync Error:", err);
-      setIsAbsensiLoading(false);
     });
 
     // 2. Subscribe daerahs
     const unsubDaerahs = dbSubscribeDaerahs((daerahList) => {
       setAbsensiDaerahs(daerahList);
       localStorage.setItem(`absensi_daerahs_${instansi}`, JSON.stringify(daerahList));
-      checkMasterReady();
     }, (err) => {
       console.error("Real-time Daerahs Sync Error:", err);
     });
@@ -1280,7 +1371,6 @@ const App: React.FC = () => {
     const unsubDesas = dbSubscribeDesas((dList) => {
       setAbsensiDesas(dList);
       localStorage.setItem(`absensi_desas_${instansi}`, JSON.stringify(dList));
-      checkMasterReady();
     }, (err) => {
       console.error("Real-time Desas Sync Error:", err);
     });
@@ -1289,7 +1379,6 @@ const App: React.FC = () => {
     const unsubKelompoks = dbSubscribeKelompoks((kList) => {
       setAbsensiKelompoks(kList);
       localStorage.setItem(`absensi_kelompoks_${instansi}`, JSON.stringify(kList));
-      checkMasterReady();
     }, (err) => {
       console.error("Real-time Kelompoks Sync Error:", err);
     });
@@ -1298,7 +1387,6 @@ const App: React.FC = () => {
     const unsubAges = dbSubscribeAgeCategories((aList) => {
       setAbsensiAges(aList);
       localStorage.setItem(`absensi_ages_${instansi}`, JSON.stringify(aList));
-      checkMasterReady();
     }, (err) => {
       console.error("Real-time Ages Sync Error:", err);
     });
@@ -1307,9 +1395,24 @@ const App: React.FC = () => {
     const unsubEvents = dbSubscribeEvents((eList) => {
       setAbsensiEvents(eList);
       localStorage.setItem(`absensi_events_${instansi}`, JSON.stringify(eList));
-      checkMasterReady();
     }, (err) => {
       console.error("Real-time Events Sync Error:", err);
+    });
+
+    // 5c. Subscribe families
+    const unsubFamilies = dbSubscribeFamilies((famList) => {
+      setAbsensiFamilies(famList);
+      localStorage.setItem(`absensi_families_${instansi}`, JSON.stringify(famList));
+    }, (err) => {
+      console.error("Real-time Families Sync Error:", err);
+    });
+
+    // 5d. Subscribe family relationships
+    const unsubRelationships = dbSubscribeFamilyRelationships((relList) => {
+      setAbsensiRelationships(relList);
+      localStorage.setItem(`absensi_relationships_${instansi}`, JSON.stringify(relList));
+    }, (err) => {
+      console.error("Real-time Relationships Sync Error:", err);
     });
 
     // 6. Subscribe attendance logs with a dynamic and smart safety limit
@@ -1361,6 +1464,8 @@ const App: React.FC = () => {
       unsubKelompoks();
       unsubAges();
       unsubEvents();
+      unsubFamilies();
+      unsubRelationships();
       unsubLogs();
     };
   }, [isLoggedIn, currentApp, instansi]); 
