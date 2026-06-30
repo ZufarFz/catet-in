@@ -1,6 +1,7 @@
 
-import React, { useState } from 'react';
-import { LayoutGrid, Plus, Edit2, Trash2, Loader2, X, Save, AlertCircle, CheckCircle2, MapPin, Users, History, Info, CalendarDays } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { LayoutGrid, Plus, Edit2, Trash2, Loader2, X, Save, AlertCircle, CheckCircle2, MapPin, Users, History, Info, CalendarDays, ChevronDown } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { DesaData, KelompokData, AgeCategoryData, DaerahData, EventData, Family, FamilyRelationship } from '../../types';
 import { 
   dbAddDesa, dbDeleteDesa, dbAddKelompok, dbDeleteKelompok, 
@@ -43,6 +44,19 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
   appScriptMaster, canWrite, onRefresh, isLoading 
 }) => {
   const [activeType, setActiveType] = useState<GroupType>('age');
+  const [isOpenTypeDropdown, setIsOpenTypeDropdown] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpenTypeDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState<any | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -305,7 +319,7 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
         const relationshipToSave: FamilyRelationship = {
           id: generatedId,
           name: formData.name || '',
-          is_wali: !!formData.is_wali
+          is_wali: String(formData.is_wali || '4')
         };
         await dbAddFamilyRelationship(relationshipToSave);
         if (editingItem) {
@@ -323,6 +337,38 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
     } catch (err) {
       console.error(err);
       setMessage({ type: 'error', text: 'Gagal menyimpan data.' });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const applyRelationshipPresets = async () => {
+    if (!canWrite) return;
+    setIsSubmitting(true);
+    setMessage(null);
+    try {
+      const presets = [
+        { id: 'rel-1', name: 'Ayah', is_wali: '1' },
+        { id: 'rel-2', name: 'Ibu', is_wali: '3' },
+        { id: 'rel-3', name: 'Anak', is_wali: '4' },
+        { id: 'rel-4', name: 'Kakek', is_wali: '6' },
+        { id: 'rel-5', name: 'Nenek', is_wali: '6' },
+        { id: 'rel-6', name: 'Wali Lainnya', is_wali: '6' }
+      ];
+      
+      for (const preset of presets) {
+        await dbAddFamilyRelationship(preset);
+      }
+      
+      if (setRelationships) {
+        setRelationships(presets);
+      }
+      
+      setMessage({ type: 'success', text: 'Berhasil menerapkan Standar Hubungan Keluarga!' });
+      onRefresh();
+    } catch (err) {
+      console.error(err);
+      setMessage({ type: 'error', text: 'Gagal menerapkan Standar Hubungan Keluarga.' });
     } finally {
       setIsSubmitting(false);
     }
@@ -498,34 +544,74 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
       );
     }
     if (activeType === 'relationship') {
+      const standardCodes = [
+        { code: '1', title: '1 - Kepala Keluarga (Laki-laki)', desc: 'Wali Utama (Pria / Ayah)', is_wali: true },
+        { code: '2', title: '2 - Kepala Keluarga (Perempuan/Janda)', desc: 'Wali Utama (Wanita / Ibu)', is_wali: true },
+        { code: '3', title: '3 - Istri', desc: 'Wali Pendamping (Ibu)', is_wali: true },
+        { code: '4', title: '4 - Anak', desc: 'Anggota Keluarga biasa (Anak)', is_wali: false },
+        { code: '5', title: '5 - Anggota Keluarga Lain', desc: 'Anggota biasa (Famili Lain/Asisten)', is_wali: false },
+        { code: '6', title: '6 - Wali Lainnya', desc: 'Wali Khusus (Kakek/Paman/Bibi)', is_wali: true }
+      ];
+
+      const currentCode = String(formData.is_wali || '4');
+
       return (
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Nama Peranan / Hubungan Keluarga *</label>
+            <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Nama Peranan / Hubungan Keluarga (Tulis Bebas) *</label>
             <input
               required
               type="text"
               value={formData.name || ''}
               onChange={(e) => setFormData({...formData, name: e.target.value})}
               className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl font-bold text-xs text-slate-700 focus:border-violet-500 focus:bg-white outline-none transition-all"
-              placeholder="Contoh: Ayah, Ibu, Anak, Wali Lainnya..."
+              placeholder="Contoh: Ayah, Ibu, Anak, Abah, Mama, Wali..."
             />
           </div>
-          <div className="flex items-center space-x-3 bg-violet-50/30 p-3 rounded-xl border border-violet-100">
-            <input
-              type="checkbox"
-              id="is_wali"
-              checked={!!formData.is_wali}
-              onChange={(e) => setFormData({...formData, is_wali: e.target.checked})}
-              className="w-4 h-4 text-violet-600 border-slate-300 rounded focus:ring-violet-500 cursor-pointer"
-            />
-            <label htmlFor="is_wali" className="text-xs font-bold text-slate-700 select-none cursor-pointer">
-              Peranan ini bertindak sebagai Wali / Orang Tua
-            </label>
+
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Klasifikasi Peranan (Pilih 1 s/d 6) *</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {standardCodes.map((role) => {
+                const isSelected = currentCode === role.code;
+                return (
+                  <button
+                    type="button"
+                    key={role.code}
+                    onClick={() => {
+                      setFormData({
+                        ...formData,
+                        is_wali: role.code
+                      });
+                    }}
+                    className={`flex flex-col items-start p-3 rounded-xl border text-left transition-all relative overflow-hidden select-none ${
+                      isSelected 
+                        ? 'bg-violet-50 border-violet-300 ring-2 ring-violet-500/20' 
+                        : 'bg-slate-50/50 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                    }`}
+                  >
+                    <span className="text-xs font-black text-slate-800">Kode {role.code}</span>
+                    <span className="text-[9px] text-slate-400 font-bold mt-0.5 leading-none">{role.title}</span>
+                    <span className="text-[8px] text-slate-400 mt-1">{role.desc}</span>
+                    <div className="mt-2 flex items-center justify-between w-full">
+                      <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${role.is_wali ? 'bg-amber-100 text-amber-700 border border-amber-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
+                        {role.is_wali ? '👑 Wali' : 'Anggota'}
+                      </span>
+                      {isSelected && (
+                        <div className="w-1.5 h-1.5 bg-violet-600 rounded-full animate-pulse" />
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-          <p className="text-[10px] font-medium text-slate-400 leading-relaxed ml-1">
-            * Jika dicentang, nomor HP dan pekerjaan orang ini akan otomatis diambil sebagai data Orang Tua / Wali bagi anggota keluarga lainnya (seperti Anak).
-          </p>
+          
+          <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
+            <p className="text-[10px] font-bold text-slate-500 leading-relaxed">
+              💡 **Fungsionalitas:** Kolom `is_wali` akan menyimpan kode angka **{currentCode}** di database. Hubungan dengan kode **1, 2, 3, dan 6** otomatis dideteksi sebagai Orang Tua / Wali Utama bagi anggota keluarga lainnya.
+            </p>
+          </div>
         </div>
       );
     }
@@ -616,41 +702,97 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
         )}
       </div>
 
-       {/* Tabs */}
-       <div className="flex bg-white p-1 rounded-xl md:rounded-2xl border border-slate-100 shadow-xs w-full md:w-auto overflow-x-auto no-scrollbar gap-1 shrink-0">
-         {[
-           { id: 'age', label: 'Kategori Usia', icon: History, color: 'text-indigo-600', bg: 'bg-indigo-50/80', border: 'border-indigo-100/50', count: (ages || []).length },
-           { id: 'daerah', label: 'Daftar Daerah', icon: LayoutGrid, color: 'text-purple-600', bg: 'bg-purple-50/80', border: 'border-purple-100/50', count: (daerahs || []).length },
-           { id: 'desa', label: 'Daftar Desa', icon: MapPin, color: 'text-blue-600', bg: 'bg-blue-50/80', border: 'border-blue-100/50', count: (desas || []).length },
-           { id: 'kelompok', label: 'Daftar Kelompok', icon: Users, color: 'text-emerald-600', bg: 'bg-emerald-50/80', border: 'border-emerald-100/50', count: (kelompoks || []).length },
-           { id: 'event', label: 'Daftar Kegiatan', icon: CalendarDays, color: 'text-rose-600', bg: 'bg-rose-50/80', border: 'border-rose-100/50', count: (events || []).length },
-           { id: 'family', label: 'Data Keluarga / KK', icon: Users, color: 'text-amber-600', bg: 'bg-amber-50/80', border: 'border-amber-100/50', count: (families || []).length },
-           { id: 'relationship', label: 'Hubungan Keluarga', icon: LayoutGrid, color: 'text-violet-600', bg: 'bg-violet-50/80', border: 'border-violet-100/50', count: (relationships || []).length }
-         ].map(tab => (
-           <button
-             key={tab.id}
-             onClick={() => {
-               setActiveType(tab.id as GroupType);
-               setFormData({});
-               setEditingItem(null);
-               setMessage(null);
-             }}
-             className={`flex items-center justify-center space-x-1.5 px-3 py-2.5 md:px-5 md:py-3 rounded-lg md:rounded-xl transition-all flex-1 md:flex-initial select-none shrink-0 ${
-               activeType === tab.id 
-                 ? `${tab.bg} ${tab.color} border ${tab.border} font-bold shadow-xs scale-[1.02] md:scale-105` 
-                 : 'text-slate-400 hover:bg-slate-50 border border-transparent'
-             }`}
-           >
-             <tab.icon className="size-3.5 md:size-4 shrink-0" />
-             <span className="text-[9px] md:text-[10px] font-black uppercase tracking-wider whitespace-nowrap">{tab.label}</span>
-             <span className={`text-[8px] md:text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
-               activeType === tab.id ? 'bg-white/90 text-slate-800' : 'bg-slate-100 text-slate-500'
-             }`}>
-               {tab.count}
-             </span>
-           </button>
-         ))}
-       </div>
+       {/* Selection Dropdown */}
+       {(() => {
+         const groupTypes = [
+           { id: 'age', label: 'Kategori Usia', icon: History, color: 'text-indigo-600', bg: 'bg-indigo-50/80', border: 'border-indigo-100/50', count: (ages || []).length, desc: 'Kelompok umur/kategori usia jamaah' },
+           { id: 'daerah', label: 'Daftar Daerah', icon: LayoutGrid, color: 'text-purple-600', bg: 'bg-purple-50/80', border: 'border-purple-100/50', count: (daerahs || []).length, desc: 'Tingkat Daerah / Regional' },
+           { id: 'desa', label: 'Daftar Desa', icon: MapPin, color: 'text-blue-600', bg: 'bg-blue-50/80', border: 'border-blue-100/50', count: (desas || []).length, desc: 'Tingkat Desa / PC' },
+           { id: 'kelompok', label: 'Daftar Kelompok', icon: Users, color: 'text-emerald-600', bg: 'bg-emerald-50/80', border: 'border-emerald-100/50', count: (kelompoks || []).length, desc: 'Tingkat Kelompok / PAC' },
+           { id: 'event', label: 'Daftar Kegiatan', icon: CalendarDays, color: 'text-rose-600', bg: 'bg-rose-50/80', border: 'border-rose-100/50', count: (events || []).length, desc: 'Daftar agenda/kegiatan/acara' },
+           { id: 'family', label: 'Data Keluarga / KK', icon: Users, color: 'text-amber-600', bg: 'bg-amber-50/80', border: 'border-amber-100/50', count: (families || []).length, desc: 'Database Kartu Keluarga' },
+           { id: 'relationship', label: 'Hubungan Keluarga', icon: LayoutGrid, color: 'text-violet-600', bg: 'bg-violet-50/80', border: 'border-violet-100/50', count: (relationships || []).length, desc: 'Peranan / status dalam keluarga' }
+         ];
+
+         const currentTab = groupTypes.find(t => t.id === activeType) || groupTypes[0];
+         const ActiveIcon = currentTab.icon;
+
+         return (
+           <div className="relative z-50 w-full sm:w-80 shrink-0" ref={dropdownRef}>
+             <button
+               onClick={() => setIsOpenTypeDropdown(!isOpenTypeDropdown)}
+               className={`w-full flex items-center justify-between px-4 py-3 bg-white border-2 rounded-2xl shadow-xs transition-all outline-none select-none ${
+                 isOpenTypeDropdown ? 'border-emerald-500 ring-4 ring-emerald-500/5' : 'border-slate-100 hover:border-slate-200'
+               }`}
+             >
+               <div className="flex items-center gap-3 overflow-hidden">
+                 <div className={`p-2 rounded-xl shrink-0 ${currentTab.bg} ${currentTab.color}`}>
+                   <ActiveIcon className="size-4 shrink-0" />
+                 </div>
+                 <div className="flex flex-col items-start leading-none text-left">
+                   <span className="text-[8px] font-black uppercase text-slate-400 tracking-wider">Pilih Konfigurasi</span>
+                   <span className="text-xs font-black text-slate-800 uppercase tracking-tight mt-0.5">{currentTab.label}</span>
+                 </div>
+               </div>
+               <div className="flex items-center gap-2">
+                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${currentTab.bg} ${currentTab.color}`}>
+                   {currentTab.count}
+                 </span>
+                 <ChevronDown className={`text-slate-400 transition-transform duration-300 size-4 ${isOpenTypeDropdown ? 'rotate-180 text-emerald-500' : ''}`} />
+               </div>
+             </button>
+
+             <AnimatePresence>
+               {isOpenTypeDropdown && (
+                 <motion.div
+                   initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                   animate={{ opacity: 1, y: 0, scale: 1 }}
+                   exit={{ opacity: 0, y: 8, scale: 0.95 }}
+                   transition={{ duration: 0.15 }}
+                   className="absolute left-0 right-0 mt-2 bg-white border-2 border-slate-100 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[350px] overflow-y-auto no-scrollbar"
+                 >
+                   <div className="p-2 space-y-1">
+                     {groupTypes.map((tab) => {
+                       const TabIcon = tab.icon;
+                       const isSelected = activeType === tab.id;
+                       return (
+                         <button
+                           key={tab.id}
+                           onClick={() => {
+                             setActiveType(tab.id as GroupType);
+                             setFormData({});
+                             setEditingItem(null);
+                             setMessage(null);
+                             setIsOpenTypeDropdown(false);
+                           }}
+                           className={`w-full flex items-center justify-between p-2.5 rounded-xl transition-all select-none text-left ${
+                             isSelected 
+                               ? `${tab.bg} ${tab.color} font-bold` 
+                               : 'hover:bg-slate-50 text-slate-600'
+                           }`}
+                         >
+                           <div className="flex items-center gap-3 overflow-hidden">
+                             <div className={`p-2 rounded-lg shrink-0 ${isSelected ? 'bg-white shadow-xs' : 'bg-slate-100 text-slate-400'}`}>
+                               <TabIcon className="size-4 shrink-0" />
+                             </div>
+                             <div className="flex flex-col">
+                               <span className="text-xs font-black uppercase tracking-tight">{tab.label}</span>
+                               <span className="text-[9px] text-slate-400 font-medium leading-none mt-0.5">{tab.desc}</span>
+                             </div>
+                           </div>
+                           <span className={`text-[9px] font-black px-2 py-0.5 rounded-full ${isSelected ? 'bg-white/95 text-slate-800' : 'bg-slate-100 text-slate-500'}`}>
+                             {tab.count}
+                           </span>
+                         </button>
+                       );
+                     })}
+                   </div>
+                 </motion.div>
+               )}
+             </AnimatePresence>
+           </div>
+         );
+       })()}
 
       {/* Message */}
       {message && (
@@ -662,7 +804,29 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
 
       {/* Content */}
       <div className="flex-1 bg-white rounded-2xl md:rounded-[2.5rem] border border-slate-100 shadow-xs flex flex-col overflow-hidden">
-        <div className="overflow-y-auto grow p-3 md:p-8 no-scrollbar">
+        <div className="overflow-y-auto grow p-3 md:p-8 pb-32 no-scrollbar">
+          {activeType === 'relationship' && canWrite && (
+            <div className="mb-6 p-4 md:p-5 bg-gradient-to-r from-violet-50/55 to-indigo-50/55 border border-violet-100 rounded-2xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shadow-xs">
+              <div className="space-y-1">
+                <h3 className="text-xs md:text-sm font-black text-violet-800 uppercase tracking-wider flex items-center gap-2">
+                  <span>✨ Standarisasi Klasifikasi Peranan (1-6)</span>
+                </h3>
+                <p className="text-[10px] md:text-xs text-slate-500 font-bold">
+                  Dapatkan otomatisasi deteksi Orang Tua (Ayah &amp; Ibu), nomor HP wali utama, dan pekerjaan secara real-time dari relasi kartu keluarga Anda.
+                </p>
+                <div className="text-[9px] text-violet-600/80 font-semibold leading-relaxed">
+                  Skema: 1 - Kepala Keluarga (Pria), 2 - Kepala Keluarga (Wanita), 3 - Istri, 4 - Anak, 5 - Anggota Keluarga Lain, 6 - Wali Lainnya.
+                </div>
+              </div>
+              <button
+                disabled={isSubmitting}
+                onClick={applyRelationshipPresets}
+                className="self-start sm:self-center bg-violet-600 hover:bg-violet-700 text-white font-extrabold text-[10px] uppercase tracking-wider px-4 py-2.5 rounded-xl transition-all shadow-md shadow-violet-200 shrink-0"
+              >
+                {isSubmitting ? 'Memproses...' : 'Terapkan Preset'}
+              </button>
+            </div>
+          )}
           {isLoading ? (
             <div className="flex flex-col items-center justify-center h-64 space-y-4">
               <Loader2 className="animate-spin text-indigo-500" size={40} />
@@ -768,9 +932,23 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
                             </div>
                           ) : isRelationship ? (
                             <div className="flex items-center gap-1.5 text-[9px] md:text-[10px] text-slate-500 leading-none truncate flex-wrap">
-                              <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${item.is_wali ? 'bg-amber-100 text-amber-700 border border-amber-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
-                                {item.is_wali ? '👑 Wali' : 'Anggota'}
-                              </span>
+                              {(() => {
+                                const isWali = ['1', '2', '3', '6'].includes(String(item.is_wali || ''));
+                                const codeLabel = {
+                                  '1': '1 - KK (Laki-laki)',
+                                  '2': '2 - KK (Perempuan)',
+                                  '3': '3 - Istri',
+                                  '4': '4 - Anak',
+                                  '5': '5 - Famili Lain',
+                                  '6': '6 - Wali Lain'
+                                }[String(item.is_wali || '4')] || '4 - Anak';
+                                
+                                return (
+                                  <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${isWali ? 'bg-amber-100 text-amber-700 border border-amber-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
+                                    {isWali ? `👑 Wali (${codeLabel})` : `Anggota (${codeLabel})`}
+                                  </span>
+                                );
+                              })()}
                             </div>
                           ) : (
                             <div className="flex items-center gap-1.5 text-[9px] md:text-[10px] text-slate-500 leading-none truncate flex-wrap">
