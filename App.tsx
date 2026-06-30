@@ -417,7 +417,11 @@ const App: React.FC = () => {
         age_category_name: absensiAges.find(a => String(a.id) === String(m.age_category_id))?.name || 'Unknown',
         family_name: family?.nama_keluarga || 'Tidak Ada',
         relationship_name: relationship?.name || 'Belum Diatur',
+<<<<<<< HEAD
         is_wali: ['1', '2', '3', '6'].includes(String(relationship?.is_wali || '')),
+=======
+        is_wali: relationship?.is_wali || false,
+>>>>>>> 86e1b1ee1841b1700574577de6a6d9083aeb4d03
         nama_ortu: computedNamaOrtu || '-',
         no_hp_ortu: computedNoHpOrtu || '-',
         pekerjaan_ortu: computedPekerjaanOrtu || '-',

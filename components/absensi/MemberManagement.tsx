@@ -137,6 +137,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
       console.error("Failed to load registration draft", e);
     }
     return {
+<<<<<<< HEAD
       nama_lengkap: "",
       daerah_id: "",
       desa_id: "",
@@ -155,6 +156,25 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
       relationship_id: "",
       pekerjaan: "",
       status: "",
+=======
+      nama_lengkap: '',
+      daerah_id: '',
+      desa_id: '',
+      kelompok_id: '',
+      age_category_id: '',
+      tempat_lahir: '',
+      tanggal_lahir: '',
+      no_hp_anggota: '',
+      jenis_kelamin: 'Laki-laki',
+      alamat_rumah: '',
+      pendidikan: '',
+      kelas: '',
+      rfid: '',
+      rfid_ktp: '',
+      family_id: '',
+      relationship_id: '',
+      pekerjaan: ''
+>>>>>>> 86e1b1ee1841b1700574577de6a6d9083aeb4d03
     };
   });
 
@@ -172,6 +192,32 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
       const customEvent = e as CustomEvent<{ uid: string }>;
       const uid = customEvent.detail?.uid;
       if (!uid) return;
+<<<<<<< HEAD
+=======
+
+      if (isScanningRfid) {
+        setFormData(prev => ({ ...prev, rfid: uid }));
+        setIsScanningRfid(false);
+      } else if (isScanningRfidKtp) {
+        setFormData(prev => ({ ...prev, rfid_ktp: uid }));
+        setIsScanningRfidKtp(false);
+      }
+    };
+
+    window.addEventListener('nfc-read', handleNfcRead);
+    return () => {
+      window.removeEventListener('nfc-read', handleNfcRead);
+    };
+  }, [isScanningRfid, isScanningRfidKtp]);
+
+  const filteredMembers = useMemo(() => {
+    return members.filter(m => {
+      const matchesSearch = (m.nama_lengkap || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
+                            (m.id || '').toLowerCase().includes(searchTerm.toLowerCase());
+      
+      const matchedDesaDoc = desas.find(d => String(d.id) === String(m.desa_id));
+      const finalDaerahId = m.daerah_id || matchedDesaDoc?.daerah_id || '';
+>>>>>>> 86e1b1ee1841b1700574577de6a6d9083aeb4d03
 
       if (isScanningRfid) {
         setFormData((prev) => ({ ...prev, rfid: uid }));
@@ -404,6 +450,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
   }, [members]);
 
   const hasDraftContent = useMemo(() => {
+<<<<<<< HEAD
     return (
       editingMember === null &&
       (!!formData.nama_lengkap ||
@@ -413,6 +460,16 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
         !!formData.alamat_rumah ||
         !!formData.pendidikan ||
         !!formData.family_id)
+=======
+    return editingMember === null && (
+      !!formData.nama_lengkap || 
+      !!formData.tempat_lahir || 
+      !!formData.no_hp_anggota || 
+      !!formData.rfid || 
+      !!formData.alamat_rumah ||
+      !!formData.pendidikan ||
+      !!formData.family_id
+>>>>>>> 86e1b1ee1841b1700574577de6a6d9083aeb4d03
     );
   }, [formData, editingMember]);
 
@@ -568,6 +625,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
           console.error(e);
         }
         setFormData({
+<<<<<<< HEAD
           nama_lengkap: "",
           daerah_id: "",
           desa_id: "",
@@ -586,6 +644,12 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
           relationship_id: "",
           pekerjaan: "",
           status: "",
+=======
+          nama_lengkap: '', daerah_id: '', desa_id: '', kelompok_id: '', age_category_id: '',
+          tempat_lahir: '', tanggal_lahir: '', no_hp_anggota: '', jenis_kelamin: 'Laki-laki',
+          alamat_rumah: '', pendidikan: '', kelas: '',
+          rfid: '', rfid_ktp: '', family_id: '', relationship_id: '', pekerjaan: ''
+>>>>>>> 86e1b1ee1841b1700574577de6a6d9083aeb4d03
         });
       }
 
@@ -1278,6 +1342,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                         setFormData(JSON.parse(savedDraft));
                       } else {
                         setFormData({
+<<<<<<< HEAD
                           nama_lengkap: "",
                           daerah_id: "",
                           desa_id: "",
@@ -1296,6 +1361,12 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                           relationship_id: "",
                           pekerjaan: "",
                           status: "",
+=======
+                          nama_lengkap: '', daerah_id: '', desa_id: '', kelompok_id: '', age_category_id: '',
+                          tempat_lahir: '', tanggal_lahir: '', no_hp_anggota: '', jenis_kelamin: 'Laki-laki',
+                          alamat_rumah: '', pendidikan: '', kelas: '',
+                          rfid: '', rfid_ktp: '', family_id: '', relationship_id: '', pekerjaan: ''
+>>>>>>> 86e1b1ee1841b1700574577de6a6d9083aeb4d03
                         });
                       }
                     } catch (e) {
@@ -2512,6 +2583,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                     <div className="col-span-1 md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
                       {/* RFID Card */}
                       <div className="space-y-1 md:space-y-2">
+<<<<<<< HEAD
                         <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
                           Registrasi ID Card RFID / NFC
                         </label>
@@ -2615,10 +2687,88 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                             </span>
                           </button>
                         )}
+=======
+                         <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Registrasi ID Card RFID / NFC</label>
+                         {formData.rfid ? (
+                           <div className="flex items-center justify-between p-3 bg-emerald-50 border border-emerald-200 rounded-xl md:rounded-2xl">
+                             <div className="flex items-center gap-2.5">
+                               <div className="w-6 h-6 rounded-lg bg-emerald-500 text-white flex items-center justify-center shadow-sm">
+                                 <CheckCircle2 size={12} />
+                               </div>
+                               <div>
+                                 <p className="text-[10px] font-black text-emerald-800 uppercase tracking-wider">ID Card Terhubung</p>
+                                 <p className="text-[9px] text-emerald-600 font-bold uppercase tracking-tight font-mono">{formData.rfid}</p>
+                               </div>
+                             </div>
+                             <button
+                               type="button"
+                               onClick={() => setFormData(prev => ({ ...prev, rfid: '' }))}
+                               className="text-[10px] font-black text-rose-500 hover:text-rose-700 uppercase tracking-widest px-2.5 py-1 bg-white border border-rose-100 rounded-lg hover:shadow-sm transition-all"
+                             >
+                               Hapus
+                             </button>
+                           </div>
+                         ) : isScanningRfid ? (
+                           <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl md:rounded-2xl space-y-2.5">
+                             <div className="flex items-center justify-between">
+                               <div className="flex items-center gap-2">
+                                 <span className="relative flex h-2 w-2">
+                                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                                   <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                                 </span>
+                                 <p className="text-[10px] font-black text-blue-800 uppercase tracking-wider">Menunggu Tap ID Card...</p>
+                               </div>
+                               <button
+                                 type="button"
+                                 onClick={() => setIsScanningRfid(false)}
+                                 className="text-[9px] font-black text-slate-400 hover:text-slate-600 uppercase tracking-widest"
+                                >
+                                 Batal
+                               </button>
+                             </div>
+                             <div className="relative">
+                               <CreditCard className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400 animate-pulse" size={12} />
+                               <input 
+                                 type="text"
+                                 autoFocus
+                                 onKeyDown={e => {
+                                   if (e.key === 'Enter') {
+                                     e.preventDefault();
+                                     e.stopPropagation();
+                                     const val = (e.target as HTMLInputElement).value.trim();
+                                     if (val) {
+                                       setFormData(prev => ({ ...prev, rfid: val }));
+                                       setIsScanningRfid(false);
+                                     }
+                                   }
+                                 }}
+                                 className="w-full pl-9 pr-3 py-2 bg-white border border-blue-300 rounded-xl outline-none focus:border-blue-500 transition-all text-xs font-bold text-slate-800"
+                                 placeholder="Tap kartu ke Reader..."
+                               />
+                             </div>
+                             <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider leading-relaxed text-center">
+                               Dekatkan kartu RFID pada reader. Kode akan otomatis terinput.
+                             </p>
+                           </div>
+                         ) : (
+                           <button
+                             type="button"
+                             onClick={() => {
+                               setIsScanningRfid(true);
+                               setIsScanningRfidKtp(false);
+                             }}
+                             className="w-full flex items-center justify-center gap-2 py-3.5 bg-slate-50 border border-dashed border-slate-300 hover:border-blue-400 hover:bg-blue-50/20 rounded-xl md:rounded-2xl transition-all group"
+                           >
+                             <CreditCard className="text-slate-400 group-hover:text-blue-500 transition-colors" size={14} />
+                             <span className="text-xs font-black text-slate-500 group-hover:text-blue-600 uppercase tracking-widest">Daftarkan ID Card</span>
+                           </button>
+                         )}
+>>>>>>> 86e1b1ee1841b1700574577de6a6d9083aeb4d03
                       </div>
 
                       {/* E-KTP NFC Card */}
                       <div className="space-y-1 md:space-y-2">
+<<<<<<< HEAD
                         <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
                           Registrasi E-KTP / NFC Card
                         </label>
@@ -2725,6 +2875,83 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                             </span>
                           </button>
                         )}
+=======
+                         <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Registrasi E-KTP / NFC Card</label>
+                         {formData.rfid_ktp ? (
+                           <div className="flex items-center justify-between p-3 bg-violet-50 border border-violet-200 rounded-xl md:rounded-2xl">
+                             <div className="flex items-center gap-2.5">
+                               <div className="w-6 h-6 rounded-lg bg-violet-500 text-white flex items-center justify-center shadow-sm">
+                                 <CheckCircle2 size={12} />
+                               </div>
+                               <div>
+                                 <p className="text-[10px] font-black text-violet-800 uppercase tracking-wider">E-KTP Terhubung</p>
+                                 <p className="text-[9px] text-violet-600 font-bold uppercase tracking-tight font-mono">{formData.rfid_ktp}</p>
+                               </div>
+                             </div>
+                             <button
+                               type="button"
+                               onClick={() => setFormData(prev => ({ ...prev, rfid_ktp: '' }))}
+                               className="text-[10px] font-black text-rose-500 hover:text-rose-700 uppercase tracking-widest px-2.5 py-1 bg-white border border-rose-100 rounded-lg hover:shadow-sm transition-all"
+                             >
+                               Hapus
+                             </button>
+                           </div>
+                         ) : isScanningRfidKtp ? (
+                           <div className="p-3 bg-violet-50 border border-violet-200 rounded-xl md:rounded-2xl space-y-2.5">
+                             <div className="flex items-center justify-between">
+                               <div className="flex items-center gap-2">
+                                 <span className="relative flex h-2 w-2">
+                                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75"></span>
+                                   <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500"></span>
+                                 </span>
+                                 <p className="text-[10px] font-black text-violet-800 uppercase tracking-wider">Menunggu Tap E-KTP...</p>
+                               </div>
+                               <button
+                                 type="button"
+                                 onClick={() => setIsScanningRfidKtp(false)}
+                                 className="text-[9px] font-black text-slate-400 hover:text-slate-600 uppercase tracking-widest"
+                               >
+                                 Batal
+                               </button>
+                             </div>
+                             <div className="relative">
+                               <CreditCard className="absolute left-3 top-1/2 -translate-y-1/2 text-violet-400 animate-pulse" size={12} />
+                               <input 
+                                 type="text"
+                                 autoFocus
+                                 onKeyDown={e => {
+                                   if (e.key === 'Enter') {
+                                     e.preventDefault();
+                                     e.stopPropagation();
+                                     const val = (e.target as HTMLInputElement).value.trim();
+                                     if (val) {
+                                       setFormData(prev => ({ ...prev, rfid_ktp: val }));
+                                       setIsScanningRfidKtp(false);
+                                     }
+                                   }
+                                 }}
+                                 className="w-full pl-9 pr-3 py-2 bg-white border border-violet-300 rounded-xl outline-none focus:border-violet-500 transition-all text-xs font-bold text-slate-800"
+                                 placeholder="Tap E-KTP ke Reader..."
+                               />
+                             </div>
+                             <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider leading-relaxed text-center">
+                               Dekatkan E-KTP pada reader. Kode NFC akan otomatis terinput.
+                             </p>
+                           </div>
+                         ) : (
+                           <button
+                             type="button"
+                             onClick={() => {
+                               setIsScanningRfidKtp(true);
+                               setIsScanningRfid(false);
+                             }}
+                             className="w-full flex items-center justify-center gap-2 py-3.5 bg-slate-50 border border-dashed border-slate-300 hover:border-violet-400 hover:bg-violet-50/20 rounded-xl md:rounded-2xl transition-all group"
+                           >
+                             <CreditCard className="text-slate-400 group-hover:text-violet-500 transition-colors" size={14} />
+                             <span className="text-xs font-black text-slate-500 group-hover:text-violet-600 uppercase tracking-widest">Daftarkan E-KTP (NFC)</span>
+                           </button>
+                         )}
+>>>>>>> 86e1b1ee1841b1700574577de6a6d9083aeb4d03
                       </div>
                     </div>
                   </div>
@@ -3076,6 +3303,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                             console.error(e);
                           }
                           setFormData({
+<<<<<<< HEAD
                             nama_lengkap: "",
                             daerah_id: "",
                             desa_id: "",
@@ -3094,6 +3322,12 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                             relationship_id: "",
                             pekerjaan: "",
                             status: "",
+=======
+                            nama_lengkap: '', daerah_id: '', desa_id: '', kelompok_id: '', age_category_id: '',
+                            tempat_lahir: '', tanggal_lahir: '', no_hp_anggota: '', jenis_kelamin: 'Laki-laki',
+                            alamat_rumah: '', pendidikan: '', kelas: '',
+                            rfid: '', rfid_ktp: '', family_id: '', relationship_id: '', pekerjaan: ''
+>>>>>>> 86e1b1ee1841b1700574577de6a6d9083aeb4d03
                           });
                         }
                       }}
@@ -3749,6 +3983,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                 setFormData(JSON.parse(savedDraft));
               } else {
                 setFormData({
+<<<<<<< HEAD
                   nama_lengkap: "",
                   daerah_id: "",
                   desa_id: "",
@@ -3767,6 +4002,12 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                   relationship_id: "",
                   pekerjaan: "",
                   status: "",
+=======
+                  nama_lengkap: '', daerah_id: '', desa_id: '', kelompok_id: '', age_category_id: '',
+                  tempat_lahir: '', tanggal_lahir: '', no_hp_anggota: '', jenis_kelamin: 'Laki-laki',
+                  alamat_rumah: '', pendidikan: '', kelas: '',
+                  rfid: '', rfid_ktp: '', family_id: '', relationship_id: '', pekerjaan: ''
+>>>>>>> 86e1b1ee1841b1700574577de6a6d9083aeb4d03
                 });
               }
             } catch (e) {
