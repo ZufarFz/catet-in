@@ -3,7 +3,7 @@ import {
   Copy, Globe, ShieldCheck, CheckCircle2, FileSpreadsheet, ChevronUp, ChevronDown, Check,
   Database, Key, Save, AlertCircle, Sparkles, HeartPulse, RefreshCw, Layers
 } from 'lucide-react';
-import { saveCentralConfig } from '../../supabase';
+import { saveCentralConfig, getActiveDb } from '../../supabase';
 
 interface SetupGuideProps {
   onLogout?: () => void;
@@ -228,15 +228,17 @@ function recalculateKasHarian(sheet) {
 }`;
 
 const SUPABASE_CENTRAL_SQL = `-- =========================================================================
--- 1. CENTRAL DATABASE TABLES (Run this on your Central Supabase Project)
+-- UNIFIED DATABASE SCHEMA (Single-DB Multi-Tenancy via Row Level Security)
 -- =========================================================================
 
--- Create Users Table (Central Master Accounts)
+-- 1. UTILS & EXTENSIONS
+create extension if not exists pgcrypto;
+
+-- 2. CENTRAL TABLES
 create table if not exists public.users (
   id text primary key, -- mapped from user auth UID
   email text,
   username text,
-  password text, -- kept for legacy reference
   full_name text,
   role text default 'Pending',
   original_role text,
@@ -246,52 +248,91 @@ create table if not exists public.users (
   created_at timestamp with time zone default timezone('utc'::text, now())
 );
 
--- Enable RLS on central users
-alter table public.users enable row level security;
+-- Security Definer function to resolve username to email securely without exposing users table to select using(true)
+create or replace function public.resolve_username_to_email(p_username text)
+returns text as $$
+begin
+  return (select email from public.users where lower(username) = lower(p_username) limit 1);
+end;
+$$ language plpgsql security definer;
 
--- Drop any stale policies on users to prevent conflicts
-drop policy if exists "Allow public login checks" on public.users;
-drop policy if exists "Allow self registration insert" on public.users;
-drop policy if exists "Allow user self modifications" on public.users;
-drop policy if exists "Allow login email lookup" on public.users;
-drop policy if exists "Allow users to insert own registration" on public.users;
-drop policy if exists "Allow users to edit own metadata" on public.users;
-drop policy if exists "Allow superadmin full control on users" on public.users;
-
--- Helper function to check if the user is a Superadmin on Central DB
-create or replace function public.is_superadmin()
+create or replace function public.is_portal_admin()
 returns boolean as $$
 begin
   return exists (
     select 1 from public.users 
-    where id = auth.uid()::text and role = 'Superadmin'
-  ) or (auth.jwt() ->> 'email' = 'superadmin@catetin.com');
+    where id = auth.uid()::text and role = 'PortalMaster'
+  ) or (auth.jwt() ->> 'email' = 'portal_master@catetin.com');
 end;
 $$ language plpgsql security definer;
 
--- Create secure, strict RLS policies for Central Users
-create policy "Allow login email lookup" on public.users for select using (true);
-create policy "Allow users to insert own registration" on public.users for insert with check (auth.uid()::text = id);
-create policy "Allow users to edit own metadata" on public.users for update using (auth.uid()::text = id or public.is_superadmin()) with check (auth.uid()::text = id or public.is_superadmin());
-create policy "Allow superadmin full control on users" on public.users for all using (public.is_superadmin());
+-- Helper functions for RLS multi-tenancy
+create or replace function public.get_user_instansi()
+returns text as $$
+begin
+  return coalesce((select instansi from public.users where id = auth.uid()::text), '');
+end;
+$$ language plpgsql security definer;
 
--- Create Trigger to automatically capture Supabase Auth Sign Up into public.users
+create or replace function public.get_user_role()
+returns text as $$
+begin
+  return coalesce((select role from public.users where id = auth.uid()::text), '');
+end;
+$$ language plpgsql security definer;
+
+alter table public.users enable row level security;
+drop policy if exists "Allow select authenticated users" on public.users;
+drop policy if exists "Allow select to everyone" on public.users;
+drop policy if exists "Allow users to insert own registration" on public.users;
+drop policy if exists "Allow users to edit own metadata" on public.users;
+drop policy if exists "Allow portal admin full control on users" on public.users;
+
+create policy "Allow select authenticated users" on public.users for select to authenticated using (true);
+create policy "Allow users to insert own registration" on public.users for insert to authenticated with check (auth.uid()::text = id);
+create policy "Allow users to edit own metadata" on public.users for update to authenticated using (auth.uid()::text = id or public.is_portal_admin()) with check (auth.uid()::text = id or public.is_portal_admin());
+create policy "Allow portal admin full control on users" on public.users for all to authenticated using (public.is_portal_admin());
+
+-- Trigger to automatically capture Supabase Auth Sign Up into public.users
 create or replace function public.handle_new_user()
 returns trigger as $$
+declare
+  is_first_master boolean;
+  assigned_role text;
+  assigned_status text;
 begin
+  -- Check if there is already a PortalMaster in the system
+  select not exists (select 1 from public.users where role = 'PortalMaster') into is_first_master;
+  
+  if is_first_master then
+    assigned_role := 'PortalMaster';
+    assigned_status := 'Active';
+  else
+    assigned_role := coalesce(new.raw_user_meta_data->>'original_role', 'Pending');
+    if assigned_role = 'PortalMaster' then
+      -- Prevent self-promotion to PortalMaster if one already exists
+      assigned_role := 'Pending';
+    end if;
+    assigned_status := 'Pending';
+  end if;
+
   insert into public.users (id, email, username, full_name, role, original_role, instansi, web_access, status, created_at)
   values (
     new.id,
     new.email,
     coalesce(new.raw_user_meta_data->>'username', split_part(new.email, '@', 1)),
     coalesce(new.raw_user_meta_data->>'full_name', ''),
-    'Pending',
-    coalesce(new.raw_user_meta_data->>'original_role', 'Viewer'),
-    coalesce(new.raw_user_meta_data->>'instansi', ''),
+    assigned_role,
+    assigned_role,
+    coalesce(new.raw_user_meta_data->>'instansi', 'Catet-In (Master)'),
     coalesce(new.raw_user_meta_data->>'web_access', 'bendahara,absensi'),
-    'Pending',
+    assigned_status,
     now()
-  );
+  )
+  on conflict (id) do update set
+    role = excluded.role,
+    original_role = excluded.original_role,
+    status = excluded.status;
   return new;
 end;
 $$ language plpgsql security definer;
@@ -301,176 +342,24 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
 
-
 -- Create Instansi Table (Operational Databases Registry)
 create table if not exists public.instansi (
   id text primary key, -- key code (e.g. 'i1')
   instansi_name text not null,
-  supabase_url text not null,
-  supabase_anon_key text not null,
   appscriptbackuptreasurerweb text
 );
 
 alter table public.instansi enable row level security;
-drop policy if exists "Allow public load in login" on public.instansi;
-drop policy if exists "Allow public modify instansi" on public.instansi;
 drop policy if exists "Allow logins to load config" on public.instansi;
-drop policy if exists "Restrict instansi edits to Superadmin" on public.instansi;
+drop policy if exists "Restrict instansi edits to Portal Admin" on public.instansi;
 
 create policy "Allow logins to load config" on public.instansi for select using (true);
-create policy "Restrict instansi edits to Superadmin" on public.instansi for all using (public.is_superadmin()) with check (public.is_superadmin());
-`;
-
-const SUPABASE_OPERATIONAL_SQL = `-- =========================================================================
--- !!! PENGATURAN KUNCI KEAMANAN (ANON KEY INSTANSI BARU) !!!
--- GANTI 'ISI_DENGAN_SUPABASE_ANON_KEY_INSTANSI_ANDA_DISINI' DI BAWAH INI
--- DENGAN ANON PUBLIC KEY DARI INSTANSI SUPABASE CABANG YANG BARU DITAMBAHKAN!
--- =========================================================================
-create table if not exists public.operational_config (
-  key text primary key,
-  value text
-);
-alter table public.operational_config enable row level security;
-drop policy if exists "Block reading secure config" on public.operational_config;
-create policy "Block reading secure config" on public.operational_config for select using (false);
-
--- SEED SYNC_TOKEN / ANON KEY INSTANSI BARU
--- Gantilah parameter kedua di bawah ini dengan ANON KEY Supabase Instansi Baru Anda:
-insert into public.operational_config (key, value)
-values ('sync_token', 'ISI_DENGAN_SUPABASE_ANON_KEY_INSTANSI_ANDA_DISINI')
-on conflict (key) do update set value = excluded.value;
+create policy "Restrict instansi edits to Portal Admin" on public.instansi for all to authenticated using (public.is_portal_admin()) with check (public.is_portal_admin());
 
 
--- =========================================================================
--- 2. OPERATIONAL DATABASE TABLES (Struktur Data Penunjang Instansi Cabang Baru)
--- =========================================================================
+-- 3. OPERATIONAL MULTI-TENANT TABLES
 
--- users local cache table
-create table if not exists public.users (
-  id text primary key,
-  email text,
-  full_name text,
-  role text,
-  original_role text,
-  status text,
-  instansi text,
-  web_access text,
-  created_at text,
-  active_session_token text,
-  session_expires_at text
-);
-
--- Retrofit old table versions if any
-alter table public.users add column if not exists active_session_token text;
-alter table public.users add column if not exists session_expires_at text;
-
-alter table public.users enable row level security;
-drop policy if exists "Allow session users" on public.users;
-drop policy if exists "Allow dynamic user read" on public.users;
-drop policy if exists "Allow updates only for active sessions" on public.users;
-drop policy if exists "Allow updates for self or master sync" on public.users;
-
--- Standard cached users policies
-create policy "Allow dynamic user read" on public.users for select using (true);
-create policy "Allow updates for self or master sync" on public.users for all 
-  using (auth.uid()::text = id or email = auth.jwt() ->> 'email' or auth.uid() is null or public.is_active_session()) 
-  with check (auth.uid()::text = id or email = auth.jwt() ->> 'email' or auth.uid() is null or public.is_active_session());
-
--- Security helper function to check if user has an Active session in this Operational DB
-create or replace function public.is_active_session()
-returns boolean as $$
-declare
-  req_user_id text;
-  req_session_token text;
-begin
-  -- Retrieve variables from request headers passed dynamically by Catet-In Web app
-  begin
-    req_user_id := coalesce(nullif(current_setting('request.headers', true)::json->>'x-user-id', ''), '');
-    req_session_token := coalesce(nullif(current_setting('request.headers', true)::json->>'x-session-token', ''), '');
-  exception when others then
-    req_user_id := '';
-    req_session_token := '';
-  end;
-
-  -- If headers are complete, verify token against users cache
-  if req_user_id <> '' and req_session_token <> '' then
-    return exists (
-      select 1 from public.users 
-      where id = req_user_id 
-        and active_session_token = req_session_token 
-        and status = 'Active'
-        and (session_expires_at is null or session_expires_at::timestamp with time zone > now())
-    );
-  end if;
-
-  -- Fallback to standard Supabase Auth session if authenticated in this DB
-  return exists (
-    select 1 from public.users 
-    where (id = auth.uid()::text or email = auth.jwt() ->> 'email') and status = 'Active'
-  );
-end;
-$$ language plpgsql security definer;
-
--- SSO Handshake register function
-create extension if not exists pgcrypto;
-create or replace function public.register_operational_session(
-  p_user_id text,
-  p_email text,
-  p_full_name text,
-  p_role text,
-  p_original_role text,
-  p_instansi text,
-  p_web_access text,
-  p_expires_at text,
-  p_session_token text,
-  p_signature text
-)
-returns json as $$
-declare
-  v_sync_token text;
-  v_message text;
-  v_computed_sig text;
-begin
-  -- Load secure sync token
-  select value into v_sync_token from public.operational_config where key = 'sync_token';
-  
-  if v_sync_token is null then
-    raise exception 'Database Instansi belum terkonfigurasi sync_token. Silakan hubungi Administrator.';
-  end if;
-
-  -- Message structure: id:email:role:expires_at:session_token
-  v_message := p_user_id || ':' || coalesce(p_email, '') || ':' || p_role || ':' || p_expires_at || ':' || p_session_token;
-  
-  -- Compute SHA256 signature
-  v_computed_sig := encode(digest(v_message || v_sync_token, 'sha256'), 'hex');
-
-  if p_signature <> v_computed_sig then
-    raise exception 'SSO Handshake Signature Mismatch. Sync Rejected.';
-  end if;
-
-  -- Handshake Valid! Write session and user data
-  insert into public.users (
-    id, email, full_name, role, original_role, status, instansi, web_access, created_at, active_session_token, session_expires_at
-  ) values (
-    p_user_id, p_email, p_full_name, p_role, p_original_role, 'Active', p_instansi, p_web_access, now(), p_session_token, p_expires_at
-  )
-  on conflict (id) do update set
-    email = excluded.email,
-    full_name = excluded.full_name,
-    role = excluded.role,
-    original_role = excluded.original_role,
-    status = 'Active',
-    instansi = excluded.instansi,
-    web_access = excluded.web_access,
-    active_session_token = excluded.active_session_token,
-    session_expires_at = excluded.session_expires_at;
-
-  return json_build_object('status', 'success', 'message', 'Sesi berhasil didaftarkan secara aman');
-end;
-$$ language plpgsql security definer;
-
-
--- transactions table
+-- transactions
 create table if not exists public.transactions (
   id text primary key,
   date text,
@@ -486,15 +375,9 @@ create table if not exists public.transactions (
   created_at text,
   created_by text,
   created_by_role text,
-  edit_version integer default 0
+  edit_version integer default 0,
+  instansi text not null default public.get_user_instansi()
 );
-alter table public.transactions enable row level security;
-drop policy if exists "Allow full access user" on public.transactions;
-drop policy if exists "Strict Operational Transactions RLS" on public.transactions;
-create policy "Strict Operational Transactions RLS" on public.transactions for all 
-  using (public.is_active_session()) 
-  with check (public.is_active_session());
-
 
 -- deleted_transactions audit
 create table if not exists public.deleted_transactions (
@@ -515,15 +398,9 @@ create table if not exists public.deleted_transactions (
   edit_version integer default 0,
   delete_reason text,
   deleted_at text,
-  delete_by text
+  delete_by text,
+  instansi text not null default public.get_user_instansi()
 );
-alter table public.deleted_transactions enable row level security;
-drop policy if exists "Allow full access data" on public.deleted_transactions;
-drop policy if exists "Strict Operational Deleted Tx RLS" on public.deleted_transactions;
-create policy "Strict Operational Deleted Tx RLS" on public.deleted_transactions for all 
-  using (public.is_active_session()) 
-  with check (public.is_active_session());
-
 
 -- edit_history audit
 create table if not exists public.edit_history (
@@ -537,45 +414,29 @@ create table if not exists public.edit_history (
   new_value numeric default 0,
   edited_at text,
   edited_by text,
-  version_number integer default 1
+  version_number integer default 1,
+  instansi text not null default public.get_user_instansi()
 );
-alter table public.edit_history enable row level security;
-drop policy if exists "Allow edit logs access" on public.edit_history;
-drop policy if exists "Strict Operational Edit History RLS" on public.edit_history;
-create policy "Strict Operational Edit History RLS" on public.edit_history for all 
-  using (public.is_active_session()) 
-  with check (public.is_active_session());
-
 
 -- projects table
 create table if not exists public.projects (
-  name text primary key,
+  name text,
   created_at text,
   status text default 'Aktif',
   approved_by text,
   approved_at text,
-  approver_role text
+  approver_role text,
+  instansi text not null default public.get_user_instansi(),
+  primary key (name, instansi)
 );
-alter table public.projects enable row level security;
-drop policy if exists "Allow projects CRUD" on public.projects;
-drop policy if exists "Strict Operational Projects RLS" on public.projects;
-create policy "Strict Operational Projects RLS" on public.projects for all 
-  using (public.is_active_session()) 
-  with check (public.is_active_session());
-
 
 -- categories table
 create table if not exists public.categories (
-  id text primary key,
-  name text not null
+  id text,
+  name text not null,
+  instansi text not null default public.get_user_instansi(),
+  primary key (id, instansi)
 );
-alter table public.categories enable row level security;
-drop policy if exists "Allow categories CRUD" on public.categories;
-drop policy if exists "Strict Operational Categories RLS" on public.categories;
-create policy "Strict Operational Categories RLS" on public.categories for all 
-  using (public.is_active_session()) 
-  with check (public.is_active_session());
-
 
 -- approvals table
 create table if not exists public.approvals (
@@ -583,30 +444,19 @@ create table if not exists public.approvals (
   period_id text,
   project_name text,
   approved_by text,
-  approve_date text
+  approve_date text,
+  opening_balance numeric default 0,
+  instansi text not null default public.get_user_instansi()
 );
-alter table public.approvals enable row level security;
-drop policy if exists "Allow approvals CRUD" on public.approvals;
-drop policy if exists "Strict Operational Approvals RLS" on public.approvals;
-create policy "Strict Operational Approvals RLS" on public.approvals for all 
-  using (public.is_active_session()) 
-  with check (public.is_active_session());
-
 
 -- daerahs table
 create table if not exists public.daerahs (
   id text primary key,
   nama_daerah text not null,
   pimpinan text,
-  keterangan text
+  keterangan text,
+  instansi text not null default public.get_user_instansi()
 );
-alter table public.daerahs enable row level security;
-drop policy if exists "Allow daerah CRUD" on public.daerahs;
-drop policy if exists "Strict Operational Daerahs RLS" on public.daerahs;
-create policy "Strict Operational Daerahs RLS" on public.daerahs for all 
-  using (public.is_active_session()) 
-  with check (public.is_active_session());
-
 
 -- desas table
 create table if not exists public.desas (
@@ -614,15 +464,9 @@ create table if not exists public.desas (
   nama_desa text not null,
   pimpinan text,
   alamat text,
-  daerah_id text
+  daerah_id text,
+  instansi text not null default public.get_user_instansi()
 );
-alter table public.desas enable row level security;
-drop policy if exists "Allow desa CRUD" on public.desas;
-drop policy if exists "Strict Operational Desas RLS" on public.desas;
-create policy "Strict Operational Desas RLS" on public.desas for all 
-  using (public.is_active_session()) 
-  with check (public.is_active_session());
-
 
 -- kelompoks table
 create table if not exists public.kelompoks (
@@ -630,59 +474,34 @@ create table if not exists public.kelompoks (
   nama_kelompok text not null,
   pimpinan text,
   keterangan text,
-  desa_id text
+  desa_id text,
+  instansi text not null default public.get_user_instansi()
 );
-alter table public.kelompoks enable row level security;
-drop policy if exists "Allow kelompoks CRUD" on public.kelompoks;
-drop policy if exists "Strict Operational Kelompoks RLS" on public.kelompoks;
-create policy "Strict Operational Kelompoks RLS" on public.kelompoks for all 
-  using (public.is_active_session()) 
-  with check (public.is_active_session());
-
 
 -- age_categories table
 create table if not exists public.age_categories (
   id text primary key,
   name text not null,
-  description text
+  description text,
+  sort_order integer default 0,
+  instansi text not null default public.get_user_instansi()
 );
-alter table public.age_categories enable row level security;
-drop policy if exists "Allow ages CRUD" on public.age_categories;
-drop policy if exists "Strict Operational Ages RLS" on public.age_categories;
-create policy "Strict Operational Ages RLS" on public.age_categories for all 
-  using (public.is_active_session()) 
-  with check (public.is_active_session());
-
 
 -- families table
 create table if not exists public.families (
   id text primary key,
   nama_keluarga text not null,
-  nomor_kk text
+  nomor_kk text,
+  instansi text not null default public.get_user_instansi()
 );
-alter table public.families enable row level security;
-drop policy if exists "Strict Operational Families RLS" on public.families;
-create policy "Strict Operational Families RLS" on public.families for all 
-  using (public.is_active_session()) 
-  with check (public.is_active_session());
-
 
 -- family_relationships table
 create table if not exists public.family_relationships (
   id text primary key,
   name text not null,
-  is_wali text default '4' -- Nilai 1 s/d 6 (1: KK Pria, 2: KK Wanita, 3: Istri, 4: Anak, 5: Anggota Lain, 6: Wali Lainnya)
+  is_wali text default '4',
+  instansi text not null default public.get_user_instansi()
 );
-
--- JIKA TABEL SUDAH ADA, JALANKAN PERINTAH ALTER BERIKUT DI SQL EDITOR SUPABASE:
--- alter table public.family_relationships alter column is_wali type text using (case when is_wali = true then '1' else '4' end);
--- alter table public.family_relationships alter column is_wali set default '4';
-alter table public.family_relationships enable row level security;
-drop policy if exists "Strict Operational Family Relationships RLS" on public.family_relationships;
-create policy "Strict Operational Family Relationships RLS" on public.family_relationships for all 
-  using (public.is_active_session()) 
-  with check (public.is_active_session());
-
 
 -- members table
 create table if not exists public.members (
@@ -704,15 +523,18 @@ create table if not exists public.members (
   family_id text,
   relationship_id text,
   pekerjaan text,
-  status text
+  status text,
+  labels text[],
+  instansi text not null default public.get_user_instansi()
 );
-alter table public.members enable row level security;
-drop policy if exists "Allow members CRUD" on public.members;
-drop policy if exists "Strict Operational Members RLS" on public.members;
-create policy "Strict Operational Members RLS" on public.members for all 
-  using (public.is_active_session()) 
-  with check (public.is_active_session());
 
+-- labels table
+create table if not exists public.labels (
+  id text primary key,
+  name text not null,
+  created_at timestamp with time zone default now(),
+  instansi text not null default public.get_user_instansi()
+);
 
 -- attendance_logs table
 create table if not exists public.attendance_logs (
@@ -728,26 +550,11 @@ create table if not exists public.attendance_logs (
   status text,
   note text,
   event_id text,
-  metode text
+  metode text,
+  uniq_ref text unique,
+  jam_mulai text,
+  instansi text not null default public.get_user_instansi()
 );
-
--- Retrofit old table versions if any
-alter table public.attendance_logs add column if not exists event_id text;
-alter table public.attendance_logs add column if not exists metode text;
-alter table public.members add column if not exists rfid text;
-alter table public.members add column if not exists rfid_ktp text;
-alter table public.members add column if not exists family_id text;
-alter table public.members add column if not exists relationship_id text;
-alter table public.members add column if not exists pekerjaan text;
-alter table public.members add column if not exists status text;
-
-alter table public.attendance_logs enable row level security;
-drop policy if exists "Allow logs CRUD" on public.attendance_logs;
-drop policy if exists "Strict Operational Attendance Logs RLS" on public.attendance_logs;
-create policy "Strict Operational Attendance Logs RLS" on public.attendance_logs for all 
-  using (public.is_active_session()) 
-  with check (public.is_active_session());
-
 
 -- events table
 create table if not exists public.events (
@@ -755,32 +562,217 @@ create table if not exists public.events (
   nama_kegiatan text not null,
   tanggal_kegiatan text,
   keterangan text,
-  created_at timestamp with time zone default now()
+  created_at timestamp with time zone default now(),
+  jam_mulai text,
+  target_labels text[],
+  instansi text not null default public.get_user_instansi()
 );
+
+
+-- 4. ROW LEVEL SECURITY SECURITY POLICIES FOR OPERATIONAL TABLES
+
+-- TRANSACTIONS
+alter table public.transactions enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.transactions;
+drop policy if exists "Strict Instansi Insert RLS" on public.transactions;
+drop policy if exists "Strict Instansi Update RLS" on public.transactions;
+drop policy if exists "Strict Instansi Delete RLS" on public.transactions;
+
+create policy "Strict Instansi Select RLS" on public.transactions for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.transactions for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.transactions for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.transactions for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- DELETED_TRANSACTIONS
+alter table public.deleted_transactions enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.deleted_transactions;
+drop policy if exists "Strict Instansi Insert RLS" on public.deleted_transactions;
+drop policy if exists "Strict Instansi Update RLS" on public.deleted_transactions;
+drop policy if exists "Strict Instansi Delete RLS" on public.deleted_transactions;
+
+create policy "Strict Instansi Select RLS" on public.deleted_transactions for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.deleted_transactions for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.deleted_transactions for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.deleted_transactions for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- EDIT_HISTORY
+alter table public.edit_history enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.edit_history;
+drop policy if exists "Strict Instansi Insert RLS" on public.edit_history;
+drop policy if exists "Strict Instansi Update RLS" on public.edit_history;
+drop policy if exists "Strict Instansi Delete RLS" on public.edit_history;
+
+create policy "Strict Instansi Select RLS" on public.edit_history for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.edit_history for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.edit_history for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.edit_history for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- PROJECTS
+alter table public.projects enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.projects;
+drop policy if exists "Strict Instansi Insert RLS" on public.projects;
+drop policy if exists "Strict Instansi Update RLS" on public.projects;
+drop policy if exists "Strict Instansi Delete RLS" on public.projects;
+
+create policy "Strict Instansi Select RLS" on public.projects for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.projects for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.projects for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.projects for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- CATEGORIES
+alter table public.categories enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.categories;
+drop policy if exists "Strict Instansi Insert RLS" on public.categories;
+drop policy if exists "Strict Instansi Update RLS" on public.categories;
+drop policy if exists "Strict Instansi Delete RLS" on public.categories;
+
+create policy "Strict Instansi Select RLS" on public.categories for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.categories for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.categories for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.categories for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- APPROVALS
+alter table public.approvals enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.approvals;
+drop policy if exists "Strict Instansi Insert RLS" on public.approvals;
+drop policy if exists "Strict Instansi Update RLS" on public.approvals;
+drop policy if exists "Strict Instansi Delete RLS" on public.approvals;
+
+create policy "Strict Instansi Select RLS" on public.approvals for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.approvals for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.approvals for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.approvals for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- DAERAHS
+alter table public.daerahs enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.daerahs;
+drop policy if exists "Strict Instansi Insert RLS" on public.daerahs;
+drop policy if exists "Strict Instansi Update RLS" on public.daerahs;
+drop policy if exists "Strict Instansi Delete RLS" on public.daerahs;
+
+create policy "Strict Instansi Select RLS" on public.daerahs for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.daerahs for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.daerahs for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.daerahs for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- DESAS
+alter table public.desas enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.desas;
+drop policy if exists "Strict Instansi Insert RLS" on public.desas;
+drop policy if exists "Strict Instansi Update RLS" on public.desas;
+drop policy if exists "Strict Instansi Delete RLS" on public.desas;
+
+create policy "Strict Instansi Select RLS" on public.desas for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.desas for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.desas for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.desas for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- KELOMPOKS
+alter table public.kelompoks enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.kelompoks;
+drop policy if exists "Strict Instansi Insert RLS" on public.kelompoks;
+drop policy if exists "Strict Instansi Update RLS" on public.kelompoks;
+drop policy if exists "Strict Instansi Delete RLS" on public.kelompoks;
+
+create policy "Strict Instansi Select RLS" on public.kelompoks for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.kelompoks for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.kelompoks for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.kelompoks for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- AGE_CATEGORIES
+alter table public.age_categories enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.age_categories;
+drop policy if exists "Strict Instansi Insert RLS" on public.age_categories;
+drop policy if exists "Strict Instansi Update RLS" on public.age_categories;
+drop policy if exists "Strict Instansi Delete RLS" on public.age_categories;
+
+create policy "Strict Instansi Select RLS" on public.age_categories for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.age_categories for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.age_categories for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.age_categories for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- FAMILIES
+alter table public.families enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.families;
+drop policy if exists "Strict Instansi Insert RLS" on public.families;
+drop policy if exists "Strict Instansi Update RLS" on public.families;
+drop policy if exists "Strict Instansi Delete RLS" on public.families;
+
+create policy "Strict Instansi Select RLS" on public.families for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.families for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.families for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.families for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- FAMILY_RELATIONSHIPS
+alter table public.family_relationships enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.family_relationships;
+drop policy if exists "Strict Instansi Insert RLS" on public.family_relationships;
+drop policy if exists "Strict Instansi Update RLS" on public.family_relationships;
+drop policy if exists "Strict Instansi Delete RLS" on public.family_relationships;
+
+create policy "Strict Instansi Select RLS" on public.family_relationships for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.family_relationships for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.family_relationships for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.family_relationships for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- MEMBERS
+alter table public.members enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.members;
+drop policy if exists "Strict Instansi Insert RLS" on public.members;
+drop policy if exists "Strict Instansi Update RLS" on public.members;
+drop policy if exists "Strict Instansi Delete RLS" on public.members;
+
+create policy "Strict Instansi Select RLS" on public.members for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.members for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.members for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.members for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- LABELS
+alter table public.labels enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.labels;
+drop policy if exists "Strict Instansi Insert RLS" on public.labels;
+drop policy if exists "Strict Instansi Update RLS" on public.labels;
+drop policy if exists "Strict Instansi Delete RLS" on public.labels;
+
+create policy "Strict Instansi Select RLS" on public.labels for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.labels for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.labels for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.labels for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- ATTENDANCE_LOGS
+alter table public.attendance_logs enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.attendance_logs;
+drop policy if exists "Strict Instansi Insert RLS" on public.attendance_logs;
+drop policy if exists "Strict Instansi Update RLS" on public.attendance_logs;
+drop policy if exists "Strict Instansi Delete RLS" on public.attendance_logs;
+
+create policy "Strict Instansi Select RLS" on public.attendance_logs for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.attendance_logs for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.attendance_logs for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.attendance_logs for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- EVENTS
 alter table public.events enable row level security;
-drop policy if exists "Strict Operational Events RLS" on public.events;
-create policy "Strict Operational Events RLS" on public.events for all 
-  using (public.is_active_session()) 
-  with check (public.is_active_session());
+drop policy if exists "Strict Instansi Select RLS" on public.events;
+drop policy if exists "Strict Instansi Insert RLS" on public.events;
+drop policy if exists "Strict Instansi Update RLS" on public.events;
+drop policy if exists "Strict Instansi Delete RLS" on public.events;
 
+create policy "Strict Instansi Select RLS" on public.events for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.events for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.events for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.events for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+`;
 
--- Ensure the publication 'supabase_realtime' exists first
-do $$
-begin
-  if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
-    create publication supabase_realtime;
-  end if;
-end $$;
-
--- Enable Realtime and Full Replica Identity strictly for the attendance_logs table (optimizing Supabase Free Plan limits)
-alter table public.attendance_logs replica identity full;
-
-do $$
-begin
-  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'attendance_logs') then
-    alter publication supabase_realtime add table public.attendance_logs;
-  end if;
-end $$;
+const SUPABASE_OPERATIONAL_SQL = `-- =========================================================================
+-- !!! CATATAN MIGRASI SINGLE DATABASE (UNIFIED DATABASE SETUP) !!!
+-- =========================================================================
+-- Seluruh tabel operasional dan fungsi keamanan (RLS) kini telah diintegrasikan
+-- sepenuhnya ke dalam SATU database terpadu (Unified Database Setup).
+-- Anda TIDAK PERLU LAGI menjalankan script SQL terpisah untuk masing-masing cabang.
+--
+-- Cukup jalankan script di bagian "2A. SQL SCHEMA DATABASE UNIFIED" sekali saja,
+-- dan semua instansi cabang Anda akan terisolasi secara otomatis berdasarkan kebijakan RLS!
 `;
 
 const SUPABASE_DDL_SQL = SUPABASE_CENTRAL_SQL + '\n\n' + SUPABASE_OPERATIONAL_SQL;
@@ -805,6 +797,110 @@ const SetupGuide: React.FC<SetupGuideProps> = ({ onLogout }) => {
   const [showOperationalDdlCode, setShowOperationalDdlCode] = useState(false);
   const [copiedScript, setCopiedScript] = useState(false);
   const [copiedDdl, setCopiedDdl] = useState('');
+
+  // Portal Master registration states
+  const [saUsername, setSaUsername] = useState('');
+  const [saEmail, setSaEmail] = useState('');
+  const [saFullName, setSaFullName] = useState('');
+  const [saPassword, setSaPassword] = useState('');
+  const [saToken, setSaToken] = useState('');
+  const [saIsLoading, setSaIsLoading] = useState(false);
+  const [saSuccessMsg, setSaSuccessMsg] = useState('');
+  const [saErrorMsg, setSaErrorMsg] = useState('');
+
+  const handleRegisterPortalMaster = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaErrorMsg('');
+    setSaSuccessMsg('');
+    setSaIsLoading(false);
+
+    try {
+      const activeClient = getActiveDb();
+      if (!activeClient) {
+        throw new Error("Supabase belum dikonfigurasi. Hubungkan kredensial di atas terlebih dahulu.");
+      }
+
+      // Check the setup token
+      const expectedToken = (import.meta as any).env.VITE_PORTAL_SETUP_TOKEN || 'BendaPintarPortalMasterTokenSecret123';
+      if (saToken.trim() !== expectedToken.trim()) {
+        throw new Error("Setup Token (Token Konfigurasi) salah! Silakan periksa file konfigurasi .env Anda.");
+      }
+
+      // Input validation
+      const cleanUser = saUsername.trim().toLowerCase().replace(/\s+/g, '');
+      const cleanEmail = saEmail.trim().toLowerCase();
+
+      if (cleanUser.length < 3) {
+        throw new Error("Username minimal harus 3 karakter!");
+      }
+      if (saPassword.length < 6) {
+        throw new Error("Password minimal harus 6 karakter!");
+      }
+
+      setSaIsLoading(true);
+
+      // Try to register user in Supabase Auth
+      const { data: authResult, error: authErr } = await activeClient.auth.signUp({
+        email: cleanEmail,
+        password: saPassword,
+        options: {
+          data: {
+            username: cleanUser,
+            full_name: saFullName.trim(),
+            original_role: 'PortalMaster',
+            instansi: 'Catet-In (Master)',
+            web_access: 'bendahara,absensi',
+          }
+        }
+      });
+
+      if (authErr) {
+        throw new Error("Gagal mendaftar di Supabase Auth: " + authErr.message);
+      }
+
+      const superId = authResult?.user?.id || 'super-sa-' + Math.random().toString(36).substring(2, 11);
+
+      // Save to users table with PortalMaster role
+      const superData = {
+        id: superId,
+        username: cleanUser,
+        email: cleanEmail,
+        full_name: saFullName.trim(),
+        role: 'PortalMaster',
+        original_role: 'PortalMaster',
+        instansi: 'Catet-In (Master)',
+        web_access: 'bendahara,absensi',
+        status: 'Active',
+        created_at: new Date().toISOString()
+      };
+
+      try {
+        const { error: insertErr } = await activeClient.from('users').upsert([superData]);
+        if (insertErr) {
+          console.warn("Profil Portal Master upsert error (safely ignored, handled by database trigger):", insertErr.message);
+        }
+      } catch (upsertErr) {
+        console.warn("Profil Portal Master upsert threw error (safely ignored):", upsertErr);
+      }
+
+      if (!authResult?.session) {
+        setSaSuccessMsg("Akun Portal Master pertama berhasil didaftarkan di Supabase Auth! Karena opsi 'Confirm Email' aktif di Supabase Anda secara default, silakan periksa email masuk Anda untuk melakukan verifikasi terlebih dahulu agar akun aktif di database public.users.");
+      } else {
+        setSaSuccessMsg("Akun Portal Master pertama berhasil didaftarkan! Silakan kembali ke halaman login utama dan masuk menggunakan akun baru ini.");
+      }
+      // Clear form
+      setSaUsername('');
+      setSaEmail('');
+      setSaFullName('');
+      setSaPassword('');
+      setSaToken('');
+    } catch (err: any) {
+      console.error(err);
+      setSaErrorMsg(err.message || String(err));
+    } finally {
+      setSaIsLoading(false);
+    }
+  };
 
   const handleSaveCentralConfig = (e: React.FormEvent) => {
     e.preventDefault();
@@ -908,14 +1004,132 @@ const SetupGuide: React.FC<SetupGuideProps> = ({ onLogout }) => {
            </form>
         </div>
 
-        {/* 2A. SQL SCHEMA DATABASE CENTRAL (Utama) */}
+        {/* 1B. INISIALISASI AKUN PORTAL MASTER UTAMA */}
+        <div className="p-8 bg-amber-50/50 rounded-[2rem] border border-amber-100 space-y-6">
+           <div className="flex items-center space-x-3 text-amber-700">
+              <Sparkles size={24} className="shrink-0" />
+              <h4 className="text-sm md:text-md font-black uppercase tracking-tight">1B. INISIALISASI AKUN PORTAL MASTER UTAMA</h4>
+           </div>
+           
+           <p className="text-[11px] font-bold text-amber-800 leading-relaxed max-w-3xl">
+              Daftarkan akun Portal Master pertama Anda untuk mengelola seluruh sistem. Untuk mendaftar, masukkan kredensial akun beserta <b>Setup Token</b> yang telah dikonfigurasi di file <code className="bg-amber-100 px-1 py-0.5 rounded text-amber-900 font-mono text-[9.5px]">.env</code> Anda.
+           </p>
+
+           {saSuccessMsg && (
+             <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-3 text-emerald-800 text-[11px] font-semibold">
+               <CheckCircle2 size={18} className="text-emerald-500 shrink-0" />
+               <span>{saSuccessMsg}</span>
+             </div>
+           )}
+
+           {saErrorMsg && (
+             <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-3 text-rose-800 text-[11px] font-semibold">
+               <AlertCircle size={18} className="text-rose-500 shrink-0" />
+               <span>{saErrorMsg}</span>
+             </div>
+           )}
+
+           <form onSubmit={handleRegisterPortalMaster} className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+             <div className="space-y-1.5">
+               <label className="text-[9px] font-extrabold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
+                 USERNAME PORTAL MASTER
+               </label>
+               <input 
+                 type="text"
+                 required
+                 placeholder="Contoh: portalmaster"
+                 value={saUsername}
+                 onChange={(e) => setSaUsername(e.target.value)}
+                 className="w-full px-4 py-3 text-xs font-semibold bg-white border border-amber-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent placeholder:font-normal shadow-sm"
+               />
+             </div>
+
+             <div className="space-y-1.5">
+               <label className="text-[9px] font-extrabold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
+                 EMAIL PORTAL MASTER
+               </label>
+               <input 
+                 type="type"
+                 required
+                 placeholder="Contoh: master@catetin.com"
+                 value={saEmail}
+                 onChange={(e) => setSaEmail(e.target.value)}
+                 className="w-full px-4 py-3 text-xs font-semibold bg-white border border-amber-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent placeholder:font-normal shadow-sm"
+               />
+             </div>
+
+             <div className="space-y-1.5">
+               <label className="text-[9px] font-extrabold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
+                 NAMA LENGKAP
+               </label>
+               <input 
+                 type="text"
+                 required
+                 placeholder="Contoh: Portal Master"
+                 value={saFullName}
+                 onChange={(e) => setSaFullName(e.target.value)}
+                 className="w-full px-4 py-3 text-xs font-semibold bg-white border border-amber-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent placeholder:font-normal shadow-sm"
+               />
+             </div>
+
+             <div className="space-y-1.5">
+               <label className="text-[9px] font-extrabold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
+                 PASSWORD PORTAL MASTER
+               </label>
+               <input 
+                 type="password"
+                 required
+                 placeholder="Masukkan password portal master"
+                 value={saPassword}
+                 onChange={(e) => setSaPassword(e.target.value)}
+                 className="w-full px-4 py-3 text-xs font-semibold bg-white border border-amber-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent placeholder:font-normal shadow-sm"
+               />
+             </div>
+
+             <div className="md:col-span-2 space-y-1.5">
+               <label className="text-[9px] font-extrabold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
+                 VITE_PORTAL_SETUP_TOKEN (TOKEN KONFIGURASI)
+               </label>
+               <input 
+                 type="password"
+                 required
+                 placeholder="Masukkan Setup Token dari file .env Anda"
+                 value={saToken}
+                 onChange={(e) => setSaToken(e.target.value)}
+                 className="w-full px-4 py-3 text-xs font-semibold bg-white border border-amber-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent font-mono shadow-sm"
+               />
+             </div>
+
+             <div className="md:col-span-2 flex justify-end pt-2">
+               <button 
+                 type="submit"
+                 disabled={saIsLoading}
+                 className="px-8 py-4 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-400 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest flex items-center gap-2 cursor-pointer transition-all active:scale-95 shadow-lg shadow-amber-100"
+               >
+                 {saIsLoading ? (
+                   <>
+                     <RefreshCw size={14} className="animate-spin" />
+                     <span>Mendaftarkan...</span>
+                   </>
+                 ) : (
+                   <>
+                     <Sparkles size={14} />
+                     <span>Daftar Akun Portal Master</span>
+                   </>
+                 )}
+               </button>
+             </div>
+           </form>
+        </div>
+
+        {/* 2A. SQL SCHEMA DATABASE UNIFIED (Single DB Setup) */}
         <div className="p-8 bg-slate-900 rounded-[2rem] border border-slate-800 space-y-6 text-white">
            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex items-center space-x-3 text-indigo-400">
                  <ShieldCheck size={28} />
                  <div>
-                   <h4 className="text-sm md:text-md font-black uppercase tracking-tight leading-none text-white">2A. SQL SCHEMA DATABASE CENTRAL (Utama)</h4>
-                   <p className="text-[9px] text-slate-400 uppercase font-bold tracking-widest mt-1">Hanya dijalankan sekali di proyek Supabase Utama / Central</p>
+                   <h4 className="text-sm md:text-md font-black uppercase tracking-tight leading-none text-white">2A. SQL SCHEMA DATABASE UNIFIED (Single DB Setup)</h4>
+                   <p className="text-[9px] text-slate-400 uppercase font-bold tracking-widest mt-1">Dijalankan sekali di proyek Supabase terpadu Anda</p>
                  </div>
               </div>
               <button
@@ -924,12 +1138,12 @@ const SetupGuide: React.FC<SetupGuideProps> = ({ onLogout }) => {
                 className={`flex items-center space-x-1.5 px-4 py-2.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all cursor-pointer border ${copiedDdl === 'central_sql' ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
               >
                 {copiedDdl === 'central_sql' ? <Check size={12} /> : <Copy size={12} />}
-                <span>{copiedDdl === 'central_sql' ? 'Tersalin' : 'Copy SQL Central'}</span>
+                <span>{copiedDdl === 'central_sql' ? 'Tersalin' : 'Copy SQL Unified'}</span>
               </button>
            </div>
            
            <p className="text-[10px] font-medium text-slate-300 leading-relaxed font-sans">
-             Jalankan script ini di <b>SQL Editor</b> proyek Supabase Utama/Central Anda. Script ini akan menginisialisasi tabel induk untuk <code className="bg-slate-800 px-1 py-0.5 rounded text-indigo-300">users</code> central, fungsi validator superadmin <code className="bg-slate-800 px-1 py-0.5 rounded text-indigo-300">is_superadmin()</code>, serta registrasi <code className="bg-slate-800 px-1 py-0.5 rounded text-indigo-300">instansi</code> untuk mengelola routing multi-database.
+             Jalankan script ini di <b>SQL Editor</b> proyek Supabase Anda. Script ini akan menginisialisasi seluruh tabel central, tabel operasional dengan kolom <code className="bg-slate-800 px-1 py-0.5 rounded text-indigo-300">instansi</code> untuk multi-tenancy, fungsi validator portal master <code className="bg-slate-800 px-1 py-0.5 rounded text-indigo-300">is_portal_admin()</code>, serta aturan RLS per instansi yang sangat aman (authenticated only).
            </p>
 
            <div className="border-t border-slate-800 pt-3">
@@ -938,7 +1152,7 @@ const SetupGuide: React.FC<SetupGuideProps> = ({ onLogout }) => {
                onClick={() => setShowCentralDdlCode(!showCentralDdlCode)}
                className="w-full flex items-center justify-between text-slate-400 hover:text-white transition-colors py-2 text-[10px] font-bold uppercase tracking-wider focus:outline-none"
              >
-               <span>{showCentralDdlCode ? 'Sembunyikan SQL Code Central' : 'Tampilkan Tinjauan SQL Central'}</span>
+               <span>{showCentralDdlCode ? 'Sembunyikan SQL Code Unified' : 'Tampilkan Tinjauan SQL Unified'}</span>
                {showCentralDdlCode ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
              </button>
 
@@ -950,14 +1164,14 @@ const SetupGuide: React.FC<SetupGuideProps> = ({ onLogout }) => {
            </div>
         </div>
 
-        {/* 2B. SQL SCHEMA DATABASE PERINSTANSI (Cabang Baru) */}
+        {/* 2B. CATATAN MIGRASI SINGLE DATABASE (1 DB) */}
         <div className="p-8 bg-slate-900 rounded-[2rem] border border-slate-800 space-y-6 text-white">
            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex items-center space-x-3 text-amber-400">
                  <Database size={28} />
                  <div>
-                   <h4 className="text-sm md:text-md font-black uppercase tracking-tight leading-none text-white font-sans">2B. SQL SCHEMA DATABASE PERINSTANSI (Cabang Baru)</h4>
-                   <p className="text-[9px] text-slate-400 uppercase font-bold tracking-widest mt-1">Sangat mudah dikonfigurasi saat menambah instansi baru</p>
+                   <h4 className="text-sm md:text-md font-black uppercase tracking-tight leading-none text-white font-sans">2B. CATATAN MIGRASI SINGLE DATABASE (1 DB)</h4>
+                   <p className="text-[9px] text-slate-400 uppercase font-bold tracking-widest mt-1">Kebijakan keamanan & isolasi tenant berbasis RLS otomatis</p>
                  </div>
               </div>
               <button
@@ -966,12 +1180,12 @@ const SetupGuide: React.FC<SetupGuideProps> = ({ onLogout }) => {
                 className={`flex items-center space-x-1.5 px-4 py-2.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all cursor-pointer border ${copiedDdl === 'operational_sql' ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
               >
                 {copiedDdl === 'operational_sql' ? <Check size={12} /> : <Copy size={12} />}
-                <span>{copiedDdl === 'operational_sql' ? 'Tersalin' : 'Copy SQL Perinstansi'}</span>
+                <span>{copiedDdl === 'operational_sql' ? 'Tersalin' : 'Copy Catatan'}</span>
               </button>
            </div>
            
            <p className="text-[10px] font-medium text-slate-300 leading-relaxed font-sans">
-              Ketika Anda menambahkan instansi/cabang baru, hubungkan proyek Supabase cabang tersebut dengan menyalin script di bawah ini ke <b>SQL Editor</b> proyek cabang Anda. <b>Kredensial keamanan (Anon Public Key/sync_token) sengaja diletakkan di bagian paling atas script</b> agar konfigurasi instansi/tenant baru menjadi sangat mudah dan cepat tanpa harus mencari di dalam ribuan baris skema di tengah-tengah!
+              Dengan arsitektur single-database yang baru, Anda <b>tidak lagi memerlukan server database terpisah</b> untuk tiap cabang/instansi! Semua data tersimpan di satu database utama secara efisien, dengan jaminan 100% keamanan isolasi tenant berbasis RLS (Row Level Security) Postgres yang berjalan di sisi server.
            </p>
 
            <div className="border-t border-slate-800 pt-3">
@@ -980,7 +1194,7 @@ const SetupGuide: React.FC<SetupGuideProps> = ({ onLogout }) => {
                onClick={() => setShowOperationalDdlCode(!showOperationalDdlCode)}
                className="w-full flex items-center justify-between text-slate-400 hover:text-white transition-colors py-2 text-[10px] font-bold uppercase tracking-wider focus:outline-none"
              >
-               <span>{showOperationalDdlCode ? 'Sembunyikan SQL Code Perinstansi' : 'Tampilkan Tinjauan SQL Perinstansi'}</span>
+               <span>{showOperationalDdlCode ? 'Sembunyikan Informasi RLS' : 'Tampilkan Detail Isolasi RLS'}</span>
                {showOperationalDdlCode ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
              </button>
 

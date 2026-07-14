@@ -3,13 +3,13 @@ import supabaseConfigRaw from './supabase-applet-config.json';
 import { 
   Transaction, DeletedTransaction, EditHistory, ProjectMetadata, 
   AbsensiMember, AttendanceLog, DesaData, KelompokData, AgeCategoryData, DaerahData, EventData,
-  Family, FamilyRelationship
+  Family, FamilyRelationship, LabelData
 } from './types';
 
 // Load Supabase central configurations
 const config = supabaseConfigRaw as { supabaseUrl?: string; supabaseAnonKey?: string };
-const centralUrl = config.supabaseUrl || localStorage.getItem('supabase_central_url') || '';
-const centralAnonKey = config.supabaseAnonKey || localStorage.getItem('supabase_central_key') || '';
+export const centralUrl = (import.meta as any).env.VITE_SUPABASE_URL || config.supabaseUrl || localStorage.getItem('supabase_central_url') || '';
+export const centralAnonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY || config.supabaseAnonKey || localStorage.getItem('supabase_central_key') || '';
 
 // Define Central and Active Supabase Client
 export let centralClient: SupabaseClient | null = null;
@@ -26,8 +26,8 @@ export let db: SupabaseClient = centralClient as any;
 export function getActiveDb(): SupabaseClient {
   if (db) return db;
   // Fallback to local reconstruction if configured on the boundary
-  const url = centralUrl || localStorage.getItem('supabase_central_url') || '';
-  const key = centralAnonKey || localStorage.getItem('supabase_central_key') || '';
+  const url = (import.meta as any).env.VITE_SUPABASE_URL || centralUrl || localStorage.getItem('supabase_central_url') || '';
+  const key = (import.meta as any).env.VITE_SUPABASE_ANON_KEY || centralAnonKey || localStorage.getItem('supabase_central_key') || '';
   if (url && key) {
     const freshCentral = createClient(url, key, {
       auth: { storageKey: 'sb-central-token', persistSession: true }
@@ -74,55 +74,12 @@ export const activeAuth = {
 
 // Map dynamic operational credentials per tenant session
 export function initializeDynamicDb(config: any | null) {
-  if (!config || !config.supabaseUrl || !config.supabaseAnonKey) {
-    db = centralClient as any;
-    console.log("Database connection set back to Central master client.");
-    return;
-  }
-  try {
-    const sessionToken = localStorage.getItem('active_session_token') || '';
-    const userId = localStorage.getItem('user_id') || '';
-
-    db = createClient(config.supabaseUrl, config.supabaseAnonKey, {
-      global: {
-        headers: {
-          'x-session-token': sessionToken,
-          'x-user-id': userId
-        }
-      },
-      auth: { storageKey: 'sb-operational-token', persistSession: true }
-    });
-    console.log("Dynamically initialized active operational Supabase connection with secure SSO headers.");
-  } catch (err) {
-    console.error("Failed to connect to dynamic institution database, using Central Db fallback:", err);
-    db = centralClient as any;
-  }
+  db = centralClient as any;
+  console.log("Single Database mode active. Running directly on unified database instance.");
 }
 
-// Auto load configured dynamic database on module load if cached
-const cachedDbConfigRaw = localStorage.getItem('instansi_db_config');
-if (cachedDbConfigRaw) {
-  try {
-    const cachedConfig = JSON.parse(cachedDbConfigRaw);
-    if (cachedConfig && cachedConfig.supabaseUrl && cachedConfig.supabaseAnonKey) {
-      const sessionToken = localStorage.getItem('active_session_token') || '';
-      const userId = localStorage.getItem('user_id') || '';
+// Auto load cached configuration is skipped in single database mode
 
-      db = createClient(cachedConfig.supabaseUrl, cachedConfig.supabaseAnonKey, {
-        global: {
-          headers: {
-            'x-session-token': sessionToken,
-            'x-user-id': userId
-          }
-        },
-        auth: { storageKey: 'sb-operational-token', persistSession: true }
-      });
-      console.log("Automatically auto-initialized active operational database connection from cache with secure SSO headers.");
-    }
-  } catch (e) {
-    console.error("Failed to parse cached database configuration on module load:", e);
-  }
-}
 
 // Custom handler for unified errors
 export enum OperationType {
@@ -155,7 +112,7 @@ export function saveCentralConfig(url: string, key: string) {
   console.log("Central Supabase configurations persisted.");
 }
 
-// --- Dynamic Seeding Helper for Initial Superadmin Account Setup ---
+// --- Dynamic Seeding Helper for Initial Portal Master Account Setup ---
 export async function seedInitialDataIfNeeded() {
   try {
     const client = getActiveDb();
@@ -172,21 +129,7 @@ export async function seedInitialDataIfNeeded() {
     }
 
     if (!users || users.length === 0) {
-      console.log("Seeding initial superadmin record to Supabase table...");
-      const superData = {
-        id: 'superadmin',
-        username: 'superadmin',
-        password: 'superadmin354',
-        full_name: 'Super Admin Portal',
-        role: 'Superadmin',
-        original_role: 'Superadmin',
-        instansi: 'Catet-In (Master)',
-        web_access: 'bendahara,absensi',
-        status: 'Active',
-        created_at: new Date().toISOString()
-      };
-
-      await client.from('users').upsert([superData]);
+      console.log("Seeding initial lookup tables and setup parameters to Supabase...");
       
       // Seed fallback categories
       const categories = ['Konsumsi', 'Operasional', 'Peralatan', 'Transportasi', 'Sponsorship', 'Dana Hibah', 'Lain-lain'];
@@ -601,6 +544,31 @@ export async function dbGetAttendanceLogs(limitCount?: number) {
   }
 }
 
+export async function dbGetFilteredAttendanceLogs(dateStr: string, eventId: string | null, limitCount: number = 25) {
+  try {
+    const client = getActiveDb();
+    let query = client.from('attendance_logs').select('*');
+    
+    if (dateStr) {
+      query = query.like('date', `${dateStr}%`);
+    }
+    
+    if (eventId) {
+      query = query.eq('event_id', eventId);
+    } else {
+      query = query.is('event_id', null);
+    }
+    
+    query = query.order('date', { ascending: false }).limit(limitCount);
+    
+    const { data, error } = await query;
+    if (error) return handleSupabaseError(error, OperationType.LIST, 'attendance_logs_filtered');
+    return (data || []) as AttendanceLog[];
+  } catch (err) {
+    return [];
+  }
+}
+
 export async function dbAddAttendanceLog(log: AttendanceLog) {
   const client = getActiveDb();
   const cleanLog = {
@@ -616,7 +584,9 @@ export async function dbAddAttendanceLog(log: AttendanceLog) {
     status: log.status,
     note: log.note,
     event_id: log.event_id || null,
-    metode: log.metode || 'manual'
+    metode: log.metode || 'manual',
+    uniq_ref: log.uniq_ref || null,
+    jam_mulai: log.jam_mulai || null
   };
   const { error } = await client.from('attendance_logs').upsert([cleanLog]);
   if (error) {
@@ -640,7 +610,9 @@ export async function dbAddAttendanceLogs(logs: AttendanceLog[]) {
     status: log.status,
     note: log.note,
     event_id: log.event_id || null,
-    metode: log.metode || 'manual'
+    metode: log.metode || 'manual',
+    uniq_ref: log.uniq_ref || null,
+    jam_mulai: log.jam_mulai || null
   }));
   const { error } = await client.from('attendance_logs').upsert(cleanLogs);
   if (error) {
@@ -699,6 +671,41 @@ export function dbSubscribeEvents(callback: (events: EventData[]) => void, onErr
   // Free tier budget optimization: Only load events once on mount, no active subscription
   dbGetEvents().then(callback).catch(onError);
   return () => {};
+}
+
+// 9.6 Labels Management (Label Anggota)
+export async function dbGetLabels() {
+  try {
+    const client = getActiveDb();
+    const { data, error } = await client.from('labels').select('*').order('name', { ascending: true });
+    if (error) return handleSupabaseError(error, OperationType.LIST, 'labels');
+    return (data || []) as LabelData[];
+  } catch (err) {
+    console.error("Error inside dbGetLabels:", err);
+    return [];
+  }
+}
+
+export async function dbAddLabel(lbl: LabelData) {
+  try {
+    const client = getActiveDb();
+    const { error } = await client.from('labels').upsert([lbl]);
+    if (error) return handleSupabaseError(error, OperationType.WRITE, `labels/${lbl.id}`);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+export async function dbDeleteLabel(id: string) {
+  try {
+    const client = getActiveDb();
+    const { error } = await client.from('labels').delete().eq('id', id);
+    if (error) return handleSupabaseError(error, OperationType.DELETE, `labels/${id}`);
+    return true;
+  } catch (err) {
+    return false;
+  }
 }
 
 // 9b. Daerahs Meta
@@ -810,9 +817,18 @@ export async function dbDeleteKelompok(id: string) {
 export async function dbGetAgeCategories() {
   try {
     const client = getActiveDb();
-    const { data, error } = await client.from('age_categories').select('*').order('name', { ascending: true });
+    const { data, error } = await client.from('age_categories').select('*');
     if (error) return handleSupabaseError(error, OperationType.LIST, 'age_categories');
-    return (data || []) as AgeCategoryData[];
+    
+    // Sort by sort_order ascending (null values go to end), then name ascending
+    const sorted = (data || []).sort((a: any, b: any) => {
+      const sa = a.sort_order !== null && a.sort_order !== undefined ? a.sort_order : 9999;
+      const sb = b.sort_order !== null && b.sort_order !== undefined ? b.sort_order : 9999;
+      if (sa !== sb) return sa - sb;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+    
+    return sorted as AgeCategoryData[];
   } catch (err) {
     console.error("Error inside dbGetAgeCategories:", err);
     return [];
@@ -905,19 +921,9 @@ export function dbSubscribeFamilyRelationships(callback: (data: FamilyRelationsh
 }
 
 export function dbSubscribeAttendanceLogs(limitCount: number, callback: (logs: AttendanceLog[]) => void, onError: (err: any) => void) {
+  // Free tier budget optimization: Only load attendance logs once on mount, no active subscription
   dbGetAttendanceLogs(limitCount).then(callback).catch(onError);
-  
-  const client = getActiveDb();
-  const sub = client
-    .channel('realtime_logs')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance_logs' }, () => {
-      dbGetAttendanceLogs(limitCount).then(callback).catch(onError);
-    })
-    .subscribe();
-
-  return () => {
-    sub.unsubscribe();
-  };
+  return () => {};
 }
 
 

@@ -6,7 +6,13 @@ dist/
 # Env
 .env
 .env.local
+.env.example
 
 # OS
 .DS_Store
 Thumbs.db
+
+# other
+AGENTS.md
+README.md
+security_spec.md

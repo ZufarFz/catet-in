@@ -97,6 +97,7 @@ export interface AbsensiMember {
   relationship_id?: string;
   pekerjaan?: string;
   status?: string;
+  labels?: string[]; // New: list of custom label strings
   // Join data
   nama_ortu?: string; // Virtual / Computed from family relationships
   no_hp_ortu?: string; // Virtual / Computed from family relationships
@@ -124,6 +125,8 @@ export interface AttendanceLog {
   note: string;
   event_id?: string;
   metode?: 'manual' | 'scan' | 'rfid';
+  uniq_ref?: string;
+  jam_mulai?: string;
 }
 
 export interface DaerahData {
@@ -153,6 +156,7 @@ export interface AgeCategoryData {
   id: string;
   name: string;
   description: string;
+  sort_order?: number;
 }
 
 export interface EventData {
@@ -160,5 +164,13 @@ export interface EventData {
   nama_kegiatan: string;
   tanggal_kegiatan?: string;
   keterangan?: string;
+  created_at?: string;
+  jam_mulai?: string;
+  target_labels?: string[]; // New: list of custom label strings required/targeted for this event
+}
+
+export interface LabelData {
+  id: string;
+  name: string;
   created_at?: string;
 }

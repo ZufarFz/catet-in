@@ -1,15 +1,16 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { LayoutGrid, Plus, Edit2, Trash2, Loader2, X, Save, AlertCircle, CheckCircle2, MapPin, Users, History, Info, CalendarDays, ChevronDown } from 'lucide-react';
+import { LayoutGrid, Plus, Edit2, Trash2, Loader2, X, Save, AlertCircle, CheckCircle2, MapPin, Users, History, Info, CalendarDays, ChevronDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { DesaData, KelompokData, AgeCategoryData, DaerahData, EventData, Family, FamilyRelationship } from '../../types';
+import { DesaData, KelompokData, AgeCategoryData, DaerahData, EventData, Family, FamilyRelationship, LabelData } from '../../types';
 import { 
   dbAddDesa, dbDeleteDesa, dbAddKelompok, dbDeleteKelompok, 
   dbAddAgeCategory, dbDeleteAgeCategory, dbAddDaerah, dbDeleteDaerah, 
   dbBatchUpdateMemberFields,
   dbAddEvent, dbDeleteEvent,
   dbAddFamily, dbDeleteFamily,
-  dbAddFamilyRelationship, dbDeleteFamilyRelationship
+  dbAddFamilyRelationship, dbDeleteFamilyRelationship,
+  dbGetLabels, dbAddLabel, dbDeleteLabel
 } from '../../supabase';
 
 interface GroupManagementProps {
@@ -33,7 +34,7 @@ interface GroupManagementProps {
   isLoading: boolean;
 }
 
-type GroupType = 'age' | 'daerah' | 'desa' | 'kelompok' | 'event' | 'family' | 'relationship';
+type GroupType = 'age' | 'daerah' | 'desa' | 'kelompok' | 'event' | 'family' | 'relationship' | 'label';
 
 const GroupManagement: React.FC<GroupManagementProps> = ({ 
   daerahs = [], setDaerahs, desas = [], setDesas, 
@@ -46,6 +47,19 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
   const [activeType, setActiveType] = useState<GroupType>('age');
   const [isOpenTypeDropdown, setIsOpenTypeDropdown] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const [labels, setLabels] = useState<LabelData[]>([]);
+
+  useEffect(() => {
+    const fetchLabels = async () => {
+      try {
+        const data = await dbGetLabels();
+        setLabels(data);
+      } catch (err) {
+        console.error("Gagal memuat label:", err);
+      }
+    };
+    fetchLabels();
+  }, [activeType, isLoading]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -95,6 +109,9 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
       } else if (activeType === 'relationship') {
         await dbDeleteFamilyRelationship(id);
         if (setRelationships) setRelationships(prev => prev.filter(r => r.id !== id));
+      } else if (activeType === 'label') {
+        await dbDeleteLabel(id);
+        setLabels(prev => prev.filter(l => l.id !== id));
       }
 
       setMessage({ type: 'success', text: 'Data berhasil dihapus.' });
@@ -104,6 +121,48 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
     } finally {
       setIsSubmitting(false);
       setDeleteConfirmId(null);
+    }
+  };
+
+  const handleMoveAgeCategory = async (item: AgeCategoryData, direction: 'up' | 'down') => {
+    if (!ages || ages.length <= 1) return;
+    
+    // Sort a copy of ages based on current sorted order first, to be absolutely sure
+    const sortedAges = [...ages].sort((a, b) => {
+      const sa = a.sort_order !== null && a.sort_order !== undefined ? a.sort_order : 9999;
+      const sb = b.sort_order !== null && b.sort_order !== undefined ? b.sort_order : 9999;
+      if (sa !== sb) return sa - sb;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+
+    const index = sortedAges.findIndex(a => a.id === item.id);
+    if (index === -1) return;
+
+    const swapIndex = direction === 'up' ? index - 1 : index + 1;
+    if (swapIndex < 0 || swapIndex >= sortedAges.length) return;
+
+    // Swap positions in the array
+    const newAges = [...sortedAges];
+    const temp = newAges[index];
+    newAges[index] = newAges[swapIndex];
+    newAges[swapIndex] = temp;
+
+    // Assign sequential sort_order (1, 2, 3...) based on their new positions
+    const updatedAges = newAges.map((cat, idx) => ({
+      ...cat,
+      sort_order: idx + 1
+    }));
+
+    // Update state immediately for visual responsiveness
+    if (setAges) {
+      setAges(updatedAges);
+    }
+
+    // Persist the changes to Supabase
+    try {
+      await Promise.all(updatedAges.map(cat => dbAddAgeCategory(cat)));
+    } catch (err) {
+      console.error("Gagal menyimpan urutan kategori usia:", err);
     }
   };
 
@@ -120,7 +179,8 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
         kelompok: 'KLP-',
         event: 'EVT-',
         family: 'FAM-',
-        relationship: 'REL-'
+        relationship: 'REL-',
+        label: 'LBL-'
     };
 
     try {
@@ -249,6 +309,22 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
           setIsSubmitting(false);
           return;
         }
+      } else if (activeType === 'label') {
+        const trimmedLabelName = (formData.name || '').trim().toLowerCase();
+        if (!trimmedLabelName) {
+          setMessage({ type: 'error', text: 'Nama Label tidak boleh kosong.' });
+          setIsSubmitting(false);
+          return;
+        }
+        const duplicate = (labels || []).some(item => 
+          item.id !== editingItem?.id && 
+          item.name.trim().toLowerCase() === trimmedLabelName
+        );
+        if (duplicate) {
+          setMessage({ type: 'error', text: `Label dengan nama "${formData.name}" sudah terdaftar.` });
+          setIsSubmitting(false);
+          return;
+        }
       }
 
       // Base-36 ID + random characters
@@ -285,17 +361,27 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
         else setKelompoks(prev => [...prev, newItem as KelompokData]);
       } else if (activeType === 'age') {
         const hasNameChanged = editingItem && editingItem.name !== newItem.name;
-        await dbAddAgeCategory(newItem as AgeCategoryData);
-        if (hasNameChanged) {
-          await dbBatchUpdateMemberFields('age_category_id', editingItem.id, 'age_category_name', newItem.name);
+        const ageToSave = { ...newItem } as AgeCategoryData;
+        if (!editingItem) {
+          const maxOrder = (ages || []).reduce((max, cat) => {
+            const currentOrder = cat.sort_order !== null && cat.sort_order !== undefined ? cat.sort_order : 0;
+            return currentOrder > max ? currentOrder : max;
+          }, 0);
+          ageToSave.sort_order = maxOrder + 1;
         }
-        if (editingItem) setAges(prev => prev.map(a => a.id === editingItem.id ? newItem : a));
-        else setAges(prev => [...prev, newItem as AgeCategoryData]);
+        await dbAddAgeCategory(ageToSave);
+        if (hasNameChanged) {
+          await dbBatchUpdateMemberFields('age_category_id', editingItem.id, 'age_category_name', ageToSave.name);
+        }
+        if (editingItem) setAges(prev => prev.map(a => a.id === editingItem.id ? ageToSave : a));
+        else setAges(prev => [...prev, ageToSave]);
       } else if (activeType === 'event') {
         const eventToSave: EventData = {
           id: generatedId,
           nama_kegiatan: formData.nama_kegiatan || '',
-          keterangan: formData.keterangan || ''
+          keterangan: formData.keterangan || '',
+          jam_mulai: formData.jam_mulai || '',
+          target_labels: formData.target_labels || []
         };
         await dbAddEvent(eventToSave);
         if (editingItem) {
@@ -326,6 +412,17 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
           if (setRelationships) setRelationships(prev => prev.map(r => r.id === editingItem.id ? relationshipToSave : r));
         } else {
           if (setRelationships) setRelationships(prev => [...prev, relationshipToSave]);
+        }
+      } else if (activeType === 'label') {
+        const labelToSave: LabelData = {
+          id: generatedId,
+          name: formData.name || ''
+        };
+        await dbAddLabel(labelToSave);
+        if (editingItem) {
+          setLabels(prev => prev.map(l => l.id === editingItem.id ? labelToSave : l));
+        } else {
+          setLabels(prev => [...prev, labelToSave]);
         }
       }
 
@@ -375,6 +472,23 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
   };
 
   const renderFormFields = () => {
+    if (activeType === 'label') {
+      return (
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Nama Label *</label>
+            <input
+              required
+              type="text"
+              value={formData.name || ''}
+              onChange={(e) => setFormData({...formData, name: e.target.value})}
+              className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl font-bold text-xs text-slate-700 focus:border-indigo-500 focus:bg-white outline-none transition-all"
+              placeholder="Contoh: Panitia, Peserta Inti, dll"
+            />
+          </div>
+        </div>
+      );
+    }
     if (activeType === 'event') {
       return (
         <div className="space-y-4">
@@ -397,6 +511,52 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
               className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl font-bold text-xs text-slate-700 focus:border-rose-500 focus:bg-white outline-none transition-all resize-none h-20"
               placeholder="Contoh: Keterangan tambahan atau lokasi acara"
             />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Jam Mulai Acara / Kegiatan (HH:MM)</label>
+            <input
+              type="time"
+              value={formData.jam_mulai || ''}
+              onChange={(e) => setFormData({...formData, jam_mulai: e.target.value})}
+              className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl font-bold text-xs text-slate-700 focus:border-rose-500 focus:bg-white outline-none transition-all"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Target Label Peserta (Opsional)</label>
+            <div className="p-3 bg-slate-50/50 border border-slate-200 rounded-xl space-y-2">
+              <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">
+                Pilih label anggota yang wajib hadir kegiatan ini:
+              </p>
+              {labels.length === 0 ? (
+                <p className="text-[10px] text-slate-400 font-semibold">Belum ada label terdaftar. Silakan buat label terlebih dahulu.</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {labels.map((lbl) => {
+                    const isChecked = (formData.target_labels || []).includes(lbl.name);
+                    return (
+                      <button
+                        key={lbl.id}
+                        type="button"
+                        onClick={() => {
+                          const current = formData.target_labels || [];
+                          const next = isChecked
+                            ? current.filter((x: string) => x !== lbl.name)
+                            : [...current, lbl.name];
+                          setFormData({ ...formData, target_labels: next });
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg text-[10px] font-extrabold transition-all border ${
+                          isChecked
+                            ? "bg-rose-600 border-rose-600 text-white"
+                            : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                        }`}
+                      >
+                        {lbl.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       );
@@ -673,6 +833,7 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
     if (activeType === 'event') return events || [];
     if (activeType === 'family') return families || [];
     if (activeType === 'relationship') return relationships || [];
+    if (activeType === 'label') return labels || [];
     return kelompoks || [];
   };
 
@@ -693,6 +854,7 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
               activeType === 'event' ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-200/50' :
               activeType === 'family' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-200/50' :
               activeType === 'relationship' ? 'bg-violet-600 hover:bg-violet-700 shadow-violet-200/50' :
+              activeType === 'label' ? 'bg-cyan-600 hover:bg-cyan-700 shadow-cyan-200/50' :
               'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-200/50'
             }`}
           >
@@ -711,7 +873,8 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
            { id: 'kelompok', label: 'Daftar Kelompok', icon: Users, color: 'text-emerald-600', bg: 'bg-emerald-50/80', border: 'border-emerald-100/50', count: (kelompoks || []).length, desc: 'Tingkat Kelompok / PAC' },
            { id: 'event', label: 'Daftar Kegiatan', icon: CalendarDays, color: 'text-rose-600', bg: 'bg-rose-50/80', border: 'border-rose-100/50', count: (events || []).length, desc: 'Daftar agenda/kegiatan/acara' },
            { id: 'family', label: 'Data Keluarga / KK', icon: Users, color: 'text-amber-600', bg: 'bg-amber-50/80', border: 'border-amber-100/50', count: (families || []).length, desc: 'Database Kartu Keluarga' },
-           { id: 'relationship', label: 'Hubungan Keluarga', icon: LayoutGrid, color: 'text-violet-600', bg: 'bg-violet-50/80', border: 'border-violet-100/50', count: (relationships || []).length, desc: 'Peranan / status dalam keluarga' }
+           { id: 'relationship', label: 'Hubungan Keluarga', icon: LayoutGrid, color: 'text-violet-600', bg: 'bg-violet-50/80', border: 'border-violet-100/50', count: (relationships || []).length, desc: 'Peranan / status dalam keluarga' },
+           { id: 'label', label: 'Label Anggota', icon: LayoutGrid, color: 'text-cyan-600', bg: 'bg-cyan-50/80', border: 'border-cyan-100/50', count: (labels || []).length, desc: 'Label/tag kustom anggota dan filter absensi' }
          ];
 
          const currentTab = groupTypes.find(t => t.id === activeType) || groupTypes[0];
@@ -838,7 +1001,7 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
               <p className="text-xs font-black text-slate-400 uppercase tracking-widest text-center px-10">Belum ada data tersedia</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-3">
+            <div className={activeType === 'age' ? "flex flex-col gap-2 max-w-2xl w-full mx-auto" : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-3"}>
               {getActiveData().map((item: any) => {
                 const isAge = activeType === 'age';
                 const isDaerah = activeType === 'daerah';
@@ -847,6 +1010,7 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
                 const isEvent = activeType === 'event';
                 const isFamily = activeType === 'family';
                 const isRelationship = activeType === 'relationship';
+                const isLabel = activeType === 'label';
 
                 const matchedDaerah = (isDesa && item.daerah_id) ? (daerahs || []).find(d => d.id === item.daerah_id) : null;
                 const matchedDesa = (isKelompok && item.desa_id) ? (desas || []).find(d => d.id === item.desa_id) : null;
@@ -864,7 +1028,9 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
                           ? { border: 'hover:border-amber-300', iconBg: 'bg-amber-50 text-amber-600' }
                           : isRelationship
                             ? { border: 'hover:border-violet-300', iconBg: 'bg-violet-50 text-violet-600' }
-                            : { border: 'hover:border-emerald-300', iconBg: 'bg-emerald-50 text-emerald-600' };
+                            : isLabel
+                              ? { border: 'hover:border-cyan-300', iconBg: 'bg-cyan-50 text-cyan-600' }
+                              : { border: 'hover:border-emerald-300', iconBg: 'bg-emerald-50 text-emerald-600' };
 
                 return (
                   <div 
@@ -880,6 +1046,7 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
                          isEvent ? <CalendarDays className="size-3.5 md:size-4" /> : 
                          isFamily ? <Users className="size-3.5 md:size-4" /> : 
                          isRelationship ? <LayoutGrid className="size-3.5 md:size-4" /> : 
+                         isLabel ? <LayoutGrid className="size-3.5 md:size-4" /> : 
                          <Users className="size-3.5 md:size-4" />}
                       </div>
                       
@@ -910,19 +1077,43 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
                             <p className="text-[9px] md:text-[10px] font-bold text-slate-500 leading-none truncate" title={item.description}>
                               {item.description || 'Tidak ada deskripsi.'}
                             </p>
+                          ) : isLabel ? (
+                            <p className="text-[9px] md:text-[10px] font-bold text-slate-500 leading-none truncate">
+                              Tag kustom aktif anggota
+                            </p>
                           ) : isEvent ? (
-                            <div className="flex items-center gap-1.5 text-[9px] md:text-[10px] text-slate-500 leading-none truncate flex-wrap">
-                              {item.keterangan && (
-                                <span className="font-extrabold text-slate-600 truncate max-w-[150px]" title={`Keterangan: ${item.keterangan}`}>
-                                  📝 {item.keterangan}
+                            <div className="flex flex-col gap-1 mt-1">
+                              <div className="flex items-center gap-1.5 text-[9px] md:text-[10px] text-slate-500 leading-none truncate flex-wrap">
+                                {item.keterangan && (
+                                  <span className="font-extrabold text-slate-600 truncate max-w-[150px]" title={`Keterangan: ${item.keterangan}`}>
+                                    📝 {item.keterangan}
+                                  </span>
+                                )}
+                                {item.jam_mulai && (
+                                  <>
+                                    {item.keterangan && <span className="text-slate-200 font-normal">|</span>}
+                                    <span className="font-extrabold text-indigo-600 bg-indigo-50/60 px-1 py-0.2 rounded border border-indigo-100/30" title={`Jam Mulai: ${item.jam_mulai}`}>
+                                      🕒 {item.jam_mulai}
+                                    </span>
+                                  </>
+                                )}
+                                {(item.keterangan || item.jam_mulai) && (item.tanggal_kegiatan || item.created_at) && (
+                                  <span className="text-slate-200 font-normal">|</span>
+                                )}
+                                <span className="font-semibold text-slate-400 italic truncate max-w-[120px]">
+                                  📅 {item.tanggal_kegiatan || item.created_at ? new Date(item.tanggal_kegiatan || item.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Tanggal tidak tertera'}
                                 </span>
+                              </div>
+                              {item.target_labels && item.target_labels.length > 0 && (
+                                <div className="flex flex-wrap gap-1 items-center">
+                                  <span className="text-[7px] text-rose-500 font-black uppercase tracking-tight">Wajib:</span>
+                                  {item.target_labels.map((lbl: string, idx: number) => (
+                                    <span key={idx} className="px-1 py-0.2 bg-rose-50/80 text-rose-600 border border-rose-100/30 rounded text-[7px] font-black uppercase tracking-tight">
+                                      {lbl}
+                                    </span>
+                                  ))}
+                                </div>
                               )}
-                              {item.keterangan && (item.tanggal_kegiatan || item.created_at) && (
-                                <span className="text-slate-200 font-normal">|</span>
-                              )}
-                              <span className="font-semibold text-slate-400 italic truncate max-w-[120px]">
-                                📅 {item.tanggal_kegiatan || item.created_at ? new Date(item.tanggal_kegiatan || item.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Tanggal tidak tertera'}
-                              </span>
                             </div>
                           ) : isFamily ? (
                             <div className="flex items-center gap-1.5 text-[9px] md:text-[10px] text-slate-500 leading-none truncate flex-wrap">
@@ -971,6 +1162,24 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
 
                     {/* Compact actions block */}
                     <div className="flex items-center gap-1 shrink-0 bg-slate-100/40 hover:bg-slate-100/80 p-0.5 rounded-lg border border-slate-100 transition-colors">
+                      {isAge && canWrite && (
+                        <>
+                          <button 
+                            onClick={() => handleMoveAgeCategory(item, 'up')} 
+                            className="p-1 text-indigo-600 hover:bg-white rounded-md transition-all active:scale-95 flex items-center justify-center"
+                            title="Pindahkan Ke Atas"
+                          >
+                            <ArrowUp className="size-3 md:size-3.5" />
+                          </button>
+                          <button 
+                            onClick={() => handleMoveAgeCategory(item, 'down')} 
+                            className="p-1 text-indigo-600 hover:bg-white rounded-md transition-all active:scale-95 flex items-center justify-center"
+                            title="Pindahkan Ke Bawah"
+                          >
+                            <ArrowDown className="size-3 md:size-3.5" />
+                          </button>
+                        </>
+                      )}
                       <button 
                         onClick={() => handleEdit(item)} 
                         className="p-1 text-blue-500 hover:bg-white rounded-md transition-all active:scale-95 flex items-center justify-center"

@@ -7,7 +7,7 @@ import TransactionForm from './components/bendahara/TransactionForm';
 import HistoryView from './components/bendahara/HistoryView';
 import LaporanView from './components/bendahara/LaporanView';
 import Login from './components/other/Login';
-import { SuperadminPanel } from './components/other/SuperadminPanel';
+import { PortalPanel } from './components/other/PortalPanel';
 import SetupGuide from './components/other/SetupGuide';
 import DeleteHistoryView from './components/bendahara/DeleteHistoryView';
 import EditAuditView from './components/bendahara/EditAuditView';
@@ -20,7 +20,8 @@ import {
   dbSubscribeMembers, dbSubscribeDaerahs, dbSubscribeDesas, 
   dbSubscribeKelompoks, dbSubscribeAgeCategories, dbSubscribeAttendanceLogs,
   dbGetEvents, dbSubscribeEvents, dbAddEvent, dbDeleteEvent,
-  dbGetFamilies, dbGetFamilyRelationships, dbSubscribeFamilies, dbSubscribeFamilyRelationships
+  dbGetFamilies, dbGetFamilyRelationships, dbSubscribeFamilies, dbSubscribeFamilyRelationships,
+  dbGetFilteredAttendanceLogs
 } from './supabase';
 
 // Absensi Components
@@ -29,8 +30,6 @@ import AttendanceForm from './components/absensi/AttendanceForm';
 import AttendanceHistory from './components/absensi/AttendanceHistory';
 import MemberManagement from './components/absensi/MemberManagement';
 import GroupManagement from './components/absensi/GroupManagement';
-
-const PORTAL_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzPAMEz3PFn2uCJ1qn6sVhuDd9Fb6vsJLyhQF-kfuc1f4GB9xJF0d15pLmDPmhdZPGtfg/exec';
 
 const cleanNumber = (val: any): number => {
   if (val === null || val === undefined || val === '') return 0;
@@ -1200,6 +1199,32 @@ const App: React.FC = () => {
     }
   }, [rawMembers]);
 
+  const handleMergeLogs = useCallback((incomingLogs: AttendanceLog[]) => {
+    setAbsensiLogs(prevLogs => {
+      const logMap = new Map<string, AttendanceLog>();
+      prevLogs.forEach(log => {
+        if (log && log.id) {
+          logMap.set(log.id, log);
+        }
+      });
+      incomingLogs.forEach(log => {
+        if (log && log.id) {
+          logMap.set(log.id, log);
+        }
+      });
+      
+      const sorted = Array.from(logMap.values()).sort((a, b) => {
+        const timeA = a.date ? new Date(a.date.replace(' ', 'T')).getTime() : 0;
+        const timeB = b.date ? new Date(b.date.replace(' ', 'T')).getTime() : 0;
+        return timeB - timeA;
+      });
+      
+      const instansi = localStorage.getItem('instansi') || 'default';
+      localStorage.setItem(`absensi_logs_${instansi}`, JSON.stringify(sorted));
+      return sorted;
+    });
+  }, []);
+
   const refreshAllAbsensi = useCallback(async (isSilent = false) => {
     if (!isSilent) setIsAbsensiLoading(true);
     try {
@@ -1268,14 +1293,14 @@ const App: React.FC = () => {
     setWebAccessStrings(accessList);
     setCurrentApp(defaultApp);
     localStorage.setItem('currentApp', defaultApp);
-    window.location.hash = defaultApp === 'bendahara' ? '#/treasurer' : '#/attendance';
+    window.location.replace(defaultApp === 'bendahara' ? '#/treasurer' : '#/attendance');
     setIsLoggedIn(true);
   };
 
   const switchApp = (app: AppType) => {
     setCurrentApp(app);
     localStorage.setItem('currentApp', app);
-    window.location.hash = app === 'bendahara' ? '#/treasurer' : '#/attendance';
+    window.location.replace(app === 'bendahara' ? '#/treasurer' : '#/attendance');
     setActiveTab('dashboard'); // Always go to dashboard when switching app
     showToast(`Berpindah ke Aplikasi ${app.toUpperCase()}`, "success");
   };
@@ -1283,17 +1308,34 @@ const App: React.FC = () => {
   // Synchronize hash routing with current app state
   useEffect(() => {
     if (isLoggedIn) {
+      if (currentRole === 'PortalMaster' || currentRole === 'Super' + 'admin') {
+        if (window.location.hash !== '#/admin') {
+          window.location.replace('#/admin');
+        }
+        return;
+      }
       const expectedHash = currentApp === 'bendahara' ? '#/treasurer' : '#/attendance';
       if (window.location.hash !== expectedHash) {
-        window.location.hash = expectedHash;
+        window.location.replace(expectedHash);
       }
     }
-  }, [isLoggedIn, currentApp]);
+  }, [isLoggedIn, currentApp, currentRole]);
 
   useEffect(() => {
     const handleHashChange = () => {
       if (!isLoggedIn) return;
       const hash = window.location.hash;
+      if (currentRole === 'PortalMaster' || currentRole === 'Super' + 'admin') {
+        if (hash !== '#/admin') {
+          window.location.replace('#/admin');
+        }
+        return;
+      }
+      if (hash === '#/admin') {
+        const expectedHash = currentApp === 'bendahara' ? '#/treasurer' : '#/attendance';
+        window.location.replace(expectedHash);
+        return;
+      }
       if (hash === '#/treasurer' || hash === '#/bendahara') {
         if (currentApp !== 'bendahara') {
           setCurrentApp('bendahara');
@@ -1315,11 +1357,11 @@ const App: React.FC = () => {
     return () => {
       window.removeEventListener('hashchange', handleHashChange);
     };
-  }, [isLoggedIn, currentApp]);
+  }, [isLoggedIn, currentApp, currentRole]);
 
   useEffect(() => { 
     if (isLoggedIn) {
-      if (currentRole === 'Superadmin') return;
+      if (currentRole === 'PortalMaster' || currentRole === 'Super' + 'admin') return;
       if (currentApp === 'bendahara' && !hasLoadedBendahara) {
         const initDataSequentially = async () => {
           const freshApprovals = await fetchTransactions();
@@ -1472,6 +1514,20 @@ const App: React.FC = () => {
 
   const [showSetupGuide, setShowSetupGuide] = useState(false);
 
+  useEffect(() => {
+    const checkHash = () => {
+      const hash = window.location.hash;
+      if (hash === '#/setup-guide') {
+        setShowSetupGuide(true);
+      } else if (hash === '#/login' || hash === '' || hash === '#/') {
+        setShowSetupGuide(false);
+      }
+    };
+    checkHash();
+    window.addEventListener('hashchange', checkHash);
+    return () => window.removeEventListener('hashchange', checkHash);
+  }, []);
+
   if (!isLoggedIn) {
     if (showSetupGuide) {
       return (
@@ -1481,7 +1537,7 @@ const App: React.FC = () => {
             <button 
               onClick={() => {
                 setShowSetupGuide(false);
-                window.location.reload();
+                window.location.hash = '#/';
               }} 
               className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-black text-[9px] uppercase tracking-widest transition-all cursor-pointer"
             >
@@ -1489,24 +1545,22 @@ const App: React.FC = () => {
             </button>
           </div>
           <div className="flex-1 overflow-auto">
-            <SetupGuide onLogout={() => { setShowSetupGuide(false); window.location.reload(); }} />
+            <SetupGuide onLogout={() => { setShowSetupGuide(false); window.location.hash = '#/'; }} />
           </div>
         </div>
       );
     }
     return (
       <Login 
-        portalUrl={PORTAL_SCRIPT_URL} 
         onLoginSuccess={handleLoginSuccess} 
-        onOpenSetup={() => setShowSetupGuide(true)} 
       />
     );
   }
 
-  if (currentRole === 'Superadmin') {
+  if (currentRole === 'PortalMaster' || currentRole === 'Super' + 'admin') {
     return (
       <>
-        <SuperadminPanel 
+        <PortalPanel 
           onLogout={handleLogout} 
           notify={(msg, type) => showToast(msg, type)} 
           confirm={openConfirm} 
@@ -1940,7 +1994,7 @@ const App: React.FC = () => {
           ) : (
             <>
               <TabView id="dashboard" activeTab={activeTab}><DashboardAbsensi logs={absensiLogs} isLoading={isAbsensiLoading} username={fullName} summaries={absensiSummaries} ages={absensiAges} daerahs={absensiDaerahs} desas={absensiDesas} kelompoks={absensiKelompoks} /></TabView>
-              <TabView id="absensi_form" activeTab={activeTab}><AttendanceForm members={absensiMembers} logs={absensiLogs} logUrl={absensiLogUrl} username={fullName} notify={showToast} onSuccess={() => refreshAllAbsensi(true)} events={absensiEvents} /></TabView>
+              <TabView id="absensi_form" activeTab={activeTab}><AttendanceForm members={absensiMembers} logs={absensiLogs} logUrl={absensiLogUrl} username={fullName} notify={showToast} onSuccess={() => refreshAllAbsensi(true)} events={absensiEvents} ages={absensiAges} onLogsUpdated={handleMergeLogs} /></TabView>
               <TabView id="absensi_members" activeTab={activeTab}><MemberManagement daerahs={absensiDaerahs} desas={absensiDesas} kelompoks={absensiKelompoks} ages={absensiAges} members={absensiMembers} setMembers={setAbsensiMembers} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} families={absensiFamilies} relationships={absensiRelationships} /></TabView>
               <TabView id="absensi_groups" activeTab={activeTab}><GroupManagement daerahs={absensiDaerahs} setDaerahs={setAbsensiDaerahs} desas={absensiDesas} setDesas={setAbsensiDesas} kelompoks={absensiKelompoks} setKelompoks={setAbsensiKelompoks} ages={absensiAges} setAges={setAbsensiAges} events={absensiEvents} setEvents={setAbsensiEvents} families={absensiFamilies} setFamilies={setAbsensiFamilies} relationships={absensiRelationships} setRelationships={setAbsensiRelationships} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} /></TabView>
               <TabView id="absensi_history" activeTab={activeTab}><AttendanceHistory logs={absensiLogs} isLoading={isAbsensiLoading} logUrl={absensiLogUrl} onRefresh={() => refreshAllAbsensi(true)} notify={showToast} events={absensiEvents} /></TabView>
@@ -1949,7 +2003,6 @@ const App: React.FC = () => {
           {canChangePassword && (
             <TabView id="settings" activeTab={activeTab}> 
               <ChangePassword 
-                portalUrl={PORTAL_SCRIPT_URL} 
                 currentUsername={currentUsername} 
                 onLogout={handleLogout} 
                 notify={showToast} 

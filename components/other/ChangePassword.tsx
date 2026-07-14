@@ -3,7 +3,6 @@ import { Lock, ShieldCheck, KeyRound, Loader2, ArrowRight, CheckCircle2, XCircle
 import { db, centralClient } from '../../supabase';
 
 interface ChangePasswordProps {
-  portalUrl: string;
   currentUsername: string;
   onLogout: () => void;
   notify: (msg: string, type?: 'success' | 'error') => void;

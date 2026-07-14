@@ -15,11 +15,14 @@ import {
   User,
   SlidersHorizontal,
   Info,
-  X
+  X,
+  Filter,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
-import { AbsensiMember, AttendanceLog, EventData } from '../../types';
+import { AbsensiMember, AttendanceLog, EventData, AgeCategoryData } from '../../types';
 import ModernSelect from '../ui/ModernSelect';
-import { dbAddAttendanceLog, dbAddAttendanceLogs, dbAddEvent } from '../../supabase';
+import { dbAddAttendanceLog, dbAddAttendanceLogs, dbAddEvent, dbGetFilteredAttendanceLogs } from '../../supabase';
 
 interface AttendanceFormProps {
   members: AbsensiMember[];
@@ -29,7 +32,20 @@ interface AttendanceFormProps {
   notify: (msg: string, type: 'success' | 'error') => void;
   onSuccess: () => void;
   events?: EventData[];
+  ages?: AgeCategoryData[];
+  onLogsUpdated?: (newLogs: AttendanceLog[]) => void;
 }
+
+const getDdmmyy = (dateStr: string): string => {
+  if (!dateStr) return "";
+  const onlyDate = dateStr.split(' ')[0]; // e.g. "2026-07-02"
+  const parts = onlyDate.split('-');
+  if (parts.length === 3) {
+    // parts are [yyyy, mm, dd]
+    return `${parts[2]}${parts[1]}${parts[0].slice(-2)}`;
+  }
+  return onlyDate.replace(/-/g, '');
+};
 
 const AttendanceForm: React.FC<AttendanceFormProps> = ({ 
   members, 
@@ -38,20 +54,40 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
   username, 
   notify, 
   onSuccess,
-  events = []
+  events = [],
+  ages = [],
+  onLogsUpdated
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterKelompok, setFilterKelompok] = useState('');
-  const [filterDesa, setFilterDesa] = useState('');
-  const [filterDaerah, setFilterDaerah] = useState('');
-  const [filterAgeCategory, setFilterAgeCategory] = useState('');
-  const [filterGender, setFilterGender] = useState('');
+  const [filterKelompok, setFilterKelompok] = useState('ALL');
+  const [filterDesa, setFilterDesa] = useState('ALL');
+  const [filterDaerah, setFilterDaerah] = useState('ALL');
+  const [filterAgeCategory, setFilterAgeCategory] = useState('ALL');
+  const [filterGender, setFilterGender] = useState('ALL');
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedEventId, setSelectedEventId] = useState("");
+  const selectedEvent = (events || []).find(e => e.id === selectedEventId);
+  const [onlyShowTargetLabels, setOnlyShowTargetLabels] = useState(true);
   const [showInitialFilterModal, setShowInitialFilterModal] = useState(true);
+  const [showInlineFilters, setShowInlineFilters] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [batchStatuses, setBatchStatuses] = useState<Record<string, 'Hadir' | 'Izin' | 'Sakit' | 'Alpa' | ''>>({});
   const [batchNotes, setBatchNotes] = useState<Record<string, string>>({});
+
+  // Auto-complete filters when an event with target labels is selected
+  useEffect(() => {
+    if (selectedEventId) {
+      const evt = (events || []).find(e => e.id === selectedEventId);
+      if (evt && evt.target_labels && evt.target_labels.length > 0) {
+        setFilterKelompok('ALL');
+        setFilterDesa('ALL');
+        setFilterDaerah('ALL');
+        setFilterAgeCategory('ALL');
+        setFilterGender('ALL');
+        setOnlyShowTargetLabels(true);
+      }
+    }
+  }, [selectedEventId, events]);
   const [shakingMemberId, setShakingMemberId] = useState<string | null>(null);
 
   const handleAddNewEvent = async (name: string) => {
@@ -66,6 +102,29 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
       setSelectedEventId(newEvent.id);
     } else {
       notify("Gagal menambahkan kegiatan baru.", "error");
+    }
+  };
+
+  const handleUpdateEventTime = async (eventId: string, newTime: string) => {
+    try {
+      const eventToUpdate = (events || []).find(e => e.id === eventId);
+      if (!eventToUpdate) return;
+      
+      const updatedEvent: EventData = {
+        ...eventToUpdate,
+        jam_mulai: newTime
+      };
+      
+      const success = await dbAddEvent(updatedEvent);
+      if (success) {
+        notify(`Jam mulai kegiatan "${eventToUpdate.nama_kegiatan}" diperbarui ke ${newTime || '—'}`, "success");
+        onSuccess(); // triggers refresh to load updated events
+      } else {
+        notify("Gagal memperbarui jam mulai kegiatan.", "error");
+      }
+    } catch (err) {
+      console.error("Error updating event time:", err);
+      notify("Terjadi kesalahan saat memperbarui jam.", "error");
     }
   };
 
@@ -111,6 +170,34 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
       }
     };
   }, []);
+
+  // Background Auto-Refresh (15 seconds)
+  useEffect(() => {
+    // Only run if both selectedDate and selectedEventId are active
+    if (!selectedDate || !selectedEventId || !onLogsUpdated) {
+      return;
+    }
+
+    const fetchLatestLogs = async () => {
+      try {
+        const fresh = await dbGetFilteredAttendanceLogs(selectedDate, selectedEventId, 25);
+        if (fresh && fresh.length > 0) {
+          onLogsUpdated(fresh);
+        }
+      } catch (err) {
+        console.error("Background auto-refresh error:", err);
+      }
+    };
+
+    // Immediate check
+    fetchLatestLogs();
+
+    const intervalId = setInterval(fetchLatestLogs, 15000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [selectedDate, selectedEventId, onLogsUpdated]);
 
   // Auto-focus barcode input and maintain robust standby listening mode (only when active)
   useEffect(() => {
@@ -289,6 +376,10 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
 
     try {
       const generatedLogId = `LOG-${Date.now().toString(36).toUpperCase()}-${memberId.slice(-4)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+      const ddmmyy = getDdmmyy(currentDateStr);
+      const uniqRefVal = `${member.id}-${ddmmyy}-${currentEventId || 'no_event'}`;
+      const currentEvent = (events || []).find(e => e.id === currentEventId);
+      const jamMulaiEvent = currentEvent?.jam_mulai || null;
       const newLog = {
         id: generatedLogId,
         memberId: member.id,
@@ -308,7 +399,9 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
         note: '',
         createdBy: username,
         event_id: currentEventId,
-        metode: scanMethod
+        metode: scanMethod,
+        uniq_ref: uniqRefVal,
+        jam_mulai: jamMulaiEvent
       };
 
       await dbAddAttendanceLogs([newLog as any]);
@@ -331,20 +424,40 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
       onSuccess();
     } catch (err: any) {
       let cleanMsg = err.message || "Kesalahan database tidak dikenal";
-      try {
-        const parsed = JSON.parse(err.message);
-        if (parsed && parsed.error) {
-          cleanMsg = parsed.error;
+      const isDbDuplicate = cleanMsg.toLowerCase().includes('uniq_ref') || 
+                            cleanMsg.toLowerCase().includes('23505') || 
+                            cleanMsg.toLowerCase().includes('duplicate key');
+      
+      if (isDbDuplicate) {
+        const dupMsg = `Gagal: ${member.nama_lengkap} sudah melakukan presensi hari ini pada ${eventName}!`;
+        notify(dupMsg, "error");
+        setRecentScans(prev => [
+          {
+            id: memberId,
+            memberName: member.nama_lengkap,
+            timestamp: new Date().toLocaleTimeString('id-ID'),
+            status: 'duplicate',
+            message: `${member.nama_lengkap} sudah absen pada ${eventName}`,
+            memberDetails: `${member.desa_name} / ${member.kelompok_name}`
+          },
+          ...prev
+        ]);
+      } else {
+        try {
+          const parsed = JSON.parse(err.message);
+          if (parsed && parsed.error) {
+            cleanMsg = parsed.error;
+          }
+        } catch {
+          // Not a JSON error
         }
-      } catch {
-        // Not a JSON error
+        notify(`Gagal menyimpan scan: ${cleanMsg}`, "error");
+        setLocalScannedIds(prev => {
+          const next = new Set(prev);
+          next.delete(memberId);
+          return next;
+        });
       }
-      notify(`Gagal menyimpan scan: ${cleanMsg}`, "error");
-      setLocalScannedIds(prev => {
-        const next = new Set(prev);
-        next.delete(memberId);
-        return next;
-      });
     }
   }, [
     selectedDate,
@@ -428,20 +541,77 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
       const matchAge = filterAgeCategory === 'ALL' || String(m.age_category_id) === String(filterAgeCategory);
       const matchGender = filterGender === 'ALL' || (m.jenis_kelamin && m.jenis_kelamin.toLowerCase() === filterGender.toLowerCase());
       
-      return matchSearch && matchKelompok && matchDesa && matchDaerah && matchAge && matchGender;
+      let matchLabel = true;
+      if (selectedEvent && selectedEvent.target_labels && selectedEvent.target_labels.length > 0) {
+        const hasMatchingLabel = (m.labels || []).some(lbl => selectedEvent.target_labels?.includes(lbl));
+        if (onlyShowTargetLabels) {
+          matchLabel = hasMatchingLabel;
+        } else {
+          matchLabel = !hasMatchingLabel;
+        }
+      }
+
+      return matchSearch && matchKelompok && matchDesa && matchDaerah && matchAge && matchGender && matchLabel;
     });
 
-    return {
-      notRecordedMembers: rawFiltered.filter(m => {
-        const id = String(m.id).trim().toUpperCase();
-        return !recordedMemberIds.has(id);
-      }),
-      recordedMembers: rawFiltered.filter(m => {
-        const id = String(m.id).trim().toUpperCase();
-        return recordedMemberIds.has(id);
-      })
+    const sortMembers = (m1: AbsensiMember, m2: AbsensiMember) => {
+      // 1. Gender (Laki-laki first, then Perempuan)
+      const getGenderOrder = (g: string) => {
+        const clean = (g || '').toLowerCase().trim();
+        if (clean.startsWith('l')) return 1;
+        if (clean.startsWith('p')) return 2;
+        return 3;
+      };
+      const genA = getGenderOrder(m1.jenis_kelamin);
+      const genB = getGenderOrder(m2.jenis_kelamin);
+      if (genA !== genB) return genA - genB;
+
+      // 2. Daerah
+      const daerahA = m1.daerah_name || '';
+      const daerahB = m2.daerah_name || '';
+      const compDaerah = daerahA.localeCompare(daerahB);
+      if (compDaerah !== 0) return compDaerah;
+
+      // 3. Desa
+      const desaA = m1.desa_name || '';
+      const desaB = m2.desa_name || '';
+      const compDesa = desaA.localeCompare(desaB);
+      if (compDesa !== 0) return compDesa;
+
+      // 4. Kelompok
+      const kelompokA = m1.kelompok_name || '';
+      const kelompokB = m2.kelompok_name || '';
+      const compKelompok = kelompokA.localeCompare(kelompokB);
+      if (compKelompok !== 0) return compKelompok;
+
+      // 5. Kategori Usia (Ages sort order)
+      const ageA = ages.find(cat => String(cat.id) === String(m1.age_category_id));
+      const ageB = ages.find(cat => String(cat.id) === String(m2.age_category_id));
+      const orderA = ageA && ageA.sort_order !== null && ageA.sort_order !== undefined ? ageA.sort_order : 9999;
+      const orderB = ageB && ageB.sort_order !== null && ageB.sort_order !== undefined ? ageB.sort_order : 9999;
+      if (orderA !== orderB) return orderA - orderB;
+
+      // 6. Nama Lengkap
+      const nameA = m1.nama_lengkap || '';
+      const nameB = m2.nama_lengkap || '';
+      return nameA.localeCompare(nameB);
     };
-  }, [members, searchTerm, filterKelompok, filterDesa, filterDaerah, filterAgeCategory, filterGender, recordedMemberIds, selectedDate, selectedEventId]);
+
+    return {
+      notRecordedMembers: rawFiltered
+        .filter(m => {
+          const id = String(m.id).trim().toUpperCase();
+          return !recordedMemberIds.has(id);
+        })
+        .sort(sortMembers),
+      recordedMembers: rawFiltered
+        .filter(m => {
+          const id = String(m.id).trim().toUpperCase();
+          return recordedMemberIds.has(id);
+        })
+        .sort(sortMembers)
+    };
+  }, [members, searchTerm, filterKelompok, filterDesa, filterDaerah, filterAgeCategory, filterGender, recordedMemberIds, selectedDate, selectedEventId, selectedEvent, onlyShowTargetLabels, ages]);
 
   // Dynamic Options pulled from live Members list
   const uniqueKelompoks = useMemo(() => {
@@ -465,8 +635,15 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
   const uniqueAgeCategories = useMemo(() => {
     const map = new Map();
     members.forEach(m => { if (m.age_category_id && m.age_category_name) map.set(m.age_category_id, m.age_category_name); });
-    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [members]);
+    return Array.from(map.entries()).sort((a, b) => {
+      const ageA = ages.find(cat => String(cat.id) === String(a[0]));
+      const ageB = ages.find(cat => String(cat.id) === String(b[0]));
+      const orderA = ageA && ageA.sort_order !== null && ageA.sort_order !== undefined ? ageA.sort_order : 9999;
+      const orderB = ageB && ageB.sort_order !== null && ageB.sort_order !== undefined ? ageB.sort_order : 9999;
+      if (orderA !== orderB) return orderA - orderB;
+      return a[1].localeCompare(b[1]);
+    });
+  }, [members, ages]);
 
   const kelompokOptions = useMemo(() => {
     return [
@@ -573,9 +750,13 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
 
     setIsSubmitting(true);
     try {
+      const selectedEvent = (events || []).find(e => e.id === selectedEventId);
+      const jamMulaiEvent = selectedEvent?.jam_mulai || null;
       const logsToSubmit: AttendanceLog[] = selectedMembers.map(m => {
         const memberSuffix = m.id.slice(-4);
         const generatedId = `LOG-${Date.now().toString(36).toUpperCase()}-${memberSuffix}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+        const ddmmyy = getDdmmyy(selectedDate);
+        const uniqRefVal = `${m.id}-${ddmmyy}-${selectedEventId || 'no_event'}`;
         return {
           id: generatedId,
           memberId: m.id,
@@ -595,7 +776,9 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
           note: batchNotes[m.id] || '',
           createdBy: username,
           event_id: selectedEventId || null,
-          metode: 'manual'
+          metode: 'manual',
+          uniq_ref: uniqRefVal,
+          jam_mulai: jamMulaiEvent
         } as any;
       });
 
@@ -607,15 +790,22 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
       onSuccess();
     } catch (e: any) {
       let cleanMsg = e.message || "Kesalahan database tidak dikenal";
-      try {
-        const parsed = JSON.parse(e.message);
-        if (parsed && parsed.error) {
-          cleanMsg = parsed.error;
+      const isDbDuplicate = cleanMsg.toLowerCase().includes('uniq_ref') || 
+                            cleanMsg.toLowerCase().includes('23505') || 
+                            cleanMsg.toLowerCase().includes('duplicate key');
+      if (isDbDuplicate) {
+        notify("Gagal simpan: Salah satu atau beberapa anggota sudah melakukan presensi hari ini!", "error");
+      } else {
+        try {
+          const parsed = JSON.parse(e.message);
+          if (parsed && parsed.error) {
+            cleanMsg = parsed.error;
+          }
+        } catch {
+          // Not a JSON error
         }
-      } catch {
-        // Not a JSON error
+        notify("Gagal simpan absensi: " + cleanMsg, "error");
       }
-      notify("Gagal simpan absensi: " + cleanMsg, "error");
     } finally {
       setIsSubmitting(false);
     }
@@ -682,32 +872,42 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                     <button
                       type="button"
                       onClick={() => changeAttendanceMode('manual')}
-                      className={`py-2 px-3 rounded-lg text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                        attendanceMode === 'manual'
-                          ? 'bg-white text-blue-600 shadow-xs'
-                          : 'text-slate-500 hover:text-slate-800'
-                      }`}
+                      className="relative py-2 px-3 rounded-lg text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer text-slate-500 hover:text-slate-800 transition-colors duration-200"
                     >
-                      <UserCheck size={12} />
-                      <span>Checklist Manual</span>
+                      {attendanceMode === 'manual' && (
+                        <motion.div
+                          layoutId="initialAttendanceModePill"
+                          className="absolute inset-0 bg-white rounded-lg shadow-xs"
+                          transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                        />
+                      )}
+                      <span className={`relative z-10 flex items-center justify-center gap-1.5 ${attendanceMode === 'manual' ? 'text-blue-600' : 'text-slate-500'}`}>
+                        <UserCheck size={12} />
+                        <span>MANUAL</span>
+                      </span>
                     </button>
                     <button
                       type="button"
                       onClick={() => changeAttendanceMode('scan')}
-                      className={`py-2 px-3 rounded-lg text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                        attendanceMode === 'scan'
-                          ? 'bg-white text-blue-600 shadow-xs'
-                          : 'text-slate-500 hover:text-slate-800'
-                      }`}
+                      className="relative py-2 px-3 rounded-lg text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer text-slate-500 hover:text-slate-800 transition-colors duration-200"
                     >
-                      <svg className="size-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 5H5V19H3V5Z" fill="currentColor"/>
-                        <path d="M7 5H8V19H7V5Z" fill="currentColor"/>
-                        <path d="M11 5H13V19H11V5Z" fill="currentColor"/>
-                        <path d="M16 5H17V19H16V5Z" fill="currentColor"/>
-                        <path d="M20 5H21V19H20V5Z" fill="currentColor"/>
-                      </svg>
-                      <span>Scan Barcode</span>
+                      {attendanceMode === 'scan' && (
+                        <motion.div
+                          layoutId="initialAttendanceModePill"
+                          className="absolute inset-0 bg-white rounded-lg shadow-xs"
+                          transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                        />
+                      )}
+                      <span className={`relative z-10 flex items-center justify-center gap-1.5 ${attendanceMode === 'scan' ? 'text-blue-600' : 'text-slate-500'}`}>
+                        <svg className="size-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 5H5V19H3V5Z" fill="currentColor"/>
+                          <path d="M7 5H8V19H7V5Z" fill="currentColor"/>
+                          <path d="M11 5H13V19H11V5Z" fill="currentColor"/>
+                          <path d="M16 5H17V19H16V5Z" fill="currentColor"/>
+                          <path d="M20 5H21V19H20V5Z" fill="currentColor"/>
+                        </svg>
+                        <span>SCAN</span>
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -729,118 +929,36 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
 
                 {/* 1b. Kegiatan/Event Name */}
                 <div className="space-y-1 relative z-40">
-                  <span className="text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Kegiatan (Acara) *</span>
-                  <ModernSelect 
-                    value={selectedEventId}
-                    onChange={(val) => { setSelectedEventId(val); }}
-                    options={eventOptions}
-                    icon={Calendar}
-                    placeholder="PILIH NAMA KEGIATAN"
-                    onAddNew={handleAddNewEvent}
-                  />
+                  <div className="flex gap-2 items-end">
+                    <div className="flex-1 min-w-0 space-y-1">
+                      <span className="text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Kegiatan (Acara) *</span>
+                      <ModernSelect 
+                        value={selectedEventId}
+                        onChange={(val) => { setSelectedEventId(val); }}
+                        options={eventOptions}
+                        icon={Calendar}
+                        placeholder="PILIH NAMA KEGIATAN"
+                        onAddNew={handleAddNewEvent}
+                      />
+                    </div>
+                    {selectedEventId && (
+                      <div className="w-[90px] shrink-0 space-y-1">
+                        <span className="text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none text-center">Jam Mulai</span>
+                        <input 
+                          type="time"
+                          value={selectedEvent?.jam_mulai || ''}
+                          onChange={async (e) => {
+                            await handleUpdateEventTime(selectedEventId, e.target.value);
+                          }}
+                          className="w-full px-1 py-2 bg-slate-50 border-2 border-slate-100 rounded-xl text-[10px] font-black text-center outline-none transition-all cursor-pointer focus:border-emerald-500 focus:bg-white text-slate-705 h-[38px] md:h-[46px] flex items-center justify-center"
+                          title="Ubah Jam Mulai"
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {/* Only Show Filter Criteria for Manual Checklist Mode */}
-                <AnimatePresence initial={false}>
-                  {attendanceMode === 'manual' && (
-                    <motion.div
-                      key="manual-filters"
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      transition={{ duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
-                      className="space-y-3.5 overflow-visible"
-                    >
-                      {/* Daerah & Unit Desa */}
-                      <div className="grid grid-cols-2 gap-3 relative z-30">
-                        <div className="space-y-1 min-w-0">
-                          <span className="text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Daerah</span>
-                          <ModernSelect 
-                            value={filterDaerah}
-                            onChange={(val) => { setFilterDaerah(val); clearBatch(); }}
-                            options={daerahOptions}
-                            icon={MapPin}
-                            placeholder="PILIH DAERAH"
-                          />
-                        </div>
-                        <div className="space-y-1 min-w-0">
-                          <span className="text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Unit Desa</span>
-                          <ModernSelect 
-                            value={filterDesa}
-                            onChange={(val) => { setFilterDesa(val); clearBatch(); }}
-                            options={desaOptions}
-                            icon={MapPin}
-                            placeholder="PILIH DESA"
-                          />
-                        </div>
-                      </div>
 
-                      {/* Kelompok & Kategori Usia */}
-                      <div className="grid grid-cols-2 gap-3 relative z-20">
-                        <div className="space-y-1 min-w-0">
-                          <span className="text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Kelompok</span>
-                          <ModernSelect 
-                            value={filterKelompok}
-                            onChange={(val) => { setFilterKelompok(val); clearBatch(); }}
-                            options={kelompokOptions}
-                            icon={Users}
-                            placeholder="PILIH KELOMPOK"
-                          />
-                        </div>
-                        <div className="space-y-1 min-w-0">
-                          <span className="text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Kategori Usia</span>
-                          <ModernSelect 
-                            value={filterAgeCategory}
-                            onChange={(val) => { setFilterAgeCategory(val); clearBatch(); }}
-                            options={ageOptions}
-                            icon={Baby}
-                            placeholder="PILIH USIA"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Gender Toggle Buttons */}
-                      <div className="space-y-1.5 relative z-10">
-                        <span className="text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Gender</span>
-                        <div className="grid grid-cols-3 bg-slate-100 p-1 rounded-xl border border-slate-200/55 shadow-xs select-none">
-                          <button
-                            type="button"
-                            onClick={() => { setFilterGender('ALL'); clearBatch(); }}
-                            className={`py-2 px-2 rounded-lg text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1 transition-all cursor-pointer ${
-                              filterGender === 'ALL'
-                                ? 'bg-white text-blue-600 shadow-xs'
-                                : 'text-slate-500 hover:text-slate-800'
-                            }`}
-                          >
-                            <span>Semua</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => { setFilterGender('Laki-laki'); clearBatch(); }}
-                            className={`py-2 px-2 rounded-lg text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1 transition-all cursor-pointer ${
-                              filterGender === 'Laki-laki'
-                                ? 'bg-white text-blue-600 shadow-xs'
-                                : 'text-slate-500 hover:text-slate-800'
-                            }`}
-                          >
-                            <span>Laki-laki</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => { setFilterGender('Perempuan'); clearBatch(); }}
-                            className={`py-2 px-2 rounded-lg text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1 transition-all cursor-pointer ${
-                              filterGender === 'Perempuan'
-                                ? 'bg-white text-blue-600 shadow-xs'
-                                : 'text-slate-500 hover:text-slate-800'
-                            }`}
-                          >
-                            <span>Perempuan</span>
-                          </button>
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
               </motion.div>
 
               {/* Actions Footer */}
@@ -933,32 +1051,42 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
           <button
             type="button"
             onClick={() => changeAttendanceMode('manual')}
-            className={`py-2 px-4 rounded-lg md:rounded-xl text-[10px] md:text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer ${
-              attendanceMode === 'manual'
-                ? 'bg-white text-blue-600 shadow-xs'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
+            className="relative py-2 px-4 rounded-lg md:rounded-xl text-[10px] md:text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer text-slate-500 hover:text-slate-800 transition-colors duration-200"
           >
-            <UserCheck size={14} />
-            <span>Checklist Manual</span>
+            {attendanceMode === 'manual' && (
+              <motion.div
+                layoutId="mainAttendanceModePill"
+                className="absolute inset-0 bg-white rounded-lg md:rounded-xl shadow-xs"
+                transition={{ type: "spring", stiffness: 380, damping: 30 }}
+              />
+            )}
+            <span className={`relative z-10 flex items-center justify-center gap-2 ${attendanceMode === 'manual' ? 'text-blue-600' : 'text-slate-500'}`}>
+              <UserCheck size={14} />
+              <span>MANUAL</span>
+            </span>
           </button>
           <button
             type="button"
             onClick={() => changeAttendanceMode('scan')}
-            className={`py-2 px-4 rounded-lg md:rounded-xl text-[10px] md:text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer ${
-              attendanceMode === 'scan'
-                ? 'bg-white text-blue-600 shadow-xs'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
+            className="relative py-2 px-4 rounded-lg md:rounded-xl text-[10px] md:text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer text-slate-500 hover:text-slate-800 transition-colors duration-200"
           >
-            <svg className="size-3.5 md:size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 5H5V19H3V5Z" fill="currentColor"/>
-              <path d="M7 5H8V19H7V5Z" fill="currentColor"/>
-              <path d="M11 5H13V19H11V5Z" fill="currentColor"/>
-              <path d="M16 5H17V19H16V5Z" fill="currentColor"/>
-              <path d="M20 5H21V19H20V5Z" fill="currentColor"/>
-            </svg>
-            <span>Scan Barcode (Code 128)</span>
+            {attendanceMode === 'scan' && (
+              <motion.div
+                layoutId="mainAttendanceModePill"
+                className="absolute inset-0 bg-white rounded-lg md:rounded-xl shadow-xs"
+                transition={{ type: "spring", stiffness: 380, damping: 30 }}
+              />
+            )}
+            <span className={`relative z-10 flex items-center justify-center gap-2 ${attendanceMode === 'scan' ? 'text-blue-600' : 'text-slate-500'}`}>
+              <svg className="size-3.5 md:size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 5H5V19H3V5Z" fill="currentColor"/>
+                <path d="M7 5H8V19H7V5Z" fill="currentColor"/>
+                <path d="M11 5H13V19H11V5Z" fill="currentColor"/>
+                <path d="M16 5H17V19H16V5Z" fill="currentColor"/>
+                <path d="M20 5H21V19H20V5Z" fill="currentColor"/>
+              </svg>
+              <span>SCAN</span>
+            </span>
           </button>
         </div>
 
@@ -966,10 +1094,10 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
           <>
             {/* COMPACT MULTI-FILTER PANEL */}
             <div className="bg-white p-2 md:p-4 rounded-xl md:rounded-2xl border border-slate-100 shadow-sm space-y-2 md:space-y-3">
-              <div className="flex flex-col md:flex-row gap-2 md:gap-3 items-center">
+              <div className="flex flex-row gap-2 md:gap-3 items-center w-full">
                 
                 {/* SEARCH ELEMENT */}
-                <div className="relative flex-1 w-full group">
+                <div className="relative flex-1 min-w-0 group">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 size-3 md:size-3.5" />
                   <input 
                     type="text" 
@@ -980,141 +1108,134 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                   />
                 </div>
 
-                {/* DESKTOP PERMANENT INLINE FILTERS */}
-                <div className="hidden md:flex flex-wrap items-center gap-2">
-                  <div className="w-[140px]">
-                    <ModernSelect 
-                      value={filterDaerah}
-                      onChange={(val) => { setFilterDaerah(val); clearBatch(); }}
-                      options={daerahOptions}
-                      icon={MapPin}
-                      placeholder="PILIH DAERAH"
-                    />
-                  </div>
-
-                  <div className="w-[140px]">
-                    <ModernSelect 
-                      value={filterDesa}
-                      onChange={(val) => { setFilterDesa(val); clearBatch(); }}
-                      options={desaOptions}
-                      icon={MapPin}
-                      placeholder="PILIH UNIT DESA"
-                    />
-                  </div>
-
-                  <div className="w-[140px]">
-                    <ModernSelect 
-                      value={filterKelompok}
-                      onChange={(val) => { setFilterKelompok(val); clearBatch(); }}
-                      options={kelompokOptions}
-                      icon={Users}
-                      placeholder="PILIH KELOMPOK"
-                    />
-                  </div>
-
-                  <div className="w-[140px]">
-                    <ModernSelect 
-                      value={filterAgeCategory}
-                      onChange={(val) => { setFilterAgeCategory(val); clearBatch(); }}
-                      options={ageOptions}
-                      icon={Baby}
-                      placeholder="PILIH USIA"
-                    />
-                  </div>
-
-                  <div className="w-[130px]">
-                    <ModernSelect 
-                      value={filterGender}
-                      onChange={(val) => { setFilterGender(val); clearBatch(); }}
-                      options={genderOptions}
-                      icon={User}
-                      placeholder="PILIH GENDER"
-                    />
-                  </div>
-                </div>
+                {/* Inline filter toggle button next to search! */}
+                <button
+                   type="button"
+                   onClick={() => setShowInlineFilters(!showInlineFilters)}
+                   className={`px-3 py-1.5 md:py-2 rounded-lg border font-black text-[9px] md:text-[10px] uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 select-none active:scale-95 cursor-pointer shrink-0 w-auto ${
+                    showInlineFilters 
+                      ? 'bg-slate-900 border-slate-900 text-white shadow-md' 
+                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <Filter size={12} />
+                  <span>{showInlineFilters ? 'Sembunyikan' : 'Saring / Filter'}</span>
+                  {showInlineFilters ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                </button>
               </div>
 
-              {/* MOBILE FILTERS (ALWAYS VISIBLE & HIGH-DENSITY GRID) */}
-              <div className="md:hidden grid grid-cols-2 gap-1.5 pt-1 border-t border-slate-50">
-                <div className="col-span-1">
-                  <span className="text-[7px] font-black uppercase text-slate-400 block mb-0.5 leading-none">Daerah</span>
-                  <ModernSelect 
-                    value={filterDaerah}
-                    onChange={(val) => { setFilterDaerah(val); clearBatch(); }}
-                    options={daerahOptions}
-                    icon={MapPin}
-                    placeholder="PILIH DAERAH"
-                  />
-                </div>
-                <div className="col-span-1">
-                  <span className="text-[7px] font-black uppercase text-slate-400 block mb-0.5 leading-none">Unit Desa</span>
-                  <ModernSelect 
-                    value={filterDesa}
-                    onChange={(val) => { setFilterDesa(val); clearBatch(); }}
-                    options={desaOptions}
-                    icon={MapPin}
-                    placeholder="PILIH DESA"
-                  />
-                </div>
-                <div className="col-span-1">
-                  <span className="text-[7px] font-black uppercase text-slate-400 block mb-0.5 leading-none">Kelompok</span>
-                  <ModernSelect 
-                    value={filterKelompok}
-                    onChange={(val) => { setFilterKelompok(val); clearBatch(); }}
-                    options={kelompokOptions}
-                    icon={Users}
-                    placeholder="PILIH KELOMPOK"
-                  />
-                </div>
-                <div className="col-span-1">
-                  <span className="text-[7px] font-black uppercase text-slate-400 block mb-0.5 leading-none">Kategori Usia</span>
-                  <ModernSelect 
-                    value={filterAgeCategory}
-                    onChange={(val) => { setFilterAgeCategory(val); clearBatch(); }}
-                    options={ageOptions}
-                    icon={Baby}
-                    placeholder="PILIH USIA"
-                  />
-                </div>
-                <div className="col-span-2 mt-1">
-                  <span className="text-[7px] font-black uppercase text-slate-400 block mb-1 leading-none">Gender</span>
-                  <div className="grid grid-cols-3 bg-slate-100 p-0.5 rounded-lg border border-slate-200/50 shadow-xs select-none">
-                    <button
-                      type="button"
-                      onClick={() => { setFilterGender('ALL'); clearBatch(); }}
-                      className={`py-1.5 px-2 rounded-md text-[8px] font-black uppercase tracking-wider flex items-center justify-center transition-all cursor-pointer ${
-                        filterGender === 'ALL'
-                          ? 'bg-white text-blue-600 shadow-xs'
-                          : 'text-slate-500 hover:text-slate-800'
-                      }`}
-                    >
-                      <span>Semua</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setFilterGender('Laki-laki'); clearBatch(); }}
-                      className={`py-1.5 px-2 rounded-md text-[8px] font-black uppercase tracking-wider flex items-center justify-center transition-all cursor-pointer ${
-                        filterGender === 'Laki-laki'
-                          ? 'bg-white text-blue-600 shadow-xs'
-                          : 'text-slate-500 hover:text-slate-800'
-                      }`}
-                    >
-                      <span>Laki-laki</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setFilterGender('Perempuan'); clearBatch(); }}
-                      className={`py-1.5 px-2 rounded-md text-[8px] font-black uppercase tracking-wider flex items-center justify-center transition-all cursor-pointer ${
-                        filterGender === 'Perempuan'
-                          ? 'bg-white text-blue-600 shadow-xs'
-                          : 'text-slate-500 hover:text-slate-800'
-                      }`}
-                    >
-                      <span>Perempuan</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
+              {/* COLLAPSIBLE FILTERS PANEL */}
+              <AnimatePresence initial={false}>
+                {showInlineFilters && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.2, ease: 'easeInOut' }}
+                    className="overflow-visible border-t border-slate-100 pt-2.5 md:pt-4 mt-2"
+                  >
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-2 md:gap-3">
+                      <div className="space-y-1 min-w-0">
+                        <span className="text-[7px] md:text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Daerah</span>
+                        <ModernSelect 
+                          value={filterDaerah}
+                          onChange={(val) => { setFilterDaerah(val); clearBatch(); }}
+                          options={daerahOptions}
+                          icon={MapPin}
+                          placeholder="PILIH DAERAH"
+                        />
+                      </div>
+
+                      <div className="space-y-1 min-w-0">
+                        <span className="text-[7px] md:text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Unit Desa</span>
+                        <ModernSelect 
+                          value={filterDesa}
+                          onChange={(val) => { setFilterDesa(val); clearBatch(); }}
+                          options={desaOptions}
+                          icon={MapPin}
+                          placeholder="PILIH DESA"
+                        />
+                      </div>
+
+                      <div className="space-y-1 min-w-0">
+                        <span className="text-[7px] md:text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Kelompok</span>
+                        <ModernSelect 
+                          value={filterKelompok}
+                          onChange={(val) => { setFilterKelompok(val); clearBatch(); }}
+                          options={kelompokOptions}
+                          icon={Users}
+                          placeholder="PILIH KELOMPOK"
+                        />
+                      </div>
+
+                      <div className="space-y-1 min-w-0">
+                        <span className="text-[7px] md:text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Kategori Usia</span>
+                        <ModernSelect 
+                          value={filterAgeCategory}
+                          onChange={(val) => { setFilterAgeCategory(val); clearBatch(); }}
+                          options={ageOptions}
+                          icon={Baby}
+                          placeholder="PILIH USIA"
+                        />
+                      </div>
+
+                      <div className="col-span-2 md:col-span-1 space-y-1 min-w-0">
+                        <span className="text-[7px] md:text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Gender</span>
+                        <div className="grid grid-cols-3 bg-slate-100 p-0.5 rounded-lg border border-slate-200/50 shadow-xs select-none">
+                          <button
+                            type="button"
+                            onClick={() => { setFilterGender('ALL'); clearBatch(); }}
+                            className="relative py-1.5 px-2 rounded-md text-[8px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-500 hover:text-slate-850 transition-colors duration-200"
+                          >
+                            {filterGender === 'ALL' && (
+                              <motion.div
+                                layoutId="inlineGenderFilterPill"
+                                className="absolute inset-0 bg-white rounded-md shadow-xs"
+                                transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                              />
+                            )}
+                            <span className={`relative z-10 ${filterGender === 'ALL' ? 'text-blue-600' : 'text-slate-500'}`}>
+                              Semua
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setFilterGender('Laki-laki'); clearBatch(); }}
+                            className="relative py-1.5 px-2 rounded-md text-[8px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-500 hover:text-slate-850 transition-colors duration-200"
+                          >
+                            {filterGender === 'Laki-laki' && (
+                              <motion.div
+                                layoutId="inlineGenderFilterPill"
+                                className="absolute inset-0 bg-white rounded-md shadow-xs"
+                                transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                              />
+                            )}
+                            <span className={`relative z-10 ${filterGender === 'Laki-laki' ? 'text-blue-600' : 'text-slate-500'}`}>
+                              Laki-laki
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setFilterGender('Perempuan'); clearBatch(); }}
+                            className="relative py-1.5 px-2 rounded-md text-[8px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-500 hover:text-slate-850 transition-colors duration-200"
+                          >
+                            {filterGender === 'Perempuan' && (
+                              <motion.div
+                                layoutId="inlineGenderFilterPill"
+                                className="absolute inset-0 bg-white rounded-md shadow-xs"
+                                transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                              />
+                            )}
+                            <span className={`relative z-10 ${filterGender === 'Perempuan' ? 'text-blue-600' : 'text-slate-500'}`}>
+                              Perempuan
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
             {/* INLINE ULTRA-COMPACT CONTROL CENTER (Low vertical height footprint) */}
@@ -1158,24 +1279,53 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                       </div>
                     </div>
 
-                    {/* Right Side: Fast Actions (Trigger set all & Reset status) */}
-                    <div className="flex items-center gap-1 md:gap-2 shrink-0">
-                      <button 
-                        type="button"
-                        onClick={() => setAllStatus('Hadir')}
-                        className="px-2 md:px-3 py-1 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 border border-emerald-500/20 rounded-lg md:rounded-xl text-[8px] md:text-[9px] font-extrabold uppercase tracking-wider transition-all"
-                      >
-                        Semua Hadir
-                      </button>
-                      <button 
-                        type="button"
-                        onClick={clearBatch}
-                        className="px-1.5 md:px-2.5 py-1 bg-white/5 hover:bg-rose-500/20 hover:text-rose-400 border border-white/10 rounded-lg md:rounded-xl text-[8px] md:text-[9px] font-extrabold uppercase tracking-wider transition-all text-slate-300"
-                        title="Reset Sesi"
-                      >
-                        Reset
-                      </button>
-                    </div>
+                    {/* Right Side: Wajib / Tidak Wajib Toggle Switch */}
+                    {selectedEvent && selectedEvent.target_labels && selectedEvent.target_labels.length > 0 ? (
+                      <div className="flex items-center bg-slate-800 p-0.5 rounded-lg border border-slate-700/80 select-none shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOnlyShowTargetLabels(true);
+                            clearBatch();
+                          }}
+                          className="relative py-1 px-2.5 rounded-md text-[8px] md:text-[9px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-400 hover:text-slate-200 transition-colors duration-200"
+                        >
+                          {onlyShowTargetLabels && (
+                            <motion.div
+                              layoutId="wajibTogglePill"
+                              className="absolute inset-0 bg-blue-600 rounded-md shadow-xs"
+                              transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                            />
+                          )}
+                          <span className={`relative z-10 ${onlyShowTargetLabels ? 'text-white' : 'text-slate-400'}`}>
+                            Wajib
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOnlyShowTargetLabels(false);
+                            clearBatch();
+                          }}
+                          className="relative py-1 px-2.5 rounded-md text-[8px] md:text-[9px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-400 hover:text-slate-200 transition-colors duration-200"
+                        >
+                          {!onlyShowTargetLabels && (
+                            <motion.div
+                              layoutId="wajibTogglePill"
+                              className="absolute inset-0 bg-blue-600 rounded-md shadow-xs"
+                              transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                            />
+                          )}
+                          <span className={`relative z-10 ${!onlyShowTargetLabels ? 'text-white' : 'text-slate-400'}`}>
+                            Tidak Wajib
+                          </span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-[8px] md:text-[9px] font-extrabold text-slate-500 uppercase tracking-widest px-2.5 py-1 bg-slate-800/50 rounded-lg">
+                        Umum / Semua
+                      </div>
+                    )}
 
                   </div>
                 </div>
@@ -1409,15 +1559,33 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                 
                 <div className="space-y-3">
                   <div className="space-y-1">
-                    <span className="text-[8px] font-black uppercase text-slate-400 tracking-wider block">Kegiatan Sesi</span>
-                    <ModernSelect 
-                      value={selectedEventId}
-                      onChange={(val) => { setSelectedEventId(val); }}
-                      options={eventOptions}
-                      icon={Calendar}
-                      placeholder="PILIH KEGIATAN"
-                      onAddNew={handleAddNewEvent}
-                    />
+                    <div className="flex gap-2 items-end">
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <span className="text-[8px] font-black uppercase text-slate-400 tracking-wider block">Kegiatan Sesi</span>
+                        <ModernSelect 
+                          value={selectedEventId}
+                          onChange={(val) => { setSelectedEventId(val); }}
+                          options={eventOptions}
+                          icon={Calendar}
+                          placeholder="PILIH KEGIATAN"
+                          onAddNew={handleAddNewEvent}
+                        />
+                      </div>
+                      {selectedEventId && (
+                        <div className="w-[90px] shrink-0 space-y-1">
+                          <span className="text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none text-center">Jam Mulai</span>
+                          <input 
+                            type="time"
+                            value={selectedEvent?.jam_mulai || ''}
+                            onChange={async (e) => {
+                              await handleUpdateEventTime(selectedEventId, e.target.value);
+                            }}
+                            className="w-full px-1 py-2 bg-slate-50 border-2 border-slate-100 rounded-xl text-[10px] font-black text-center outline-none transition-all cursor-pointer focus:border-emerald-500 focus:bg-white text-slate-705 h-[38px] md:h-[46px] flex items-center justify-center"
+                            title="Ubah Jam Mulai"
+                          />
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <div className="space-y-1">
                     <span className="text-[8px] font-black uppercase text-slate-400 tracking-wider block">Tanggal Sesi</span>

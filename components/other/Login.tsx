@@ -3,12 +3,11 @@ import { motion } from 'motion/react';
 import { 
   Lock, User, Eye, EyeOff, Loader2, ArrowRight, XCircle, 
   RefreshCw, CheckCircle, Mail, Database, CheckSquare, Square,
-  Briefcase
+  Briefcase, X, Sparkles, AlertTriangle
 } from 'lucide-react';
 import { db, centralClient } from '../../supabase';
 
 interface LoginProps {
-  portalUrl: string;
   onLoginSuccess: (data: any) => void;
   onOpenSetup?: () => void;
 }
@@ -24,6 +23,10 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
   // Self-Registration States
   const [isSelfReg, setIsSelfReg] = useState(false);
   const [mobilePhase, setMobilePhase] = useState<'login' | 'expandingToRegister' | 'register' | 'expandingToLogin'>('login');
+
+  // Social login coming soon states
+  const [showSocialModal, setShowSocialModal] = useState(false);
+  const [selectedSocialProvider, setSelectedSocialProvider] = useState('');
 
   // Smooth mode switching helper to preserve visual layout stability
   const handleToggleMode = (isReg: boolean) => {
@@ -45,32 +48,9 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
   };
 
   const handleSocialClick = async (provider: 'google' | 'facebook' | 'twitter') => {
-    setLoginError('');
-    setRegisterError('');
-    setIsLoading(true);
-    
-    try {
-      if (!db) {
-        throw new Error('Supabase belum selesai dikonfigurasi.');
-      }
-      
-      const { error } = await db.auth.signInWithOAuth({
-        provider: provider,
-        options: {
-          redirectTo: window.location.origin
-        }
-      });
-      
-      if (error) {
-        throw error;
-      }
-    } catch (err: any) {
-      console.error(err);
-      const displayProvider = provider === 'twitter' ? 'X (Twitter)' : provider.charAt(0).toUpperCase() + provider.slice(1);
-      setLoginError(`Gagal masuk dengan ${displayProvider}: ${err.message || err}. Pastikan Anda telah mengaktifkan & mengkonfigurasi provider "${displayProvider}" di dashboard Supabase Anda.`);
-    } finally {
-      setIsLoading(false);
-    }
+    const displayProvider = provider === 'twitter' ? 'X / Twitter' : provider.charAt(0).toUpperCase() + provider.slice(1);
+    setSelectedSocialProvider(displayProvider);
+    setShowSocialModal(true);
   };
   const [regUsername, setRegUsername] = useState('');
   const [regEmail, setRegEmail] = useState('');
@@ -149,7 +129,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
     try {
       const activeClient = centralClient || db;
       if (!activeClient) {
-        throw new Error("Supabase belum dikonfigurasi.\nSilakan hubungi superadmin atau atur database terlebih dahulu.");
+        throw new Error("Supabase belum dikonfigurasi.\nSilakan hubungi admin sistem atau atur database terlebih dahulu.");
       }
       const cleanRegName = regUsername.trim().toLowerCase();
       const cleanEmail = regEmail.trim().toLowerCase();
@@ -198,39 +178,13 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
 
       const resolvedUid = authResult?.user?.id || 'user_u' + Math.random().toString(36).substring(2, 11);
 
-      // 2. Also register on the selected Operational base if configured
-      const chosenInstansi = configs.find(c => c.id === regFirebaseConfig);
-      if (chosenInstansi && chosenInstansi.supabase_url && chosenInstansi.supabase_anon_key) {
-        try {
-          const { createClient } = await import('@supabase/supabase-js');
-          const opClient = createClient(chosenInstansi.supabase_url, chosenInstansi.supabase_anon_key, {
-            auth: { storageKey: 'sb-operational-token', persistSession: true }
-          });
-          await opClient.auth.signUp({
-            email: cleanEmail,
-            password: regPassword,
-            options: {
-              data: {
-                username: cleanRegName,
-                full_name: regFullName.trim(),
-                original_role: regJabatan.trim(),
-                instansi: regFirebaseConfig,
-                web_access: webAccessStr,
-              }
-            }
-          });
-          console.log(`Successfully completed registration on operational database: ${regFirebaseConfig}`);
-        } catch (opSignUpErr) {
-          console.warn("Operational DB registration fallback skipped:", opSignUpErr);
-        }
-      }
+      // 2. Operational DB registration is skipped in single database mode
 
       // 3. Insert user record inside central users table as Pending
       const newRequestUser = {
         id: resolvedUid,
         username: cleanRegName,
         email: cleanEmail,
-        password: regPassword, // kept for reference
         full_name: regFullName.trim(),
         role: 'Pending',
         original_role: regJabatan.trim(),
@@ -269,100 +223,31 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
         throw new Error("Supabase belum dikonfigurasi.\nSilakan klik tombol 'Atur Database Supabase' di bawah terlebih dahulu.");
       }
       
-      // 1. Look up user record in the central 'users' table (supports username or email)
-      const { data: userDoc, error: userLookupErr } = await activeClient
-        .from('users')
-        .select('*')
-        .or(`username.eq.${cleanUser},email.eq.${cleanUser}`)
-        .maybeSingle();
+      // 1. Resolve username to email if necessary
+      let resolvedEmail = cleanUser;
+      let activeUserDoc: any = null;
+      let authData: any = null;
 
-      if (userLookupErr) {
-        throw new Error("Gagal mengambil data akun dari server: " + userLookupErr.message);
+      if (!cleanUser.includes('@')) {
+        // Resolve username to email using secure RPC (to avoid exposing public select on users table)
+        const { data: resolved, error: rpcErr } = await activeClient.rpc('resolve_username_to_email', {
+          p_username: cleanUser
+        });
+
+        if (rpcErr) {
+          console.error("RPC resolve error:", rpcErr);
+        }
+
+        if (!resolved) {
+          setLoginError('Username tidak terdaftar.');
+          setIsLoading(false);
+          return;
+        }
+        resolvedEmail = resolved;
       }
 
-      let activeUserDoc = userDoc;
-
-      // Seeding or migrating superadmin profile to ensure full Supabase Auth and public.users compatibility
-      if (cleanUser === 'superadmin' && password === 'superadmin354') {
-        const superEmail = 'superadmin@catetin.com';
-        let superId = 'super-sa-' + Math.random().toString(36).substring(2, 11);
-        let signInSuccess = false;
-
-        // 1. Try to sign in first with the email superadmin@catetin.com
-        try {
-          const { data: authSessionData, error: signInErr } = await activeClient.auth.signInWithPassword({
-            email: superEmail,
-            password: 'superadmin354',
-          });
-          if (!signInErr && authSessionData?.user) {
-            superId = authSessionData.user.id;
-            signInSuccess = true;
-          }
-        } catch (e) {
-          console.warn("Direct superadmin signin failed, continuing to registration.", e);
-        }
-
-        // 2. If signin fails, attempt signUp to register on Supabase Auth
-        if (!signInSuccess) {
-          try {
-            const { data: superAuthData, error: signUpErr } = await activeClient.auth.signUp({
-              email: superEmail,
-              password: 'superadmin354',
-              options: {
-                data: {
-                  username: 'superadmin',
-                  full_name: 'Super Admin Portal'
-                }
-              }
-            });
-            if (signUpErr) {
-              console.warn("Primary signup error, might already be registered in auth schema:", signUpErr.message);
-            }
-            if (superAuthData?.user) {
-              superId = superAuthData.user.id;
-            }
-          } catch (saSignUpErr) {
-            console.warn("Fallback superadmin signup failed/already exists:", saSignUpErr);
-          }
-        }
-
-        // 3. Ensure the record in the public users database exists and has the correct real UUID from Supabase Auth
-        const superData = {
-          id: superId,
-          username: 'superadmin',
-          email: superEmail,
-          password: 'superadmin354',
-          full_name: 'Super Admin Portal',
-          role: 'Superadmin',
-          original_role: 'Superadmin',
-          instansi: 'Catet-In (Master)',
-          web_access: 'bendahara,absensi',
-          status: 'Active',
-          created_at: new Date().toISOString()
-        };
-
-        // If there's an existing 'superadmin' record with static string id, delete it first to avoid key constraints
-        if (userDoc && (userDoc.id === 'superadmin' || userDoc.id !== superId)) {
-          await activeClient.from('users').delete().eq('id', userDoc.id);
-        }
-
-        const { error: insertErr } = await activeClient.from('users').upsert([superData]);
-        if (insertErr) {
-          console.error("Failed to seed/migrate fallback superadmin account:", insertErr);
-        }
-        activeUserDoc = superData;
-      }
-
-      if (!activeUserDoc) {
-        setLoginError('Email atau Username tidak terdaftar.');
-        setIsLoading(false);
-        return;
-      }
-
-      const resolvedEmail = activeUserDoc.email || cleanUser;
-
-      // 2. Perform authentications in the central Supabase auth schema
-      const { data: authData, error: signInErr } = await activeClient.auth.signInWithPassword({
+      // 2. Perform authentication in the central Supabase auth schema
+      const { data: signInData, error: signInErr } = await activeClient.auth.signInWithPassword({
         email: resolvedEmail,
         password: password,
       });
@@ -370,59 +255,36 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
       if (signInErr) {
         throw new Error("Password atau email Anda salah: " + signInErr.message);
       }
+      authData = signInData;
+
+      // 3. Now that the user is authenticated, we can safely and securely load their profile from public.users!
+      const { data: authenticatedUserDoc, error: userLookupErr } = await activeClient
+        .from('users')
+        .select('*')
+        .eq('id', authData.user.id)
+        .maybeSingle();
+
+      if (userLookupErr) {
+        await activeClient.auth.signOut();
+        throw new Error("Gagal mengambil data akun dari server: " + userLookupErr.message);
+      }
+
+      if (!authenticatedUserDoc) {
+        await activeClient.auth.signOut();
+        throw new Error("Profil pengguna tidak ditemukan di database. Silakan hubungi Administrator.");
+      }
+
+      activeUserDoc = authenticatedUserDoc;
 
       const activeUserId = authData?.user?.id || activeUserDoc.id;
-
-      // Self-heal/align superadmin ID inside central db public.users table if it is misaligned from standard Auth UUID
-      if (cleanUser === 'superadmin' && activeUserId && activeUserDoc.id !== activeUserId) {
-        console.log("Aligning master superadmin user profile ID to real Auth UID:", activeUserId);
-        try {
-          // Delete old placeholder record if it exists
-          await activeClient.from('users').delete().eq('id', activeUserDoc.id);
-        } catch (delErr) {
-          console.warn("Could not delete old placeholder superadmin users entry:", delErr);
-        }
-        try {
-          const alignedSuperData = {
-            ...activeUserDoc,
-            id: activeUserId,
-            status: 'Active'
-          };
-          await activeClient.from('users').upsert([alignedSuperData]);
-          activeUserDoc = alignedSuperData;
-        } catch (upsertErr) {
-          console.warn("Failed to complete superadmin ID alignment upsert:", upsertErr);
-        }
-      }
-
-      // Helper function to calculate SHA-256 hash using Web Crypto API
-      const sha256 = async (message: string): Promise<string> => {
-        const msgBuffer = new window.TextEncoder().encode(message);
-        const hashBuffer = await window.crypto.subtle.digest('SHA-256', msgBuffer);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-      };
-
-      // Generate secure session token and expiration (24 hours)
-      const sessionToken = 'sess_' + Math.random().toString(36).substring(2, 11) + Math.random().toString(36).substring(2, 11);
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-
-      // Update central users cache table with token info (optionally, to match schema)
-      try {
-        await activeClient.from('users').update({
-          active_session_token: sessionToken,
-          session_expires_at: expiresAt
-        }).eq('id', activeUserId);
-      } catch (e) {
-        console.warn("Central users table session update skipped:", e);
-      }
+      const sessionToken = authData?.session?.access_token || 'sess_' + Math.random().toString(36).substring(2, 11);
 
       // 3. Handle Pending approval state
       const roleStr = String(activeUserDoc.role || '').toLowerCase();
       const statusStr = String(activeUserDoc.status || '').toLowerCase();
       if (statusStr === 'disabled' || statusStr === 'nonaktif' || statusStr === 'inactive') {
         await activeClient.auth.signOut();
-        throw new Error("Akun Anda saat ini dinonaktifkan sementara oleh Superadmin. Hubungi admin untuk mengaktifkan kembali.");
+        throw new Error("Akun Anda saat ini dinonaktifkan sementara oleh Administrator. Hubungi admin untuk mengaktifkan kembali.");
       }
 
       if (roleStr === 'pending' || statusStr === 'pending') {
@@ -449,51 +311,12 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
           if (!instansiRowErr && instansiDoc) {
             instansiName = instansiDoc.instansi_name || instansiDoc.instansi || instansiDoc.id;
             appscriptBackup = instansiDoc.appscriptbackuptreasurerweb || '';
-            instansiConfigMap = {
-              supabaseUrl: instansiDoc.supabase_url,
-              supabaseAnonKey: instansiDoc.supabase_anon_key
-            };
-
-            // Register dynamic session on target tenant database using secure signature-based SSO
-            try {
-              const { createClient } = await import('@supabase/supabase-js');
-              const opClient = createClient(instansiDoc.supabase_url, instansiDoc.supabase_anon_key);
-              
-              // Construct the SSO handshake signature
-              const message = activeUserId + ':' + (activeUserDoc.email || resolvedEmail) + ':' + (activeUserDoc.role || 'Viewer') + ':' + expiresAt + ':' + sessionToken;
-              const syncToken = instansiDoc.supabase_anon_key; // Using operational anon key as default sync token
-              const sig = await sha256(message + syncToken);
-
-              const { data: rpcRes, error: rpcErr } = await opClient.rpc('register_operational_session', {
-                p_user_id: activeUserId,
-                p_email: activeUserDoc.email || resolvedEmail,
-                p_full_name: activeUserDoc.full_name || '',
-                p_role: activeUserDoc.role || 'Viewer',
-                p_original_role: activeUserDoc.original_role || 'Viewer',
-                p_instansi: activeUserDoc.instansi || '',
-                p_web_access: activeUserDoc.web_access || 'bendahara,absensi',
-                p_expires_at: expiresAt,
-                p_session_token: sessionToken,
-                p_signature: sig
-              });
-
-              if (rpcErr) {
-                console.error("SSO Connection handshake failed:", rpcErr);
-                throw rpcErr;
-              }
-              console.log("Successfully registered secure session on operational database.");
-            } catch (authSyncErr: any) {
-              console.error("Gagal melakukan verifikasi keamanan SSO pada database Cabang:", authSyncErr);
-              let errorMsg = authSyncErr.message || String(authSyncErr);
-              if (errorMsg.includes("active_session_token") || errorMsg.includes("register_operational_session")) {
-                errorMsg = "Database cabang Anda menggunakan skema lama (kolom 'active_session_token' belum ada). Silakan masuk ke akun Superadmin/Admin, klik menu 'Setup Guide' (Panduan Database & Script), lalu salin dan jalankan script SQL di bagian 'PEMBARUAN SKEMA OPERASIONAL (SSO MULTI-DB PATCH)' pada SQL Editor database cabang Anda.";
-              }
-              throw new Error("Gagal terhubung secara aman ke database cabang: " + errorMsg, { cause: authSyncErr });
-            }
+            // We set instansiConfigMap to null in single DB mode so it doesn't spin up other clients
+            instansiConfigMap = null;
           }
         } catch (instansiErr: any) {
-          console.error("Gagal mengambil detail database cabang:", instansiErr);
-          throw instansiErr;
+          console.error("Gagal mengambil detail instansi:", instansiErr);
+          instansiName = activeUserDoc.instansi;
         }
       }
 
@@ -564,7 +387,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
           </div>
 
           <p className="text-[10px] font-bold text-slate-500 uppercase leading-relaxed max-w-xs px-2">
-            Pendaftaran & pengajuan akses akun Anda telah dikirim dan sedang dalam proses peninjauan oleh <b className="text-blue-600">Superadmin</b>. Mohon bersabar dan hubungi Administrator Anda untuk verifikasi.
+            Pendaftaran & pengajuan akses akun Anda telah dikirim dan sedang dalam proses peninjauan oleh <b className="text-blue-600">Administrator</b>. Mohon bersabar dan hubungi Administrator Anda untuk verifikasi.
           </p>
 
           <button
@@ -1476,6 +1299,50 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
           </button>
         </motion.div>
       </div>
+
+      {/* COMING SOON SOCIAL LOGIN MODAL */}
+      {showSocialModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.9, opacity: 0 }}
+            transition={{ type: "spring", duration: 0.4 }}
+            className="w-full max-w-sm bg-white rounded-3xl border border-slate-100 shadow-2xl p-6 relative overflow-hidden text-center"
+          >
+            <div className="absolute top-0 left-0 w-full h-1.5 bg-indigo-600"></div>
+            
+            <button 
+              onClick={() => setShowSocialModal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+              title="Tutup"
+            >
+              <X size={16} />
+            </button>
+
+            <div className="flex flex-col items-center mt-3">
+              <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-4">
+                <Sparkles size={24} />
+              </div>
+              
+              <h3 className="text-sm font-black uppercase tracking-wider text-slate-900 mb-2">
+                Fitur Belum Tersedia
+              </h3>
+              
+              <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wide mb-6 leading-relaxed max-w-[280px]">
+                Metode masuk menggunakan <span className="font-bold text-indigo-600">{selectedSocialProvider}</span> masih dalam tahap pengembangan dan belum aktif. Silakan masuk menggunakan Username dan Kata Sandi resmi instansi Anda terlebih dahulu.
+              </p>
+
+              <button
+                onClick={() => setShowSocialModal(false)}
+                className="w-full bg-slate-950 hover:bg-slate-900 text-white py-3 rounded-full font-black text-[9px] uppercase tracking-[0.15em] transition-all cursor-pointer shadow-lg shadow-slate-900/15 active:scale-95"
+              >
+                Dimengerti
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
 
     </div>
   );

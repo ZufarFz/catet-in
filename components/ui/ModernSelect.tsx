@@ -87,7 +87,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
         <div className={noAnimation ? '' : 'contents'}>
           {noAnimation ? (
             <div
-              className="absolute z-[600] top-full left-0 min-w-full w-max max-w-[90vw] md:max-w-md bg-white border-2 border-slate-100 rounded-2xl shadow-2xl shadow-slate-900/10 overflow-hidden flex flex-col max-h-[320px] mt-2"
+              className="absolute z-[600] top-full right-0 md:right-auto md:left-0 min-w-full w-max max-w-[calc(100vw-32px)] md:max-w-md bg-white border-2 border-slate-100 rounded-2xl shadow-2xl shadow-slate-900/10 overflow-hidden flex flex-col max-h-[320px] mt-2"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Search Input inside dropdown if options are many or adding is enabled */}
@@ -179,7 +179,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                 animate={{ opacity: 1, y: 8, scale: 1 }}
                 exit={{ opacity: 0, y: 12, scale: 0.95 }}
                 transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
-                className="absolute z-[600] top-full left-0 min-w-full w-max max-w-[90vw] md:max-w-md bg-white border border-slate-200 rounded-2xl shadow-2xl shadow-slate-900/10 overflow-hidden flex flex-col max-h-[320px]"
+                className="absolute z-[600] top-full right-0 md:right-auto md:left-0 min-w-full w-max max-w-[calc(100vw-32px)] md:max-w-md bg-white border border-slate-200 rounded-2xl shadow-2xl shadow-slate-900/10 overflow-hidden flex flex-col max-h-[320px]"
                 onClick={(e) => e.stopPropagation()}
               >
                 {/* Search Input inside dropdown if options are many or adding is enabled */}

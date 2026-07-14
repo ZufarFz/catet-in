@@ -36,10 +36,11 @@ import {
   DaerahData,
   Family,
   FamilyRelationship,
+  LabelData,
 } from "../../types";
 import ModernSelect from "../ui/ModernSelect";
 import { motion, AnimatePresence } from "motion/react";
-import { dbAddMember, dbDeleteMember } from "../../supabase";
+import { dbAddMember, dbDeleteMember, dbAddFamily, dbGetLabels, dbAddLabel } from "../../supabase";
 import { downloadMemberCard } from "../utils/barcode128";
 
 interface MemberManagementProps {
@@ -87,11 +88,27 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
 
   // States for importing via file
   const [showImportModal, setShowImportModal] = useState(false);
+  const [importType, setImportType] = useState<"member" | "family" | "both">("both");
+  const [activePreviewTab, setActivePreviewTab] = useState<"member" | "family">("member");
   const [isParsing, setIsParsing] = useState(false);
   const [importError, setImportError] = useState("");
   const [importPreview, setImportPreview] = useState<any[]>([]);
+  const [importPreviewFamilies, setImportPreviewFamilies] = useState<any[]>([]);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
   const [isSubmittingImport, setIsSubmittingImport] = useState(false);
+  const [allLabels, setAllLabels] = useState<LabelData[]>([]);
+
+  useEffect(() => {
+    const loadLabels = async () => {
+      try {
+        const data = await dbGetLabels();
+        setAllLabels(data);
+      } catch (err) {
+        console.error("Gagal memuat label di MemberManagement:", err);
+      }
+    };
+    loadLabels();
+  }, [showModal]);
 
   // Filters
   const [filterDaerah, setFilterDaerah] = useState("All");
@@ -169,8 +186,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
 
   useEffect(() => {
     const handleNfcRead = (e: Event) => {
-      const customEvent = e as CustomEvent<{ uid: string }>;
-      const uid = customEvent.detail?.uid;
+      const uid = (e as any).detail?.uid;
       if (!uid) return;
 
       if (isScanningRfid) {
@@ -611,7 +627,12 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
   };
 
   const handleDownloadTemplate = () => {
-    const headers = [
+    const workbook = XLSX.utils.book_new();
+
+    // ==========================================
+    // SHEET 1: DAFTAR ANGGOTA
+    // ==========================================
+    const memberHeaders = [
       "Nama Lengkap",
       "Jenis Kelamin",
       "ID Daerah (Opsional)",
@@ -621,15 +642,19 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
       "Tempat Lahir",
       "Tanggal Lahir",
       "No HP Anggota",
-      "Nama Orang Tua",
-      "No HP Orang Tua",
-      "Pekerjaan Orang Tua",
+      "ID Keluarga (Opsional)",
+      "ID Hubungan Keluarga (Opsional)",
       "Alamat Rumah",
       "Pendidikan Terakhir",
       "Kelas atau Semester",
+      "RFID Code (Opsional)",
+      "RFID KTP Code (Opsional)",
+      "Pekerjaan",
+      "Status Pernikahan",
+      "Label Anggota (Opsional)"
     ];
 
-    const exampleRows = [
+    const memberRows = [
       [
         "Ahmad Fauzi",
         "Laki-laki",
@@ -640,12 +665,16 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
         "Jakarta",
         "2005-08-12",
         "081234567890",
-        "Bp. Supardi",
-        "081298765432",
-        "Wiraswasta",
+        "FAM-001",
+        relationships[0]?.id || "ayah",
         "Jl. Merdeka No. 10",
         "SMA",
         "Kelas 11",
+        "1234567890",
+        "9876543210",
+        "Pelajar/Mahasiswa",
+        "Belum Kawin",
+        "Muda-mudi, Panitia"
       ],
       [
         "Siti Aminah",
@@ -657,25 +686,56 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
         "Bandung",
         "2010-04-20",
         "081223344556",
-        "Ibu Khodijah",
-        "081223344557",
-        "Ibu Rumah Tangga",
+        "FAM-001",
+        relationships[1]?.id || "anak",
         "Jl. Melati No. 5",
         "SMP",
         "Kelas 8",
-      ],
+        "",
+        "",
+        "Pelajar/Mahasiswa",
+        "Belum Kawin",
+        "Muda-mudi"
+      ]
     ];
 
-    const worksheetData = [headers, ...exampleRows];
-    const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Template Anggota");
+    const memberSheetData = [memberHeaders, ...memberRows];
+    const memberWorksheet = XLSX.utils.aoa_to_sheet(memberSheetData);
+    XLSX.utils.book_append_sheet(workbook, memberWorksheet, "Daftar Anggota");
 
-    // Sheet 2: Referensi ID
+    // ==========================================
+    // SHEET 2: MASTER KELUARGA
+    // ==========================================
+    const familyHeaders = [
+      "ID Keluarga",
+      "Nama Keluarga (KK)",
+      "Nomor Kartu Keluarga (KK)"
+    ];
+
+    const familyRows = [
+      [
+        "FAM-001",
+        "Keluarga Ahmad Fauzi",
+        "3201234567890123"
+      ],
+      [
+        "",
+        "Keluarga Bp. Supardi",
+        "3201234567890124"
+      ]
+    ];
+
+    const familySheetData = [familyHeaders, ...familyRows];
+    const familyWorksheet = XLSX.utils.aoa_to_sheet(familySheetData);
+    XLSX.utils.book_append_sheet(workbook, familyWorksheet, "Master Keluarga");
+
+    // ==========================================
+    // SHEET 3: REFERENSI ID
+    // ==========================================
     const refHeaders = [
       "Tipe Data",
       "ID Database (Masukkan ke Kolom)",
-      "Nama / Keterangan",
+      "Nama / Keterangan"
     ];
     const refRows: any[] = [];
 
@@ -690,12 +750,12 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
     // Add Desa
     desas.forEach((d) => {
       const matchDaerah = (daerahs || []).find(
-        (da) => String(da.id) === String(d.daerah_id),
+        (da) => String(da.id) === String(d.daerah_id)
       );
       refRows.push([
         "Desa",
         d.id,
-        `${d.nama_desa} (${matchDaerah?.nama_daerah || "-"})`,
+        `${d.nama_desa} (${matchDaerah?.nama_daerah || "-"})`
       ]);
     });
     // Add Kelompok
@@ -704,15 +764,68 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
       refRows.push([
         "Kelompok",
         k.id,
-        `${k.nama_kelompok} (${matchDesa?.nama_desa || "-"})`,
+        `${k.nama_kelompok} (${matchDesa?.nama_desa || "-"})`
       ]);
+    });
+    // Add Hubungan Keluarga
+    (relationships || []).forEach((r) => {
+      refRows.push(["Hubungan Keluarga", r.id, r.name]);
+    });
+    // Add Keluarga
+    (families || []).forEach((f) => {
+      refRows.push(["Keluarga (KK)", f.id, f.nama_keluarga]);
+    });
+    // Add Label Anggota
+    (allLabels || []).forEach((lbl) => {
+      refRows.push(["Label Anggota", lbl.name, lbl.name]);
     });
 
     const rWorksheetData = [refHeaders, ...refRows];
     const rWorksheet = XLSX.utils.aoa_to_sheet(rWorksheetData);
     XLSX.utils.book_append_sheet(workbook, rWorksheet, "Referensi ID");
 
-    XLSX.writeFile(workbook, "Template_Anggota_Absensi.xlsx");
+    // ==========================================
+    // SHEET 4: CARA PENGISIAN
+    // ==========================================
+    const helpHeaders = [
+      "Kategori / Nama Kolom",
+      "Sifat",
+      "Petunjuk Pengisian",
+      "Contoh Nilai"
+    ];
+    const helpRows = [
+      // Keluarga
+      ["[Keluarga] ID Keluarga", "Opsional", "Biarkan KOSONG untuk membuat keluarga baru. Jika ingin meng-update data keluarga yang ada, isi dengan ID Keluarga dari tab Referensi ID.", "FAM-001"],
+      ["[Keluarga] Nama Keluarga (KK)", "WAJIB", "Isi dengan nama keluarga atau nama Kepala Keluarga untuk master keluarga.", "Keluarga Ahmad Fauzi"],
+      ["[Keluarga] Nomor Kartu Keluarga (KK)", "Opsional", "Isi dengan 16 digit nomor Kartu Keluarga resmi jika ada.", "3201234567890123"],
+      
+      // Anggota
+      ["[Anggota] Nama Lengkap", "WAJIB", "Isi dengan nama lengkap anggota yang akan didaftarkan.", "Ahmad Fauzi"],
+      ["[Anggota] Jenis Kelamin", "WAJIB", "Isi dengan 'Laki-laki' or 'Perempuan'.", "Laki-laki"],
+      ["[Anggota] ID Daerah", "Opsional", "Masukkan ID Daerah dari tab Referensi ID.", "DAE-001"],
+      ["[Anggota] ID Desa", "WAJIB", "Masukkan ID Desa dari tab Referensi ID.", "DES-001"],
+      ["[Anggota] ID Kelompok", "WAJIB", "Masukkan ID Kelompok dari tab Referensi ID.", "KLP-001"],
+      ["[Anggota] ID Kategori Usia", "WAJIB", "Masukkan ID Kategori Usia dari tab Referensi ID.", "AGE-REMAJA"],
+      ["[Anggota] Tempat Lahir", "Opsional", "Isi dengan kota/kabupaten tempat lahir.", "Jakarta"],
+      ["[Anggota] Tanggal Lahir", "Opsional", "Format pengisian YYYY-MM-DD (Tahun-Bulan-Hari).", "2005-08-12"],
+      ["[Anggota] No HP Anggota", "Opsional", "No HP aktif anggota.", "081234567890"],
+      ["[Anggota] ID Keluarga", "Opsional", "Hubungkan dengan keluarga. Masukkan ID Keluarga dari tab Referensi ID. Jika ingin membuat keluarga baru secara otomatis dari file ini, tulis ID keluarga baru buatan Anda (misal: FAM-NEW1) dan gunakan ID yang sama untuk anggota keluarga lainnya agar dikelompokkan bersama.", "FAM-001"],
+      ["[Anggota] ID Hubungan Keluarga", "Opsional", "Peranan di keluarga. Masukkan ID dari tab Referensi ID (misal: ayah, ibu, anak, dll).", "ayah"],
+      ["[Anggota] Alamat Rumah", "Opsional", "Isi dengan alamat domisili lengkap.", "Jl. Merdeka No. 10"],
+      ["[Anggota] Pendidikan Terakhir", "Opsional", "Pendidikan formal terakhir (misal: SD, SMP, SMA, S1, dll).", "SMA"],
+      ["[Anggota] Kelas atau Semester", "Opsional", "Jika masih sekolah, isi dengan jenjang kelas atau semester kuliah.", "Kelas 11"],
+      ["[Anggota] RFID Code", "Opsional", "Isi dengan kode RFID kartu absensi.", "1234567890"],
+      ["[Anggota] RFID KTP Code", "Opsional", "Isi dengan kode NFC/RFID KTP.", "9876543210"],
+      ["[Anggota] Pekerjaan", "Opsional", "Pekerjaan atau profesi saat ini.", "Pelajar/Mahasiswa"],
+      ["[Anggota] Status Pernikahan", "Opsional", "Pilihan: Belum Kawin, Kawin, Cerai Hidup, Cerai Mati.", "Belum Kawin"],
+      ["[Anggota] Label Anggota", "Opsional", "Pilih label kustom untuk anggota. Pisahkan beberapa label dengan tanda koma (e.g. Muda-mudi, Panitia).", "Muda-mudi, Panitia"]
+    ];
+
+    const hWorksheetData = [helpHeaders, ...helpRows];
+    const hWorksheet = XLSX.utils.aoa_to_sheet(hWorksheetData);
+    XLSX.utils.book_append_sheet(workbook, hWorksheet, "Cara Pengisian");
+
+    XLSX.writeFile(workbook, "Template_Impor_Absensi.xlsx");
   };
 
   const parseAndPreviewFile = (file: any) => {
@@ -723,470 +836,473 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
         if (!data) throw new Error("Gagal membaca file.");
 
         const workbook = XLSX.read(data, { type: "array" });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
+        const sheetNames = workbook.SheetNames;
 
-        const sheetData = XLSX.utils.sheet_to_json<any[]>(worksheet, {
-          header: 1,
-        });
-        if (sheetData.length < 2) {
-          throw new Error("File kosong atau tidak memiliki data baris.");
+        let parsedMembers: any[] = [];
+        let parsedFamilies: any[] = [];
+        let combinedWarnings: string[] = [];
+
+        // Try to find the appropriate sheets based on names or fallback
+        const memberSheetName = sheetNames.find(
+          name => name.toLowerCase().includes("anggota") || name.toLowerCase().includes("member")
+        ) || (sheetNames.includes("Format Pengisian") ? "Format Pengisian" : "");
+
+        const familySheetName = sheetNames.find(
+          name => name.toLowerCase().includes("keluarga") || name.toLowerCase().includes("family")
+        ) || "";
+
+        // Fallbacks if sheet names are totally different (e.g. they uploaded custom sheet where 1st is members, 2nd is families)
+        let finalMemberSheetName = memberSheetName;
+        let finalFamilySheetName = familySheetName;
+
+        if (!finalMemberSheetName && !finalFamilySheetName) {
+          // If neither matches, try first sheet as members and second as families (if exists)
+          finalMemberSheetName = sheetNames[0] || "";
+          if (sheetNames.length > 1) {
+            finalFamilySheetName = sheetNames[1];
+          }
         }
 
-        const headersRow = sheetData[0].map((h: any) =>
-          String(h || "")
-            .trim()
-            .toLowerCase(),
-        );
+        // --- 1. Parse Family Sheet if detected ---
+        if (finalFamilySheetName) {
+          const wsFam = workbook.Sheets[finalFamilySheetName];
+          const famData = XLSX.utils.sheet_to_json<any[]>(wsFam, { header: 1 });
+          if (famData.length >= 2) {
+            const famHeadersRow = famData[0].map((h: any) => String(h || "").trim().toLowerCase());
 
-        // Find mapping index for each desired field
-        const findIndex = (keywords: string[]) => {
-          return headersRow.findIndex((h: string) =>
-            keywords.some((kw) => {
-              const fieldClean = h.toLowerCase().trim();
-              const kwClean = kw.toLowerCase().trim();
-              return (
-                fieldClean.includes(kwClean) || kwClean.includes(fieldClean)
+            const findFamIndex = (keywords: string[]) => {
+              // 1. Exact match first (most reliable to avoid overlaps like "kk" vs "(kk)")
+              const exactIdx = famHeadersRow.findIndex((h: string) =>
+                keywords.some((kw) => h.toLowerCase().trim() === kw.toLowerCase().trim())
               );
-            }),
-          );
-        };
+              if (exactIdx !== -1) return exactIdx;
 
-        const idxNama = findIndex(["nama lengkap", "nama_lengkap", "nama"]);
-        const idxJK = findIndex([
-          "jenis kelamin",
-          "jenis_kelamin",
-          "gender",
-          "jk",
-        ]);
-        const idxDaerah = findIndex(["id daerah", "daerah"]);
-        const idxDesa = findIndex(["id desa", "desa"]);
-        const idxKelompok = findIndex(["id kelompok", "kelompok"]);
-        const idxUsia = findIndex([
-          "id kategori usia",
-          "kategori usia",
-          "kategori_usia",
-          "usia",
-          "kategori",
-        ]);
-        const idxTempat = findIndex(["tempat lahir", "tempat_lahir", "tempat"]);
-        const idxTanggal = findIndex([
-          "tanggal lahir",
-          "tanggal_lahir",
-          "tgl lahir",
-          "tgl_lahir",
-          "tanggal",
-        ]);
-        const idxHPOrtu = findIndex([
-          "no hp orang tua",
-          "nomor hp orang tua",
-          "hp orang tua",
-          "no hp ortu",
-          "no_hp_ortu",
-          "hp ortu",
-          "nomor hp ortu",
-        ]);
-        let idxHPAnggota = findIndex([
-          "no hp anggota",
-          "no_hp_anggota",
-          "hp anggota",
-          "no hp",
-          "hp",
-          "no_hp",
-        ]);
-        const idxNamaOrtu = findIndex([
-          "nama orang tua",
-          "nama ortu",
-          "nama_ortu",
-          "orang tua",
-          "ortu",
-        ]);
-        const idxPekerjaanOrtu = findIndex([
-          "pekerjaan orang tua",
-          "pekerjaan_ortu",
-          "pekerjaan ortu",
-          "pekerjaan",
-        ]);
-        const idxAlamat = findIndex(["alamat rumah", "alamat_rumah", "alamat"]);
-        const idxPendidikan = findIndex([
-          "pendidikan terkahir",
-          "pendidikan terakhir",
-          "pendidikan_terakhir",
-          "pendidikan",
-        ]);
-        const idxKelas = findIndex([
-          "kelas atau semester",
-          "kelas_atau_semester",
-          "kelas",
-          "semester",
-        ]);
-        const idxRFID = findIndex([
-          "rfid",
-          "nfc",
-          "kartu rfid",
-          "rfid_code",
-          "rfid code",
-        ]);
-        const idxRFIDKtp = findIndex([
-          "rfid ktp",
-          "rfid_ktp",
-          "nfc ktp",
-          "nfc_ktp",
-          "e-ktp",
-          "ektp",
-          "kartu ktp",
-          "ktp rfid",
-          "nfc_ktp_code",
-        ]);
-        const idxStatus = findIndex([
-          "status pernikahan",
-          "status perkawinan",
-          "status_perkawinan",
-          "status_pernikahan",
-          "perkawinan",
-          "pernikahan",
-          "status",
-        ]);
+              // 2. Substring match for compatibility
+              return famHeadersRow.findIndex((h: string) =>
+                keywords.some((kw) => {
+                  const fieldClean = h.toLowerCase().trim();
+                  const kwClean = kw.toLowerCase().trim();
+                  
+                  // Avoid cross matching Nama KK and No KK
+                  const isKKKeyword = [
+                    "kk", "no kk", "no. kk", "no.kk", "no_kk", "nomor_kk", "nomor kk", 
+                    "nomor kartu keluarga (kk)", "nomor kartu keluarga"
+                  ].includes(kwClean);
+                  const isNameKeyword = [
+                    "nama", "nama keluarga", "nama_keluarga", "nama keluarga (kk)", 
+                    "family_name", "family name", "nama kk", "nama_kk"
+                  ].includes(kwClean);
+                  
+                  if (isKKKeyword && (fieldClean.includes("nama") || fieldClean.includes("name"))) {
+                    return false;
+                  }
+                  if (isNameKeyword && (fieldClean.includes("nomor") || fieldClean.includes("no.") || fieldClean.includes("no_") || /\bno\b/.test(fieldClean))) {
+                    return false;
+                  }
 
-        if (idxHPAnggota === idxHPOrtu && idxHPOrtu !== -1) {
-          idxHPAnggota = headersRow.findIndex(
-            (h, idx) =>
-              idx !== idxHPOrtu &&
-              (h.includes("anggota") ||
-                h.includes("member") ||
-                h === "hp" ||
-                h === "no hp" ||
-                h === "no_hp"),
-          );
-        }
-        let finalIdxNama = idxNama;
-        if (idxNama === idxNamaOrtu && idxNamaOrtu !== -1) {
-          finalIdxNama = headersRow.findIndex(
-            (h, idx) =>
-              idx !== idxNamaOrtu &&
-              (h.includes("lengkap") ||
-                h.includes("member") ||
-                h === "nama" ||
-                h === "name"),
-          );
-        }
-
-        const parsedRows: any[] = [];
-        const errorsList: string[] = [];
-
-        for (let i = 1; i < sheetData.length; i++) {
-          const row = sheetData[i];
-          if (!row || row.length === 0) continue;
-
-          const isRowEmpty = row.every(
-            (val: any) =>
-              val === undefined || val === null || String(val).trim() === "",
-          );
-          if (isRowEmpty) continue;
-
-          const getValue = (idx: number, fallback = "") => {
-            if (idx === -1 || idx >= row.length) return fallback;
-            return row[idx] !== undefined && row[idx] !== null
-              ? String(row[idx]).trim()
-              : fallback;
-          };
-
-          const nama = getValue(finalIdxNama);
-          const jk = getValue(idxJK);
-          const daerahRaw = getValue(idxDaerah);
-          const desaRaw = getValue(idxDesa);
-          const kelompokRaw = getValue(idxKelompok);
-          const usiaRaw = getValue(idxUsia);
-          const tempat = getValue(idxTempat);
-          const tanggalRaw = getValue(idxTanggal);
-          const hpAnggota = getValue(idxHPAnggota);
-          const namaOrtu = getValue(idxNamaOrtu);
-          const hpOrtu = getValue(idxHPOrtu);
-          const pekerjaanOrtu = getValue(idxPekerjaanOrtu);
-          const alamat = getValue(idxAlamat);
-          const pendidikan = getValue(idxPendidikan);
-          const kelas = getValue(idxKelas);
-          const rfid = getValue(idxRFID);
-          const rfidKtp = getValue(idxRFIDKtp);
-          const statusVal = getValue(idxStatus);
-
-          if (!nama) {
-            errorsList.push(`Baris ${i + 1}: Nama Lengkap kosong.`);
-            continue;
-          }
-
-          // Normalkan Jenis Kelamin
-          let finalJK = "Laki-laki";
-          if (jk) {
-            const jkLower = jk.toLowerCase();
-            if (
-              jkLower.startsWith("p") ||
-              jkLower.includes("wanita") ||
-              jkLower.includes("perempuan")
-            ) {
-              finalJK = "Perempuan";
-            }
-          }
-
-          // Match Desa (Prioritas match ID, fallback match Nama, fallback default)
-          let matchedDesaId = "";
-          let matchedDesaName = "";
-          if (desaRaw) {
-            const matched = desas.find(
-              (d) => d.id.toLowerCase().trim() === desaRaw.toLowerCase().trim(),
-            );
-            if (matched) {
-              matchedDesaId = matched.id;
-              matchedDesaName = matched.nama_desa;
-            } else {
-              const matchedByName = desas.find(
-                (d) =>
-                  d.nama_desa.toLowerCase().trim() ===
-                    desaRaw.toLowerCase().trim() ||
-                  d.nama_desa
-                    .toLowerCase()
-                    .trim()
-                    .includes(desaRaw.toLowerCase().trim()) ||
-                  desaRaw
-                    .toLowerCase()
-                    .trim()
-                    .includes(d.nama_desa.toLowerCase().trim()),
+                  if (kwClean === "kk" || kwClean === "nama" || kwClean === "usia") {
+                    return fieldClean === kwClean || new RegExp(`\\b${kwClean}\\b`).test(fieldClean);
+                  }
+                  return fieldClean.includes(kwClean) || kwClean.includes(fieldClean);
+                })
               );
-              if (matchedByName) {
-                matchedDesaId = matchedByName.id;
-                matchedDesaName = matchedByName.nama_desa;
-              } else if (desas.length > 0) {
-                matchedDesaId = desas[0].id;
-                matchedDesaName = desas[0].nama_desa;
-                errorsList.push(
-                  `Baris ${i + 1} ("${nama}"): ID Desa "${desaRaw}" tidak terdaftar. Menggunakan default "${matchedDesaName}".`,
-                );
-              } else {
-                errorsList.push(
-                  `Baris ${i + 1} ("${nama}"): ID Desa "${desaRaw}" tidak ditemukan.`,
-                );
-              }
-            }
-          } else {
-            if (desas.length > 0) {
-              matchedDesaId = desas[0].id;
-              matchedDesaName = desas[0].nama_desa;
-            } else {
-              errorsList.push(
-                `Baris ${i + 1} ("${nama}"): Kolom ID Desa kosong.`,
-              );
-            }
-          }
+            };
 
-          // Match Kelompok (Prioritas match ID, fallback match Nama [dengan pencocokan desa], fallback default)
-          let matchedKelompokId = "";
-          let matchedKelompokName = "";
-          if (kelompokRaw) {
-            const matched = kelompoks.find(
-              (k) =>
-                k.id.toLowerCase().trim() === kelompokRaw.toLowerCase().trim(),
-            );
-            if (matched) {
-              matchedKelompokId = matched.id;
-              matchedKelompokName = matched.nama_kelompok;
-            } else {
-              // Priority: match name belonging to the matchedDesaId
-              let matchedByName = kelompoks.find(
-                (k) =>
-                  String(k.desa_id) === String(matchedDesaId) &&
-                  (k.nama_kelompok.toLowerCase().trim() ===
-                    kelompokRaw.toLowerCase().trim() ||
-                    k.nama_kelompok
-                      .toLowerCase()
-                      .trim()
-                      .includes(kelompokRaw.toLowerCase().trim()) ||
-                    kelompokRaw
-                      .toLowerCase()
-                      .trim()
-                      .includes(k.nama_kelompok.toLowerCase().trim())),
-              );
-              // Fallback: search generally
-              if (!matchedByName) {
-                matchedByName = kelompoks.find(
-                  (k) =>
-                    k.nama_kelompok.toLowerCase().trim() ===
-                      kelompokRaw.toLowerCase().trim() ||
-                    k.nama_kelompok
-                      .toLowerCase()
-                      .trim()
-                      .includes(kelompokRaw.toLowerCase().trim()) ||
-                    kelompokRaw
-                      .toLowerCase()
-                      .trim()
-                      .includes(k.nama_kelompok.toLowerCase().trim()),
-                );
+            const idxFamilyId = findFamIndex(["id keluarga", "id_keluarga", "family_id", "family id"]);
+            const idxFamilyName = findFamIndex(["nama keluarga (kk)", "nama keluarga", "nama_keluarga", "nama", "family_name", "family name", "nama kk", "nama_kk"]);
+            const idxFamilyKK = findFamIndex(["nomor kartu keluarga (kk)", "nomor kartu keluarga", "nomor kk", "no kk", "no. kk", "no.kk", "no_kk", "nomor_kk", "kk"]);
+
+            for (let i = 1; i < famData.length; i++) {
+              const row = famData[i];
+              if (!row || row.length === 0) continue;
+              const isRowEmpty = row.every(val => val === undefined || val === null || String(val).trim() === "");
+              if (isRowEmpty) continue;
+
+              const getValue = (idx: number, fallback = "") => {
+                if (idx === -1 || idx >= row.length) return fallback;
+                return row[idx] !== undefined && row[idx] !== null ? String(row[idx]).trim() : fallback;
+              };
+
+              const famId = getValue(idxFamilyId);
+              const famName = getValue(idxFamilyName);
+              const famKK = getValue(idxFamilyKK);
+
+              if (!famName) {
+                combinedWarnings.push(`[Keluarga] Baris ${i + 1}: Nama Keluarga kosong.`);
+                continue;
               }
 
-              if (matchedByName) {
-                matchedKelompokId = matchedByName.id;
-                matchedKelompokName = matchedByName.nama_kelompok;
-              } else {
-                const allowedKelompoks = kelompoks.filter(
-                  (k) => String(k.desa_id) === String(matchedDesaId),
-                );
-                const fallbackKelompok =
-                  allowedKelompoks.length > 0
-                    ? allowedKelompoks[0]
-                    : kelompoks[0];
-                if (fallbackKelompok) {
-                  matchedKelompokId = fallbackKelompok.id;
-                  matchedKelompokName = fallbackKelompok.nama_kelompok;
-                  errorsList.push(
-                    `Baris ${i + 1} ("${nama}"): ID Kelompok "${kelompokRaw}" tidak terdaftar. Menggunakan default "${matchedKelompokName}".`,
-                  );
-                } else {
-                  errorsList.push(
-                    `Baris ${i + 1} ("${nama}"): ID Kelompok "${kelompokRaw}" tidak ditemukan.`,
-                  );
+              parsedFamilies.push({
+                id: famId || `FAM-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+                nama_keluarga: famName,
+                nomor_kk: famKK,
+                is_new: !famId,
+              });
+            }
+          }
+        }
+
+        // --- 2. Parse Members Sheet if detected ---
+        if (finalMemberSheetName) {
+          const wsMem = workbook.Sheets[finalMemberSheetName];
+          const memData = XLSX.utils.sheet_to_json<any[]>(wsMem, { header: 1 });
+          if (memData.length >= 2) {
+            const memHeadersRow = memData[0].map((h: any) => String(h || "").trim().toLowerCase());
+
+             const findMemIndex = (keywords: string[]) => {
+              // 1. Exact match first
+              const exactIdx = memHeadersRow.findIndex((h: string) =>
+                keywords.some((kw) => h.toLowerCase().trim() === kw.toLowerCase().trim())
+              );
+              if (exactIdx !== -1) return exactIdx;
+
+              // 2. Substring match
+              return memHeadersRow.findIndex((h: string) =>
+                keywords.some((kw) => {
+                  const fieldClean = h.toLowerCase().trim();
+                  const kwClean = kw.toLowerCase().trim();
+                  
+                  // Avoid cross matching Nama KK and No KK
+                  const isKKKeyword = [
+                    "kk", "no kk", "no. kk", "no.kk", "no_kk", "nomor_kk", "nomor kk", 
+                    "nomor kartu keluarga (kk)", "nomor kartu keluarga"
+                  ].includes(kwClean);
+                  const isNameKeyword = [
+                    "nama", "nama keluarga", "nama_keluarga", "nama keluarga (kk)", 
+                    "family_name", "family name", "nama kk", "nama_kk"
+                  ].includes(kwClean);
+                  
+                  if (isKKKeyword && (fieldClean.includes("nama") || fieldClean.includes("name"))) {
+                    return false;
+                  }
+                  if (isNameKeyword && (fieldClean.includes("nomor") || fieldClean.includes("no.") || fieldClean.includes("no_") || /\bno\b/.test(fieldClean))) {
+                    return false;
+                  }
+
+                  if (kwClean === "kk" || kwClean === "nama" || kwClean === "usia") {
+                    return fieldClean === kwClean || new RegExp(`\\b${kwClean}\\b`).test(fieldClean);
+                  }
+                  return fieldClean.includes(kwClean) || kwClean.includes(fieldClean);
+                })
+              );
+            };
+
+            const idxNama = findMemIndex(["nama lengkap", "nama_lengkap", "nama"]);
+            const idxJK = findMemIndex(["jenis kelamin", "jenis_kelamin", "gender", "jk"]);
+            const idxDaerah = findMemIndex(["id daerah", "daerah"]);
+            const idxDesa = findMemIndex(["id desa", "desa"]);
+            const idxKelompok = findMemIndex(["id kelompok", "kelompok"]);
+            const idxUsia = findMemIndex(["id kategori usia", "kategori usia", "kategori_usia", "usia", "kategori"]);
+            const idxTempat = findMemIndex(["tempat lahir", "tempat_lahir", "tempat"]);
+            const idxTanggal = findMemIndex(["tanggal lahir", "tanggal_lahir", "tgl lahir", "tgl_lahir", "tanggal"]);
+            const idxHPAnggota = findMemIndex(["no hp anggota", "no_hp_anggota", "hp anggota", "no hp", "hp", "no_hp"]);
+            const idxAlamat = findMemIndex(["alamat rumah", "alamat_rumah", "alamat"]);
+            const idxPendidikan = findMemIndex(["pendidikan terkahir", "pendidikan terakhir", "pendidikan_terakhir", "pendidikan"]);
+            const idxKelas = findMemIndex(["kelas atau semester", "kelas_atau_semester", "kelas", "semester"]);
+            const idxRFID = findMemIndex(["rfid", "nfc", "kartu rfid", "rfid_code", "rfid code"]);
+            const idxRFIDKtp = findMemIndex(["rfid ktp", "rfid_ktp", "nfc ktp", "nfc_ktp", "e-ktp", "ektp", "kartu ktp", "ktp rfid", "nfc_ktp_code"]);
+            const idxStatus = findMemIndex(["status pernikahan", "status perkawinan", "status_perkawinan", "status_pernikahan", "perkawinan", "pernikahan", "status"]);
+            const idxPekerjaan = findMemIndex(["pekerjaan", "pekerjaan_anggota", "profesi"]);
+            const idxFamilyId = findMemIndex(["id keluarga", "family_id", "family id", "id_keluarga", "keluarga_id"]);
+            const idxRelationshipId = findMemIndex(["id hubungan keluarga", "relationship_id", "hubungan keluarga", "id hubungan", "relationship id", "hubungan_keluarga", "peranan keluarga"]);
+            const idxLabels = findMemIndex(["label anggota (opsional)", "label anggota", "label/tagging", "label", "tag", "labels", "tagging"]);
+
+            for (let i = 1; i < memData.length; i++) {
+              const row = memData[i];
+              if (!row || row.length === 0) continue;
+              const isRowEmpty = row.every(val => val === undefined || val === null || String(val).trim() === "");
+              if (isRowEmpty) continue;
+
+              const getValue = (idx: number, fallback = "") => {
+                if (idx === -1 || idx >= row.length) return fallback;
+                return row[idx] !== undefined && row[idx] !== null ? String(row[idx]).trim() : fallback;
+              };
+
+              const nama = getValue(idxNama);
+              const jk = getValue(idxJK);
+              const daerahRaw = getValue(idxDaerah);
+              const desaRaw = getValue(idxDesa);
+              const kelompokRaw = getValue(idxKelompok);
+              const usiaRaw = getValue(idxUsia);
+              const tempat = getValue(idxTempat);
+              const tanggalRaw = getValue(idxTanggal);
+              const hpAnggota = getValue(idxHPAnggota);
+              const alamat = getValue(idxAlamat);
+              const pendidikan = getValue(idxPendidikan);
+              const kelas = getValue(idxKelas);
+              const rfid = getValue(idxRFID);
+              const rfidKtp = getValue(idxRFIDKtp);
+              const statusVal = getValue(idxStatus);
+              const pekerjaanVal = getValue(idxPekerjaan);
+              const familyIdRaw = getValue(idxFamilyId);
+              const relationshipIdRaw = getValue(idxRelationshipId);
+              const labelsRaw = getValue(idxLabels);
+
+              if (!nama) {
+                combinedWarnings.push(`[Anggota] Baris ${i + 1}: Nama Lengkap kosong.`);
+                continue;
+              }
+
+              // Parse labels separated by comma
+              const labels = labelsRaw
+                ? labelsRaw.split(",").map((s) => s.trim()).filter(Boolean)
+                : [];
+
+              // Normalize gender
+              let finalJK = "Laki-laki";
+              if (jk) {
+                const jkLower = jk.toLowerCase();
+                if (jkLower.startsWith("p") || jkLower.includes("wanita") || jkLower.includes("perempuan")) {
+                  finalJK = "Perempuan";
                 }
               }
-            }
-          } else {
-            const allowedKelompoks = kelompoks.filter(
-              (k) => String(k.desa_id) === String(matchedDesaId),
-            );
-            const fallbackKelompok =
-              allowedKelompoks.length > 0 ? allowedKelompoks[0] : kelompoks[0];
-            if (fallbackKelompok) {
-              matchedKelompokId = fallbackKelompok.id;
-              matchedKelompokName = fallbackKelompok.nama_kelompok;
-            } else {
-              errorsList.push(
-                `Baris ${i + 1} ("${nama}"): Kolom ID Kelompok kosong.`,
-              );
-            }
-          }
 
-          // Match Kategori Usia (Prioritas match ID, fallback match Nama, fallback default)
-          let matchedAgeId = "";
-          let matchedAgeName = "";
-          if (usiaRaw) {
-            const matched = ages.find(
-              (a) => a.id.toLowerCase().trim() === usiaRaw.toLowerCase().trim(),
-            );
-            if (matched) {
-              matchedAgeId = matched.id;
-              matchedAgeName = matched.name;
-            } else {
-              const matchedByName = ages.find(
-                (a) =>
-                  a.name.toLowerCase().trim() ===
-                    usiaRaw.toLowerCase().trim() ||
-                  a.name
-                    .toLowerCase()
-                    .trim()
-                    .includes(usiaRaw.toLowerCase().trim()) ||
-                  usiaRaw
-                    .toLowerCase()
-                    .trim()
-                    .includes(a.name.toLowerCase().trim()),
-              );
-              if (matchedByName) {
-                matchedAgeId = matchedByName.id;
-                matchedAgeName = matchedByName.name;
-              } else if (ages.length > 0) {
-                matchedAgeId = ages[0].id;
-                matchedAgeName = ages[0].name;
-                errorsList.push(
-                  `Baris ${i + 1} ("${nama}"): ID Kategori Usia "${usiaRaw}" tidak terdaftar. Menggunakan default "${matchedAgeName}".`,
-                );
-              } else {
-                errorsList.push(
-                  `Baris ${i + 1} ("${nama}"): ID Kategori Usia "${usiaRaw}" tidak ditemukan.`,
-                );
-              }
-            }
-          } else {
-            if (ages.length > 0) {
-              matchedAgeId = ages[0].id;
-              matchedAgeName = ages[0].name;
-            } else {
-              errorsList.push(
-                `Baris ${i + 1} ("${nama}"): Kolom ID Kategori Usia kosong.`,
-              );
-            }
-          }
-
-          // Format Tanggal Lahir
-          let finalTanggal = "";
-          if (tanggalRaw) {
-            if (!isNaN(Number(tanggalRaw)) && Number(tanggalRaw) > 20000) {
-              try {
-                const dt = new Date(
-                  (Number(tanggalRaw) - 25569) * 86400 * 1000,
-                );
-                const year = dt.getFullYear();
-                const month = String(dt.getMonth() + 1).padStart(2, "0");
-                const day = String(dt.getDate()).padStart(2, "0");
-                finalTanggal = `${year}-${month}-${day}`;
-              } catch {
-                finalTanggal = String(tanggalRaw);
-              }
-            } else {
-              const parts = String(tanggalRaw).split(/[-/.]/);
-              if (parts.length === 3) {
-                if (parts[0].length === 4) {
-                  finalTanggal = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}`;
-                } else if (parts[2].length === 4) {
-                  finalTanggal = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
+              // Match Desa
+              let matchedDesaId = "";
+              let matchedDesaName = "";
+              if (desaRaw) {
+                const matched = desas.find(d => d.id.toLowerCase().trim() === desaRaw.toLowerCase().trim());
+                if (matched) {
+                  matchedDesaId = matched.id;
+                  matchedDesaName = matched.nama_desa;
                 } else {
-                  finalTanggal = String(tanggalRaw);
+                  const matchedByName = desas.find(d =>
+                    d.nama_desa.toLowerCase().trim() === desaRaw.toLowerCase().trim() ||
+                    d.nama_desa.toLowerCase().trim().includes(desaRaw.toLowerCase().trim()) ||
+                    desaRaw.toLowerCase().trim().includes(d.nama_desa.toLowerCase().trim())
+                  );
+                  if (matchedByName) {
+                    matchedDesaId = matchedByName.id;
+                    matchedDesaName = matchedByName.nama_desa;
+                  } else if (desas.length > 0) {
+                    matchedDesaId = desas[0].id;
+                    matchedDesaName = desas[0].nama_desa;
+                    combinedWarnings.push(`[Anggota] Baris ${i + 1} ("${nama}"): ID Desa "${desaRaw}" tidak terdaftar. Menggunakan default "${matchedDesaName}".`);
+                  } else {
+                    combinedWarnings.push(`[Anggota] Baris ${i + 1} ("${nama}"): ID Desa "${desaRaw}" tidak ditemukan.`);
+                  }
                 }
               } else {
-                finalTanggal = String(tanggalRaw);
+                if (desas.length > 0) {
+                  matchedDesaId = desas[0].id;
+                  matchedDesaName = desas[0].nama_desa;
+                } else {
+                  combinedWarnings.push(`[Anggota] Baris ${i + 1} ("${nama}"): Kolom ID Desa kosong.`);
+                }
               }
+
+              // Match Kelompok
+              let matchedKelompokId = "";
+              let matchedKelompokName = "";
+              if (kelompokRaw) {
+                const matched = kelompoks.find(k => k.id.toLowerCase().trim() === kelompokRaw.toLowerCase().trim());
+                if (matched) {
+                  matchedKelompokId = matched.id;
+                  matchedKelompokName = matched.nama_kelompok;
+                } else {
+                  let matchedByName = kelompoks.find(k =>
+                    String(k.desa_id) === String(matchedDesaId) &&
+                    (k.nama_kelompok.toLowerCase().trim() === kelompokRaw.toLowerCase().trim() ||
+                      k.nama_kelompok.toLowerCase().trim().includes(kelompokRaw.toLowerCase().trim()) ||
+                      kelompokRaw.toLowerCase().trim().includes(k.nama_kelompok.toLowerCase().trim()))
+                  );
+                  if (!matchedByName) {
+                    matchedByName = kelompoks.find(k =>
+                      k.nama_kelompok.toLowerCase().trim() === kelompokRaw.toLowerCase().trim() ||
+                      k.nama_kelompok.toLowerCase().trim().includes(kelompokRaw.toLowerCase().trim()) ||
+                      kelompokRaw.toLowerCase().trim().includes(k.nama_kelompok.toLowerCase().trim())
+                    );
+                  }
+                  if (matchedByName) {
+                    matchedKelompokId = matchedByName.id;
+                    matchedKelompokName = matchedByName.nama_kelompok;
+                  } else if (kelompoks.length > 0) {
+                    matchedKelompokId = kelompoks[0].id;
+                    matchedKelompokName = kelompoks[0].nama_kelompok;
+                    combinedWarnings.push(`[Anggota] Baris ${i + 1} ("${nama}"): ID Kelompok "${kelompokRaw}" tidak terdaftar. Menggunakan default "${matchedKelompokName}".`);
+                  } else {
+                    combinedWarnings.push(`[Anggota] Baris ${i + 1} ("${nama}"): ID Kelompok "${kelompokRaw}" tidak ditemukan.`);
+                  }
+                }
+              } else {
+                if (kelompoks.length > 0) {
+                  matchedKelompokId = kelompoks[0].id;
+                  matchedKelompokName = kelompoks[0].nama_kelompok;
+                } else {
+                  combinedWarnings.push(`[Anggota] Baris ${i + 1} ("${nama}"): Kolom ID Kelompok kosong.`);
+                }
+              }
+
+              // Match Kategori Usia
+              let matchedAgeId = "";
+              let matchedAgeName = "";
+              if (usiaRaw) {
+                const matched = ages.find(a => a.id.toLowerCase().trim() === usiaRaw.toLowerCase().trim());
+                if (matched) {
+                  matchedAgeId = matched.id;
+                  matchedAgeName = matched.name;
+                } else {
+                  const matchedByName = ages.find(a =>
+                    a.name.toLowerCase().trim() === usiaRaw.toLowerCase().trim() ||
+                    a.name.toLowerCase().trim().includes(usiaRaw.toLowerCase().trim()) ||
+                    usiaRaw.toLowerCase().trim().includes(a.name.toLowerCase().trim())
+                  );
+                  if (matchedByName) {
+                    matchedAgeId = matchedByName.id;
+                    matchedAgeName = matchedByName.name;
+                  } else if (ages.length > 0) {
+                    matchedAgeId = ages[0].id;
+                    matchedAgeName = ages[0].name;
+                    combinedWarnings.push(`[Anggota] Baris ${i + 1} ("${nama}"): Kategori Usia "${usiaRaw}" tidak valid. Menggunakan default "${matchedAgeName}".`);
+                  } else {
+                    combinedWarnings.push(`[Anggota] Baris ${i + 1} ("${nama}"): Kategori Usia "${usiaRaw}" tidak ditemukan.`);
+                  }
+                }
+              } else {
+                if (ages.length > 0) {
+                  matchedAgeId = ages[0].id;
+                  matchedAgeName = ages[0].name;
+                } else {
+                  combinedWarnings.push(`[Anggota] Baris ${i + 1} ("${nama}"): Kolom Kategori Usia kosong.`);
+                }
+              }
+
+              // Match Keluarga
+              let matchedFamilyId = "";
+              let matchedFamilyName = "";
+              if (familyIdRaw) {
+                // First search in parsedFamilies from this import file so they match perfectly!
+                const matchedInParsed = parsedFamilies.find(f =>
+                  f.id.toLowerCase().trim() === familyIdRaw.toLowerCase().trim() ||
+                  f.nama_keluarga.toLowerCase().trim() === familyIdRaw.toLowerCase().trim()
+                );
+
+                const matchedInDb = (families || []).find(f =>
+                  f.id.toLowerCase().trim() === familyIdRaw.toLowerCase().trim() ||
+                  f.nama_keluarga.toLowerCase().trim() === familyIdRaw.toLowerCase().trim()
+                );
+
+                if (matchedInParsed) {
+                  matchedFamilyId = matchedInParsed.id;
+                  matchedFamilyName = matchedInParsed.nama_keluarga;
+                } else if (matchedInDb) {
+                  matchedFamilyId = matchedInDb.id;
+                  matchedFamilyName = matchedInDb.nama_keluarga;
+                } else {
+                  matchedFamilyId = familyIdRaw; // keep raw so we can auto-create later
+                  matchedFamilyName = familyIdRaw.toUpperCase().startsWith("FAM-") ? `Keluarga ${familyIdRaw}` : familyIdRaw;
+                }
+              }
+
+              // Match Hubungan Keluarga
+              let matchedRelationshipId = "";
+              let matchedRelationshipName = "";
+              if (relationshipIdRaw) {
+                const matched = (relationships || []).find(r =>
+                  r.id.toLowerCase().trim() === relationshipIdRaw.toLowerCase().trim() ||
+                  r.name.toLowerCase().trim() === relationshipIdRaw.toLowerCase().trim()
+                );
+                if (matched) {
+                  matchedRelationshipId = matched.id;
+                  matchedRelationshipName = matched.name;
+                } else if (relationships && relationships.length > 0) {
+                  const partial = relationships.find(r =>
+                    r.name.toLowerCase().trim().includes(relationshipIdRaw.toLowerCase().trim()) ||
+                    relationshipIdRaw.toLowerCase().trim().includes(r.name.toLowerCase().trim())
+                  );
+                  if (partial) {
+                    matchedRelationshipId = partial.id;
+                    matchedRelationshipName = partial.name;
+                  } else {
+                    combinedWarnings.push(`[Anggota] Baris ${i + 1} ("${nama}"): Hubungan Keluarga "${relationshipIdRaw}" tidak terdaftar.`);
+                  }
+                }
+              }
+
+              // Format Tanggal Lahir
+              let finalTanggal = "";
+              if (tanggalRaw) {
+                if (!isNaN(Number(tanggalRaw)) && Number(tanggalRaw) > 10000) {
+                  const dateObj = XLSX.SSF.parse_date_code(Number(tanggalRaw));
+                  const yy = dateObj.y;
+                  const mm = String(dateObj.m).padStart(2, "0");
+                  const dd = String(dateObj.d).padStart(2, "0");
+                  finalTanggal = `${yy}-${mm}-${dd}`;
+                } else {
+                  const dateStr = String(tanggalRaw).trim();
+                  const parts = dateStr.split(/[-/.]/);
+                  if (parts.length === 3) {
+                    if (parts[0].length === 4) {
+                      finalTanggal = `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}`;
+                    } else if (parts[2].length === 4) {
+                      finalTanggal = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
+                    } else {
+                      finalTanggal = dateStr;
+                    }
+                  } else {
+                    finalTanggal = dateStr;
+                  }
+                }
+              }
+
+              const parsedDesa = desas.find(d => String(d.id) === String(matchedDesaId));
+              let parsedDaerahId = daerahRaw;
+              if (!parsedDaerahId) {
+                parsedDaerahId = parsedDesa?.daerah_id || "";
+              }
+              const parsedDaerahName = (daerahs || []).find(da => String(da.id) === String(parsedDaerahId))?.nama_daerah || "";
+
+              parsedMembers.push({
+                nama_lengkap: nama,
+                jenis_kelamin: finalJK,
+                daerah_id: parsedDaerahId,
+                daerah_name: parsedDaerahName,
+                desa_id: matchedDesaId,
+                desa_name: matchedDesaName,
+                kelompok_id: matchedKelompokId,
+                kelompok_name: matchedKelompokName,
+                age_category_id: matchedAgeId,
+                age_category_name: matchedAgeName,
+                tempat_lahir: tempat,
+                tanggal_lahir: finalTanggal,
+                no_hp_anggota: hpAnggota,
+                alamat_rumah: alamat,
+                pendidikan: pendidikan,
+                kelas: kelas,
+                rfid: rfid,
+                rfid_ktp: rfidKtp,
+                status: statusVal,
+                pekerjaan: pekerjaanVal,
+                labels: labels,
+                family_id: matchedFamilyId,
+                family_name: matchedFamilyName,
+                relationship_id: matchedRelationshipId,
+                relationship_name: matchedRelationshipName,
+              });
             }
           }
-
-          const parsedDesa = desas.find(
-            (d) => String(d.id) === String(matchedDesaId),
-          );
-          let parsedDaerahId = daerahRaw;
-          if (!parsedDaerahId) {
-            parsedDaerahId = parsedDesa?.daerah_id || "";
-          }
-          const parsedDaerahName =
-            (daerahs || []).find(
-              (da) => String(da.id) === String(parsedDaerahId),
-            )?.nama_daerah || "";
-
-          parsedRows.push({
-            nama_lengkap: nama,
-            jenis_kelamin: finalJK,
-            daerah_id: parsedDaerahId,
-            daerah_name: parsedDaerahName,
-            desa_id: matchedDesaId,
-            desa_name: matchedDesaName,
-            kelompok_id: matchedKelompokId,
-            kelompok_name: matchedKelompokName,
-            age_category_id: matchedAgeId,
-            age_category_name: matchedAgeName,
-            tempat_lahir: tempat,
-            tanggal_lahir: finalTanggal,
-            no_hp_anggota: hpAnggota,
-            nama_ortu: namaOrtu,
-            no_hp_ortu: hpOrtu,
-            pekerjaan_ortu: pekerjaanOrtu,
-            alamat_rumah: alamat,
-            pendidikan: pendidikan,
-            kelas: kelas,
-            rfid: rfid,
-            rfid_ktp: rfidKtp,
-            status: statusVal,
-          });
         }
 
-        setImportPreview(parsedRows);
-        setImportWarnings(errorsList);
+        // Set state based on parsed results
+        setImportPreview(parsedMembers);
+        setImportPreviewFamilies(parsedFamilies);
+        setImportWarnings(combinedWarnings);
+
+        if (parsedMembers.length > 0 && parsedFamilies.length > 0) {
+          setImportType("both");
+          setActivePreviewTab("member");
+        } else if (parsedFamilies.length > 0) {
+          setImportType("family");
+          setActivePreviewTab("family");
+        } else if (parsedMembers.length > 0) {
+          setImportType("member");
+          setActivePreviewTab("member");
+        } else {
+          throw new Error("Tidak menemukan data anggota atau keluarga yang valid di file excel ini.");
+        }
+
       } catch (err: any) {
-        setImportError(
-          err.message || "Gagal mengurai file. Pastikan format file sesuai.",
-        );
+        setImportError(err.message || "Gagal mengurai file. Pastikan format file sesuai.");
       } finally {
         setIsParsing(false);
       }
@@ -1195,36 +1311,145 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
     setIsParsing(true);
     setImportError("");
     setImportPreview([]);
+    setImportPreviewFamilies([]);
     setImportWarnings([]);
     reader.readAsArrayBuffer(file);
   };
 
   const handleCommitImport = async () => {
-    if (importPreview.length === 0) return;
+    // Determine if we have any data to commit
+    const hasMembers = importPreview.length > 0;
+    const hasFamilies = importPreviewFamilies.length > 0;
+    if (!hasMembers && !hasFamilies) return;
+
     setIsSubmittingImport(true);
     try {
-      let successCount = 0;
-      for (const record of importPreview) {
-        // High-density, compact Base-36 ID + 4 random characters (e.g., MBR-K8ZJ1B3FX9A)
-        const generatedId = `MBR-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-        const payload: AbsensiMember = {
-          ...record,
-          id: generatedId,
-        };
-        await dbAddMember(payload);
-        setMembers((prev) => [payload, ...prev]);
-        successCount++;
+      let familiesSuccess = 0;
+      let membersSuccess = 0;
+
+      const tempToRealFamilyId = new Map<string, string>(); // temp ID -> real ID mapping
+
+      // 1. First write families if they are present in the import
+      if (importType === "family" || importType === "both") {
+        for (const record of importPreviewFamilies) {
+          // If record.id starts with "FAM-" (case-insensitive), use it directly
+          const isFamIdFormat = record.id && record.id.toUpperCase().startsWith("FAM-");
+          const realFamId = isFamIdFormat 
+            ? record.id.toUpperCase().trim() 
+            : `FAM-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+          const success = await dbAddFamily({
+            id: realFamId,
+            nama_keluarga: record.nama_keluarga,
+            nomor_kk: record.nomor_kk || "",
+          });
+          if (success) {
+            familiesSuccess++;
+            if (record.id) {
+              tempToRealFamilyId.set(record.id.toLowerCase(), realFamId);
+            }
+          }
+        }
       }
 
+      // 2. Second write members if they are present in the import
+      if (importType === "member" || importType === "both") {
+        for (const record of importPreview) {
+          let familyId = record.family_id;
+          if (familyId) {
+            const tempFamIdLower = familyId.toLowerCase();
+            if (tempFamIdLower.startsWith("fam-")) {
+              // If it starts with FAM-, use it directly (either mapped or raw)
+              if (tempToRealFamilyId.has(tempFamIdLower)) {
+                familyId = tempToRealFamilyId.get(tempFamIdLower);
+              } else {
+                familyId = familyId.toUpperCase().trim();
+              }
+            } else {
+              // Otherwise, treat it as a temporary ID of a new family to be registered
+              if (!tempToRealFamilyId.has(tempFamIdLower)) {
+                // Create a family on the fly if it doesn't exist yet
+                const realFamId = `FAM-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+                const newFamilyDoc = {
+                  id: realFamId,
+                  nama_keluarga: record.family_name || `Keluarga ${record.nama_lengkap}`,
+                  nomor_kk: ""
+                };
+
+                await dbAddFamily(newFamilyDoc);
+                tempToRealFamilyId.set(tempFamIdLower, realFamId);
+                familyId = realFamId;
+              } else {
+                familyId = tempToRealFamilyId.get(tempFamIdLower);
+              }
+            }
+          }
+
+          // Generate a clean member ID
+          const generatedId = `MBR-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+          const payload: AbsensiMember = {
+            ...record,
+            id: generatedId,
+            family_id: familyId,
+          };
+          await dbAddMember(payload);
+          setMembers((prev) => [payload, ...prev]);
+          membersSuccess++;
+        }
+      }
+
+      // 3. Register imported labels to the master label table if they are new
+      const uniqueImportedLabels = new Set<string>();
+      if (importType === "member" || importType === "both") {
+        for (const record of importPreview) {
+          if (record.labels && Array.isArray(record.labels)) {
+            record.labels.forEach((lbl: string) => {
+              if (lbl.trim()) uniqueImportedLabels.add(lbl.trim());
+            });
+          }
+        }
+      }
+
+      const existingLabelNames = new Set((allLabels || []).map(lbl => lbl.name.toLowerCase().trim()));
+      for (const labelName of uniqueImportedLabels) {
+        if (!existingLabelNames.has(labelName.toLowerCase())) {
+          const newLabelId = `LBL-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+          await dbAddLabel({
+            id: newLabelId,
+            name: labelName
+          });
+        }
+      }
+
+      // Refresh local labels state
+      try {
+        const updatedLabels = await dbGetLabels();
+        setAllLabels(updatedLabels);
+      } catch (err) {
+        console.error("Gagal menyinkronkan label setelah impor:", err);
+      }
+
+      // Construct success message
+      let message = "Berhasil mengimpor data:";
+      if (importType === "family") {
+        message = `Berhasil mengimpor ${familiesSuccess} keluarga!`;
+      } else if (importType === "member") {
+        message = `Berhasil mengimpor ${membersSuccess} anggota!`;
+      } else {
+        message = `Berhasil mengimpor ${membersSuccess} anggota dan ${familiesSuccess} keluarga!`;
+      }
+
+      window.alert(message);
       setShowImportModal(false);
       setImportPreview([]);
+      setImportPreviewFamilies([]);
       setImportWarnings([]);
       onRefresh();
-      window.alert(`Berhasil mengimpor ${successCount} anggota!`);
     } catch (err) {
       console.error(err);
       window.alert(
-        `Gagal mengimpor anggota: ${err instanceof Error ? err.message : "Kesalahan Firestore"}`,
+        `Gagal mengimpor data: ${err instanceof Error ? err.message : "Kesalahan database"}`
       );
     } finally {
       setIsSubmittingImport(false);
@@ -1658,11 +1883,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                                         </p>
                                                       </div>
                                                     </div>
-                                                    {familyGroup.familyNo && (
-                                                      <span className="shrink-0 px-2 py-0.5 bg-violet-50 text-violet-700 text-[8px] font-black rounded-md uppercase border border-violet-100 leading-none tracking-wider">
-                                                        No. KK: {familyGroup.familyNo}
-                                                      </span>
-                                                    )}
+                                                    
                                                   </div>
 
                                                   {/* Family Members List - Rich Details & Full Width */}
@@ -1686,9 +1907,6 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                                               <div className="flex items-center gap-1.5 flex-wrap">
                                                                 <span className="text-[11px] font-black text-slate-800 group-hover/row:text-blue-600 transition-colors uppercase truncate">
                                                                   {fm.nama_lengkap}
-                                                                </span>
-                                                                <span className="text-[8px] font-mono font-bold text-slate-400 bg-slate-100/80 px-1 py-0.2 rounded border border-slate-200/50 leading-none">
-                                                                  #{fm.id.slice(-4)}
                                                                 </span>
                                                               </div>
                                                               {/* Mobile only Birth Info */}
@@ -1773,7 +1991,14 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                           </div>
                                         ) : (
                                           Object.entries(ageGroups)
-                                            .sort()
+                                            .sort(([ageA], [ageB]) => {
+                                              const matchedA = ages.find(a => a.name.toLowerCase().trim() === ageA.toLowerCase().trim());
+                                              const matchedB = ages.find(b => b.name.toLowerCase().trim() === ageB.toLowerCase().trim());
+                                              const orderA = matchedA && matchedA.sort_order !== null && matchedA.sort_order !== undefined ? matchedA.sort_order : 9999;
+                                              const orderB = matchedB && matchedB.sort_order !== null && matchedB.sort_order !== undefined ? matchedB.sort_order : 9999;
+                                              if (orderA !== orderB) return orderA - orderB;
+                                              return ageA.localeCompare(ageB);
+                                            })
                                             .map(([age, members]) => (
                                               <div
                                                 key={age}
@@ -1816,13 +2041,10 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                                            </div>
                                                            <div className="min-w-0">
                                                              <div className="flex items-center gap-1.5 flex-wrap">
-                                                               <span className="text-[11px] font-black text-slate-800 group-hover/row:text-blue-600 transition-colors uppercase truncate">
-                                                                 {member.nama_lengkap}
-                                                               </span>
-                                                               <span className="text-[8px] font-mono font-bold text-slate-400 bg-slate-100/80 px-1 py-0.2 rounded border border-slate-200/50 leading-none">
-                                                                 #{member.id.slice(-4)}
-                                                               </span>
-                                                             </div>
+                                                                <span className="text-[11px] font-black text-slate-800 group-hover/row:text-blue-600 transition-colors uppercase truncate">
+                                                                  {member.nama_lengkap}
+                                                                </span>
+                                                              </div>
                                                              {/* Mobile only Birth Info */}
                                                              <p className="md:hidden text-[9px] font-bold text-slate-500 truncate mt-0.5 uppercase">
                                                                <span className="inline-flex items-center gap-1"><Calendar size={10} className="text-slate-400 shrink-0" /> {formatMobileBirth(member.tempat_lahir, member.tanggal_lahir)}</span>
@@ -1916,7 +2138,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className={`relative bg-white w-full ${importPreview.length > 0 ? "md:max-w-7xl md:max-h-[92vh]" : "md:max-w-3xl md:max-h-[85vh]"} h-full md:h-auto rounded-2xl md:rounded-3xl shadow-2xl flex flex-col overflow-hidden transition-all duration-300`}
+              className={`relative bg-white w-full ${(importPreview.length > 0 || importPreviewFamilies.length > 0) ? "md:max-w-7xl md:max-h-[92vh]" : "md:max-w-3xl md:max-h-[85vh]"} h-full md:h-auto rounded-2xl md:rounded-3xl shadow-2xl flex flex-col overflow-hidden transition-all duration-300`}
             >
               {/* Header */}
               <div className="px-5 md:px-8 py-4 border-b border-slate-100 flex items-center justify-between shrink-0">
@@ -1932,6 +2154,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                   onClick={() => {
                     setShowImportModal(false);
                     setImportPreview([]);
+                    setImportPreviewFamilies([]);
                     setImportWarnings([]);
                     setImportError("");
                   }}
@@ -1944,18 +2167,19 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
               {/* Scrollable Content */}
               <div className="flex-1 overflow-y-auto p-5 md:p-8 space-y-6 no-scrollbar">
                 {/* PREVIEW OF SUCCESSFULLY PARSED RECORDS - HIGHEST PRIORITY AT THE TOP */}
-                {importPreview.length > 0 && (
+
+                {(importPreview.length > 0 || importPreviewFamilies.length > 0) && (
                   <div className="space-y-3">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-emerald-50/50 border border-emerald-100/50 p-3 rounded-xl">
                       <div>
                         <h4 className="text-xs md:text-sm font-black text-slate-800 flex items-center gap-2">
                           <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                          Pratinjau Data yang Terbaca ({importPreview.length}{" "}
-                          Anggota)
+                          Pratinjau Data yang Terbaca
                         </h4>
                         <p className="text-[10px] text-slate-500 mt-0.5">
-                          Semua data kolom di bawah berhasil dibaca dari excel
-                          Anda. Silakan verifikasi kecocokannya.
+                          {importType === "both"
+                            ? `Berhasil menguraikan ${importPreview.length} Anggota dan ${importPreviewFamilies.length} Keluarga dari file Excel.`
+                            : `Semua data kolom di bawah berhasil dibaca dari Excel Anda. Silakan verifikasi kecocokannya.`}
                         </p>
                       </div>
                       <span className="text-[9px] w-fit uppercase tracking-widest text-emerald-700 bg-emerald-100/70 font-black px-2.5 py-1 rounded-lg border border-emerald-200">
@@ -1963,151 +2187,237 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                       </span>
                     </div>
 
+                    {/* Segmented control tabs for dual-import */}
+                    {importType === "both" && (
+                      <div className="flex gap-2 border-b border-slate-200 pb-1">
+                        <button
+                          type="button"
+                          onClick={() => setActivePreviewTab("member")}
+                          className={`px-4 py-2 text-xs font-bold border-b-2 transition-all ${
+                            activePreviewTab === "member"
+                              ? "border-blue-600 text-blue-600"
+                              : "border-transparent text-slate-500 hover:text-slate-800"
+                          }`}
+                        >
+                          Daftar Anggota ({importPreview.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActivePreviewTab("family")}
+                          className={`px-4 py-2 text-xs font-bold border-b-2 transition-all ${
+                            activePreviewTab === "family"
+                              ? "border-blue-600 text-blue-600"
+                              : "border-transparent text-slate-500 hover:text-slate-800"
+                          }`}
+                        >
+                          Master Keluarga ({importPreviewFamilies.length})
+                        </button>
+                      </div>
+                    )}
+
                     <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[380px] overflow-y-auto overflow-x-auto shadow-sm custom-scrollbar bg-slate-50">
-                      <table className="w-full text-left text-xs border-collapse font-sans bg-white min-w-[1500px]">
-                        <thead className="sticky top-0 bg-slate-100 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-slate-200 z-10 shadow-sm">
-                          <tr>
-                            <th className="p-3 text-center w-12 bg-slate-100">
-                              No
-                            </th>
-                            <th className="p-3 whitespace-nowrap min-w-[200px] bg-slate-100">
-                              Nama Lengkap
-                            </th>
-                            <th className="p-3 whitespace-nowrap min-w-[110px] text-center">
-                              Jenis Kelamin
-                            </th>
-                            <th className="p-3 whitespace-nowrap min-w-[140px]">
-                              ID Daerah (Opsional)
-                            </th>
-                            <th className="p-3 whitespace-nowrap min-w-[150px]">
-                              ID Desa
-                            </th>
-                            <th className="p-3 whitespace-nowrap min-w-[150px]">
-                              ID Kelompok
-                            </th>
-                            <th className="p-3 whitespace-nowrap min-w-[150px]">
-                              ID Kategori Usia
-                            </th>
-                            <th className="p-3 whitespace-nowrap min-w-[130px]">
-                              No. HP Anggota
-                            </th>
-                            <th className="p-3 whitespace-nowrap min-w-[150px]">
-                              Nama Orang Tua
-                            </th>
-                            <th className="p-3 whitespace-nowrap min-w-[130px]">
-                              No. HP Orang Tua
-                            </th>
-                            <th className="p-3 whitespace-nowrap min-w-[140px]">
-                              Pekerjaan Orang Tua
-                            </th>
-                            <th className="p-3 whitespace-nowrap min-w-[130px]">
-                              Pendidikan Terakhir
-                            </th>
-                            <th className="p-3 whitespace-nowrap min-w-[110px] text-center">
-                              Kelas/Sem
-                            </th>
-                            <th className="p-3 whitespace-nowrap min-w-[130px]">
-                              Tempat Lahir
-                            </th>
-                            <th className="p-3 whitespace-nowrap min-w-[110px] text-center">
-                              Tgl Lahir
-                            </th>
-                            <th className="p-3 whitespace-nowrap min-w-[250px]">
-                              Alamat Rumah
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 text-[11px] font-medium text-slate-700">
-                          {importPreview.map((row, rIdx) => (
-                            <tr
-                              key={rIdx}
-                              className="hover:bg-blue-50/20 transition-colors leading-relaxed"
-                            >
-                              <td className="p-3 text-center text-slate-400 font-mono text-[10px] border-r border-slate-100 bg-slate-50/50">
-                                {rIdx + 1}
-                              </td>
-                              <td className="p-3 font-bold uppercase text-slate-900 border-r border-slate-100 sticky left-0 bg-white hover:bg-slate-50">
-                                {row.nama_lengkap}
-                              </td>
-                              <td className="p-3 whitespace-nowrap text-center">
-                                <span
-                                  className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${row.jenis_kelamin === "Laki-laki" ? "bg-blue-50 text-blue-600" : "bg-rose-50 text-rose-600"}`}
-                                >
-                                  {row.jenis_kelamin}
-                                </span>
-                              </td>
-                              <td className="p-3 whitespace-nowrap">
-                                <div className="text-[10px] font-bold text-slate-700">
-                                  {row.daerah_name || "-"}
-                                </div>
-                                <div className="text-[8px] text-slate-400 font-mono">
-                                  {row.daerah_id || "-"}
-                                </div>
-                              </td>
-                              <td className="p-3 whitespace-nowrap">
-                                <div className="text-[10px] font-bold text-slate-850">
-                                  {row.desa_name || "-"}
-                                </div>
-                                <div className="text-[8px] text-slate-400 font-mono">
-                                  {row.desa_id || "-"}
-                                </div>
-                              </td>
-                              <td className="p-3 whitespace-nowrap">
-                                <div className="text-[10px] font-bold text-slate-850">
-                                  {row.kelompok_name || "-"}
-                                </div>
-                                <div className="text-[8px] text-slate-400 font-mono">
-                                  {row.kelompok_id || "-"}
-                                </div>
-                              </td>
-                              <td className="p-3 whitespace-nowrap">
-                                <div className="text-[10px] font-bold text-slate-850">
-                                  {row.age_category_name || "-"}
-                                </div>
-                                <div className="text-[8px] text-slate-400 font-mono">
-                                  {row.age_category_id || "-"}
-                                </div>
-                              </td>
-                              <td className="p-3 font-mono text-[10.5px] text-slate-600 whitespace-nowrap">
-                                {row.no_hp_anggota || "-"}
-                              </td>
-                              <td className="p-3 text-slate-800 whitespace-nowrap uppercase font-bold text-[10px]">
-                                {row.nama_ortu || "-"}
-                              </td>
-                              <td className="p-3 font-mono text-[10.5px] text-slate-600 whitespace-nowrap bg-amber-50/30">
-                                {row.no_hp_ortu || "-"}
-                              </td>
-                              <td className="p-3 text-slate-600 text-[10px] whitespace-nowrap">
-                                {row.pekerjaan_ortu || "-"}
-                              </td>
-                              <td className="p-3 text-slate-600 text-[10px] whitespace-nowrap">
-                                {row.pendidikan || "-"}
-                              </td>
-                              <td className="p-3 text-slate-600 text-[10px] text-center whitespace-nowrap">
-                                {row.kelas || "-"}
-                              </td>
-                              <td className="p-3 text-slate-600 text-[10px] whitespace-nowrap">
-                                {row.tempat_lahir || "-"}
-                              </td>
-                              <td className="p-3 font-mono text-[10px] text-center text-slate-600 whitespace-nowrap">
-                                {row.tanggal_lahir || "-"}
-                              </td>
-                              <td
-                                className="p-3 text-slate-500 text-[10px] max-w-[250px] truncate"
-                                title={row.alamat_rumah}
-                              >
-                                {row.alamat_rumah || "-"}
-                              </td>
+                      {activePreviewTab === "family" ? (
+                        <table className="w-full text-left text-xs border-collapse font-sans bg-white min-w-[800px]">
+                          <thead className="sticky top-0 bg-slate-100 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-slate-200 z-10 shadow-sm">
+                            <tr>
+                              <th className="p-3 text-center w-12 bg-slate-100">No</th>
+                              <th className="p-3 whitespace-nowrap min-w-[150px] bg-slate-100">ID Keluarga</th>
+                              <th className="p-3 whitespace-nowrap min-w-[250px]">Nama Keluarga (KK)</th>
+                              <th className="p-3 whitespace-nowrap min-w-[200px]">Nomor Kartu Keluarga (KK)</th>
+                              <th className="p-3 whitespace-nowrap min-w-[120px] text-center">Status</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-[11px] font-medium text-slate-700">
+                            {importPreviewFamilies.map((row, rIdx) => (
+                              <tr key={rIdx} className="hover:bg-blue-50/20 transition-colors leading-relaxed">
+                                <td className="p-3 text-center text-slate-400 font-mono text-[10px] border-r border-slate-100 bg-slate-50/50">
+                                  {rIdx + 1}
+                                </td>
+                                <td className="p-3 font-mono text-[11px] text-slate-800 border-r border-slate-100 uppercase font-bold bg-white">
+                                  {row.id}
+                                </td>
+                                <td className="p-3 font-bold uppercase text-slate-900 border-r border-slate-100">
+                                  {row.nama_keluarga}
+                                </td>
+                                <td className="p-3 font-mono text-[11px] text-slate-600">
+                                  {row.nomor_kk || "-"}
+                                </td>
+                                <td className="p-3 text-center">
+                                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${row.is_new ? "bg-emerald-50 text-emerald-600 border border-emerald-100" : "bg-blue-50 text-blue-600 border border-blue-100"}`}>
+                                    {row.is_new ? "Baru" : "Update"}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <table className="w-full text-left text-xs border-collapse font-sans bg-white min-w-[1500px]">
+                          <thead className="sticky top-0 bg-slate-100 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-slate-200 z-10 shadow-sm">
+                            <tr>
+                              <th className="p-3 text-center w-12 bg-slate-100">
+                                No
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[200px] bg-slate-100 sticky left-0 z-20 border-r border-slate-200">
+                                Nama Lengkap
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[150px] bg-slate-100">
+                                Label Anggota
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[110px] text-center">
+                                Jenis Kelamin
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[200px]">
+                                Hubungan Keluarga
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[140px]">
+                                ID Daerah (Opsional)
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[150px]">
+                                ID Desa
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[150px]">
+                                ID Kelompok
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[150px]">
+                                ID Kategori Usia
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[130px]">
+                                No. HP Anggota
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[130px]">
+                                Pendidikan Terakhir
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[110px] text-center">
+                                Kelas/Sem
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[130px]">
+                                Tempat Lahir
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[110px] text-center">
+                                Tgl Lahir
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[250px]">
+                                Alamat Rumah
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[130px]">
+                                Pekerjaan
+                              </th>
+                              <th className="p-3 whitespace-nowrap min-w-[130px]">
+                                Status Pernikahan
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-[11px] font-medium text-slate-700">
+                            {importPreview.map((row, rIdx) => (
+                              <tr
+                                key={rIdx}
+                                className="hover:bg-blue-50/20 transition-colors leading-relaxed"
+                              >
+                                <td className="p-3 text-center text-slate-400 font-mono text-[10px] border-r border-slate-100 bg-slate-50/50">
+                                  {rIdx + 1}
+                                </td>
+                                <td className="p-3 font-bold uppercase text-slate-900 border-r border-slate-100 sticky left-0 bg-white hover:bg-slate-50">
+                                  {row.nama_lengkap}
+                                </td>
+                                <td className="p-3 whitespace-nowrap">
+                                  {row.labels && row.labels.length > 0 ? (
+                                    <div className="flex flex-wrap gap-1 max-w-[160px]">
+                                      {row.labels.map((lbl: string, lIdx: number) => (
+                                        <span key={lIdx} className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 border border-indigo-100/30 rounded text-[9px] font-black uppercase">
+                                          {lbl}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400 font-semibold">-</span>
+                                  )}
+                                </td>
+                                <td className="p-3 whitespace-nowrap text-center">
+                                  <span
+                                    className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${row.jenis_kelamin === "Laki-laki" ? "bg-blue-50 text-blue-600" : "bg-rose-50 text-rose-600"}`}
+                                  >
+                                    {row.jenis_kelamin}
+                                  </span>
+                                </td>
+                                <td className="p-3 whitespace-nowrap">
+                                  <div className="text-[10px] font-bold text-slate-800">
+                                    {row.relationship_name ? `${row.relationship_name.toUpperCase()} dari:` : "-"}
+                                  </div>
+                                  <div className="text-[9px] text-slate-500 font-semibold truncate max-w-[180px]">
+                                    {row.family_name || row.family_id || "Belum ada"}
+                                  </div>
+                                </td>
+                                <td className="p-3 whitespace-nowrap">
+                                  <div className="text-[10px] font-bold text-slate-700">
+                                    {row.daerah_name || "-"}
+                                  </div>
+                                  <div className="text-[8px] text-slate-400 font-mono">
+                                    {row.daerah_id || "-"}
+                                  </div>
+                                </td>
+                                <td className="p-3 whitespace-nowrap">
+                                  <div className="text-[10px] font-bold text-slate-850">
+                                    {row.desa_name || "-"}
+                                  </div>
+                                  <div className="text-[8px] text-slate-400 font-mono">
+                                    {row.desa_id || "-"}
+                                  </div>
+                                </td>
+                                <td className="p-3 whitespace-nowrap">
+                                  <div className="text-[10px] font-bold text-slate-850">
+                                    {row.kelompok_name || "-"}
+                                  </div>
+                                  <div className="text-[8px] text-slate-400 font-mono">
+                                    {row.kelompok_id || "-"}
+                                  </div>
+                                </td>
+                                <td className="p-3 whitespace-nowrap">
+                                  <div className="text-[10px] font-bold text-slate-850">
+                                    {row.age_category_name || "-"}
+                                  </div>
+                                  <div className="text-[8px] text-slate-400 font-mono">
+                                    {row.age_category_id || "-"}
+                                  </div>
+                                </td>
+                                <td className="p-3 font-mono text-[10.5px] text-slate-600 whitespace-nowrap">
+                                  {row.no_hp_anggota || "-"}
+                                </td>
+                                <td className="p-3 text-slate-600 text-[10px] whitespace-nowrap">
+                                  {row.pendidikan || "-"}
+                                </td>
+                                <td className="p-3 text-slate-600 text-[10px] text-center whitespace-nowrap">
+                                  {row.kelas || "-"}
+                                </td>
+                                <td className="p-3 text-slate-600 text-[10px] whitespace-nowrap">
+                                  {row.tempat_lahir || "-"}
+                                </td>
+                                <td className="p-3 font-mono text-[10px] text-center text-slate-600 whitespace-nowrap">
+                                  {row.tanggal_lahir || "-"}
+                                </td>
+                                <td
+                                  className="p-3 text-slate-500 text-[10px] max-w-[250px] truncate"
+                                  title={row.alamat_rumah}
+                                >
+                                  {row.alamat_rumah || "-"}
+                                </td>
+                                <td className="p-3 text-slate-600 text-[10px] whitespace-nowrap">
+                                  {row.pekerjaan || "-"}
+                                </td>
+                                <td className="p-3 text-slate-600 text-[10px] whitespace-nowrap">
+                                  {row.status || "-"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
                     </div>
                   </div>
                 )}
 
                 {/* STEPS 1 & 2: Dynamic Layout (Collapsed if Preview has Data) */}
-                {importPreview.length > 0 ? (
+                {(importPreview.length > 0 || importPreviewFamilies.length > 0) ? (
                   <div className="bg-slate-50 rounded-2xl border border-slate-150 p-4 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">
@@ -2268,8 +2578,11 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
               {/* Footer */}
               <div className="p-4 md:px-8 bg-slate-50 border-t border-slate-100 flex flex-col md:flex-row items-center justify-between gap-3 shrink-0">
                 <span className="text-[10px] text-slate-400 font-medium">
-                  Pastikan seluruh data wajib (Nama Lengkap, Desa, Kelompok)
-                  sudah sesuai.
+                  {importType === "family"
+                    ? "Pastikan seluruh data wajib (Nama Keluarga) sudah sesuai."
+                    : importType === "member"
+                    ? "Pastikan seluruh data wajib (Nama Lengkap, Desa, Kelompok) sudah sesuai."
+                    : "Pastikan seluruh data wajib (Nama Lengkap, Desa, Kelompok, dan Nama Keluarga) sudah sesuai."}
                 </span>
                 <div className="flex items-center gap-2 w-full md:w-auto">
                   <button
@@ -2277,6 +2590,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                     onClick={() => {
                       setShowImportModal(false);
                       setImportPreview([]);
+                      setImportPreviewFamilies([]);
                       setImportWarnings([]);
                       setImportError("");
                     }}
@@ -2286,7 +2600,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                   </button>
                   <button
                     type="button"
-                    disabled={importPreview.length === 0 || isSubmittingImport}
+                    disabled={(importPreview.length === 0 && importPreviewFamilies.length === 0) || isSubmittingImport}
                     onClick={handleCommitImport}
                     className="flex-1 md:flex-none px-6 py-2.5 bg-blue-600 hover:bg-blue-700 hover:shadow-lg disabled:opacity-50 text-white rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all active:scale-95 shadow-sm shadow-blue-200"
                   >
@@ -2296,7 +2610,11 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                         Proses...
                       </>
                     ) : (
-                      `Simpan ${importPreview.length} Jiwa`
+                      importType === "family"
+                        ? `Simpan ${importPreviewFamilies.length} Keluarga`
+                        : importType === "member"
+                        ? `Simpan ${importPreview.length} Jiwa`
+                        : `Simpan ${importPreview.length} Jiwa & ${importPreviewFamilies.length} Keluarga`
                     )}
                   </button>
                 </div>
@@ -2863,6 +3181,54 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                         />
                       </div>
                     </div>
+                  </div>
+                </div>
+
+                {/* Section: Label & Kategori */}
+                <div className="space-y-6 md:space-y-8">
+                  <div className="flex items-center gap-3 md:gap-4">
+                    <div className="w-8 h-8 md:w-10 md:h-10 bg-indigo-50 text-indigo-600 rounded-xl md:rounded-2xl flex items-center justify-center shrink-0">
+                      <LayoutGrid size={16} className="md:w-5 md:h-5" />
+                    </div>
+                    <h4 className="text-[10px] md:text-sm font-black text-slate-700 uppercase tracking-widest">
+                      Label / Tagging Anggota
+                    </h4>
+                    <div className="h-px bg-slate-100 flex-1"></div>
+                  </div>
+
+                  <div className="bg-slate-50/50 border border-slate-100 rounded-2xl p-4 md:p-6">
+                    <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 leading-none">
+                      Pilih label kustom untuk anggota ini:
+                    </p>
+                    {allLabels.length === 0 ? (
+                      <p className="text-xs text-slate-400 font-medium">Belum ada label kustom yang dibuat. Kelola label di tab Group & Master.</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2 md:gap-3">
+                        {allLabels.map((lbl) => {
+                          const isChecked = (formData.labels || []).includes(lbl.name);
+                          return (
+                            <button
+                              key={lbl.id}
+                              type="button"
+                              onClick={() => {
+                                const current = formData.labels || [];
+                                const next = isChecked
+                                  ? current.filter((x) => x !== lbl.name)
+                                  : [...current, lbl.name];
+                                setFormData({ ...formData, labels: next });
+                              }}
+                              className={`px-3 py-2 rounded-xl text-xs font-black transition-all border ${
+                                isChecked
+                                  ? "bg-indigo-600 border-indigo-600 text-white shadow-sm"
+                                  : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                              }`}
+                            >
+                              {lbl.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
 
