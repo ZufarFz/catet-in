@@ -1,18 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
-  Users, 
   CalendarCheck, 
-  Clock, 
   UserCheck, 
-  Activity, 
-  Sparkles, 
-  Award, 
-  CheckCircle2, 
   AlertCircle, 
   FileText,
-  Database
+  CalendarDays,
+  Filter,
+  BarChart2,
+  Trophy,
+  Users,
+  Zap
 } from 'lucide-react';
-import { AttendanceLog } from '../../types';
+import { AttendanceLog, EventData } from '../../types';
+import { dbGetEventDashboardSummary, EventDashboardSummary, dbGetRecentEvents } from '../../supabase';
 import { motion } from 'motion/react';
 
 interface DashboardAbsensiProps {
@@ -24,503 +24,509 @@ interface DashboardAbsensiProps {
   daerahs?: any[];
   desas?: any[];
   kelompoks?: any[];
+  events?: EventData[];
 }
 
+// Helper function to format dates as DD MMM YYYY (e.g. 24 Jul 2026)
+const formatDateDDMMMYYYY = (dateInput: string | Date | undefined | null) => {
+  if (!dateInput) return '-';
+  try {
+    let str = String(dateInput);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+      str += 'T12:00:00';
+    }
+    const d = new Date(str);
+    if (isNaN(d.getTime())) return String(dateInput);
+    return d.toLocaleDateString('id-ID', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    });
+  } catch (e) {
+    return String(dateInput);
+  }
+};
+
 const DashboardAbsensi: React.FC<DashboardAbsensiProps> = ({ 
-  logs, 
+  logs = [], 
   isLoading, 
   username,
-  summaries = [],
-  ages = [],
-  daerahs = [],
-  desas = [],
-  kelompoks = []
+  events = []
 }) => {
-  // States for historical multi-year records filters
-  const [histYear, setHistYear] = useState<string>('All');
-  const [histMonth, setHistMonth] = useState<string>('All');
-  const [histGender, setHistGender] = useState<string>('All');
-  const [histDaerah, setHistDaerah] = useState<string>('All');
-  const [histDesa, setHistDesa] = useState<string>('All');
-  const [histKelompok, setHistKelompok] = useState<string>('All');
-  const [histAge, setHistAge] = useState<string>('All');
+  // 1. Detect Top 5 Most Recently Updated Events
+  const [fetchedEvents, setFetchedEvents] = useState<EventData[]>([]);
 
-  // Constants
-  const today = new Date().toISOString().split('T')[0];
-  const todayLogs = logs.filter(l => l.date && l.date.startsWith(today));
-
-  // 1. Overall Presence Calculations
-  const totalPresenceCount = logs.filter(l => l.status === 'Hadir').length;
-  const overallPresenceRate = logs.length > 0 ? Math.round((totalPresenceCount / logs.length) * 100) : 0;
-
-  // 2. Kelompok analytics (Computed on Render)
-  const groups: { [name: string]: { total: number; hadir: number } } = {};
-  logs.forEach(log => {
-    const name = log.kelompokName || 'Umum';
-    if (!groups[name]) {
-      groups[name] = { total: 0, hadir: 0 };
+  useEffect(() => {
+    if (events && events.length > 0) {
+      setFetchedEvents(events);
+    } else {
+      dbGetRecentEvents(5).then(res => {
+        if (res && res.length > 0) setFetchedEvents(res);
+      });
     }
-    groups[name].total++;
-    if (log.status === 'Hadir') {
-      groups[name].hadir++;
+  }, [events]);
+
+  const recentEvents = useMemo(() => {
+    const sorted = [...(fetchedEvents || [])].sort((a, b) => {
+      const timeA = new Date(a.updated_at || a.created_at || 0).getTime();
+      const timeB = new Date(b.updated_at || b.created_at || 0).getTime();
+      return timeB - timeA;
+    });
+    return sorted.slice(0, 5);
+  }, [fetchedEvents]);
+
+  // 2. Selected Event state (Defaults to the 1st most recently updated event)
+  const [selectedEventId, setSelectedEventId] = useState<string>('');
+
+  // Auto-set default selected event when recentEvents loads/changes
+  const activeEventId = useMemo(() => {
+    if (selectedEventId && recentEvents.some(e => e.id === selectedEventId)) {
+      return selectedEventId;
     }
-  });
+    return recentEvents[0]?.id || '';
+  }, [selectedEventId, recentEvents]);
 
-  const kelompokStats = Object.entries(groups)
-    .map(([name, g]) => {
-      const rate = g.total > 0 ? Math.round((g.hadir / g.total) * 100) : 0;
-      return { name, rate, ...g };
-    })
-    .sort((a, b) => b.rate - a.rate || b.hadir - a.hadir)
-    .slice(0, 5); // top 5
+  const activeEvent = useMemo(() => {
+    return (fetchedEvents || []).find(e => e.id === activeEventId) || recentEvents[0] || null;
+  }, [fetchedEvents, activeEventId, recentEvents]);
 
-  // 3. Dynamic narrative insights generator (Computed on Render)
-  const topActiveKelompok = kelompokStats[0]?.name || '-';
-  const topActiveRate = kelompokStats[0]?.rate || 0;
-  
-  const totalIzinPlusSakit = logs.filter(l => l.status === 'Izin' || l.status === 'Sakit').length;
-  const excuseRate = logs.length > 0 ? Math.round((totalIzinPlusSakit / logs.length) * 100) : 0;
+  // 3. Server-side Aggregated Summary State (STRICT FUNCTION REQUIREMENT, NO BACKUP/FALLBACK)
+  const [dbSummary, setDbSummary] = useState<EventDashboardSummary | null>(null);
+  const [isSummaryLoading, setIsSummaryLoading] = useState<boolean>(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
 
-  const totalAlpa = logs.filter(l => l.status === 'Alpa').length;
-  const alpaRate = logs.length > 0 ? Math.round((totalAlpa / logs.length) * 100) : 0;
+  useEffect(() => {
+    if (!activeEventId) {
+      setDbSummary(null);
+      setSummaryError(null);
+      return;
+    }
+    let isMounted = true;
+    setIsSummaryLoading(true);
+    setSummaryError(null);
 
-  const narrativeInsights = [
+    dbGetEventDashboardSummary(activeEventId)
+      .then(res => {
+        if (isMounted) {
+          setDbSummary(res);
+          setIsSummaryLoading(false);
+        }
+      })
+      .catch(err => {
+        if (isMounted) {
+          console.error("Error fetching event dashboard summary via RPC:", err);
+          setSummaryError(err?.message || 'Gagal memanggil Supabase Function get_event_dashboard_summary.');
+          setDbSummary(null);
+          setIsSummaryLoading(false);
+        }
+      });
+    return () => { isMounted = false; };
+  }, [activeEventId]);
+
+  // Combined Active Meeting Stats directly from dbSummary
+  const meetingStats = useMemo(() => {
+    return dbSummary?.meetingStats || [];
+  }, [dbSummary]);
+
+  // Combined Active 3-Meetings Summary directly from dbSummary
+  const event3MeetingsSummary = useMemo(() => {
+    if (dbSummary?.overall) {
+      return dbSummary.overall;
+    }
+    return {
+      totalLogs: 0,
+      totalHadir: 0,
+      totalIzin: 0,
+      totalSakit: 0,
+      totalAlpa: 0,
+      presenceRate: 0,
+      meetingCount: 0
+    };
+  }, [dbSummary]);
+
+  // 5. Category filter for Top 5 members ('hadir' | 'izin' | 'alpa' | 'terlambat')
+  const [topCategory, setTopCategory] = useState<'hadir' | 'izin' | 'alpa' | 'terlambat'>('hadir');
+
+  // Active Top 5 Members List directly from dbSummary
+  const top5Members = useMemo(() => {
+    if (!dbSummary) return [];
+
+    if (topCategory === 'hadir') {
+      return (dbSummary.top5Hadir || []).map(m => ({
+        memberId: m.memberId,
+        memberName: m.memberName,
+        kelompokName: m.kelompokName,
+        hadirCount: m.count,
+        izinCount: m.izinCount || 0,
+        sakitCount: 0,
+        alpaCount: 0,
+        lateCount: 0,
+        totalMinutes: 0,
+        formattedLate: '',
+        totalMeetings: m.totalMeetings,
+        pct: m.pct
+      }));
+    }
+    if (topCategory === 'izin') {
+      return (dbSummary.top5Izin || []).map(m => ({
+        memberId: m.memberId,
+        memberName: m.memberName,
+        kelompokName: m.kelompokName,
+        hadirCount: 0,
+        izinCount: m.izinCount,
+        sakitCount: m.sakitCount,
+        alpaCount: 0,
+        lateCount: 0,
+        totalMinutes: 0,
+        formattedLate: '',
+        totalMeetings: m.totalMeetings,
+        pct: 0
+      }));
+    }
+    if (topCategory === 'alpa') {
+      return (dbSummary.top5Alpa || []).map(m => ({
+        memberId: m.memberId,
+        memberName: m.memberName,
+        kelompokName: m.kelompokName,
+        hadirCount: 0,
+        izinCount: 0,
+        sakitCount: 0,
+        alpaCount: m.count,
+        lateCount: 0,
+        totalMinutes: 0,
+        formattedLate: '',
+        totalMeetings: m.totalMeetings,
+        pct: m.pct
+      }));
+    }
+    if (topCategory === 'terlambat') {
+      return (dbSummary.top5Terlambat || []).map(m => ({
+        memberId: m.memberId,
+        memberName: m.memberName,
+        kelompokName: m.kelompokName,
+        hadirCount: 0,
+        izinCount: 0,
+        sakitCount: 0,
+        alpaCount: 0,
+        lateCount: m.count,
+        totalMinutes: m.totalMinutes,
+        formattedLate: m.formattedLate,
+        totalMeetings: m.totalMeetings,
+        pct: 0
+      }));
+    }
+    return [];
+  }, [dbSummary, topCategory]);
+
+  // Summary cards setup (3 Containers: HADIR, IZIN / SAKIT, ALPA)
+  const totalLogsCount = event3MeetingsSummary.totalLogs;
+  const summaryCards = [
     {
-      id: 'keaktifan',
-      title: 'Tingkat Keaktifan Umum',
-      desc: `Rata-rata keaktifan berada di angka ${overallPresenceRate}%. Tingkat partisipasi ini berada dalam kategori ${
-        overallPresenceRate >= 85 ? 'Sangat Optimal (Mewah)' : overallPresenceRate >= 70 ? 'Stabil & Baik' : 'Perlu Perhatian Khusus'
-      }.`,
-      type: overallPresenceRate >= 85 ? 'success' : overallPresenceRate >= 70 ? 'info' : 'warning',
-      icon: UserCheck
+      title: 'HADIR',
+      icon: UserCheck,
+      badgeBg: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+      total: event3MeetingsSummary.totalHadir,
+      percentage: `${event3MeetingsSummary.presenceRate}%`,
+      pctColor: 'text-emerald-600',
+      transparentPctColor: 'text-emerald-300',
     },
     {
-      id: 'kelompok-leader',
-      title: 'Kelompok Teraktif',
-      desc: topActiveKelompok !== '-' 
-        ? `Kelompok ${topActiveKelompok} memimpin papan skor keaktifan dengan partisipasi rata-rata mencapai ${topActiveRate}%.`
-        : 'Belum ada data kelompok yang berkontribusi pekan ini.',
-      type: 'success',
-      icon: Award
-    }
-  ];
-
-  if (alpaRate > 10) {
-    narrativeInsights.push({
-      id: 'alpa-alert',
-      title: 'Tingkat Alpa Meningkat',
-      desc: `Perhatian: Ada sekitar ${alpaRate}% anggota tidak hadir tanpa keterangan (Alpa). Disarankan pimpinan menghubungi bersangkutan.`,
-      type: 'warning',
-      icon: AlertCircle
-    });
-  } else if (excuseRate > 0) {
-    narrativeInsights.push({
-      id: 'excused-trend',
-      title: 'Rasio Izin & Medis',
-      desc: `Sekitar ${excuseRate}% ketidakhadiran disebabkan oleh izin sakit atau keperluan mendesak yang terverifikasi secara sah.`,
-      type: 'info',
-      icon: Clock
-    });
-  }
-
-  // Extract unique years from summaries
-  const availableYears = React.useMemo(() => {
-    const years = new Set<string>();
-    (summaries || []).forEach(s => {
-      if (s.date) {
-        const y = s.date.split('-')[0];
-        if (y) years.add(y);
-      }
-    });
-    return Array.from(years).sort().reverse();
-  }, [summaries]);
-
-  const monthNames = [
-    { value: '01', label: 'Januari' },
-    { value: '02', label: 'Februari' },
-    { value: '03', label: 'Maret' },
-    { value: '04', label: 'April' },
-    { value: '05', label: 'Mei' },
-    { value: '06', label: 'Juni' },
-    { value: '07', label: 'Juli' },
-    { value: '08', label: 'Agustus' },
-    { value: '09', label: 'September' },
-    { value: '10', label: 'Oktober' },
-    { value: '11', label: 'November' },
-    { value: '12', label: 'Desember' }
-  ];
-
-  // Aggregate results based on active filters
-  const historicalStats = React.useMemo(() => {
-    const sorted = [...(summaries || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-    
-    let totalHadir = 0;
-    let totalIzin = 0;
-    let totalSakit = 0;
-    let totalAlpa = 0;
-    
-    const trendPoints: { label: string; pct: number; date: string }[] = [];
-
-    sorted.forEach(s => {
-      if (!s.date) return;
-      const [y, m] = s.date.split('-');
-      
-      // Filter year & month
-      if (histYear !== 'All' && y !== histYear) return;
-      if (histMonth !== 'All' && m !== histMonth) return;
-
-      // Extract status counts depending on selected filter dimension
-      let counts = { Hadir: 0, Izin: 0, Sakit: 0, Alpa: 0 };
-
-      if (histKelompok !== 'All') {
-        counts = s.kelompokCounts?.[histKelompok] || counts;
-      } else if (histDesa !== 'All') {
-        counts = s.desaCounts?.[histDesa] || counts;
-      } else if (histDaerah !== 'All') {
-        counts = s.daerahCounts?.[histDaerah] || counts;
-      } else if (histAge !== 'All') {
-        counts = s.ageCategoryCounts?.[histAge] || counts;
-      } else if (histGender !== 'All') {
-        counts = s.genderCounts?.[histGender] || counts;
-      } else {
-        counts = s.statusCounts || counts;
-      }
-
-      const h = counts.Hadir || 0;
-      const i = counts.Izin || 0;
-      const s_ = counts.Sakit || 0;
-      const a = counts.Alpa || 0;
-
-      totalHadir += h;
-      totalIzin += i;
-      totalSakit += s_;
-      totalAlpa += a;
-
-      const dayTotal = h + i + s_ + a;
-      const pct = dayTotal > 0 ? Math.round((h / dayTotal) * 100) : 0;
-
-      let dayLabel = s.date;
-      try {
-        const parts = s.date.split('-');
-        if (parts.length === 3) {
-          const mList = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
-          dayLabel = `${parseInt(parts[2], 10)} ${mList[parseInt(parts[1], 10) - 1] || ''}`;
-        }
-      } catch (err) {
-        console.warn("Failed to parse historical date:", err);
-      }
-
-      if (dayTotal > 0) {
-        trendPoints.push({
-          label: dayLabel,
-          pct,
-          date: s.date
-        });
-      }
-    });
-
-    const totalLogs = totalHadir + totalIzin + totalSakit + totalAlpa;
-    const presenceRate = totalLogs > 0 ? Math.round((totalHadir / totalLogs) * 100) : 0;
-
-    return {
-      totalHadir,
-      totalIzin,
-      totalSakit,
-      totalAlpa,
-      totalLogs,
-      presenceRate,
-      trendPoints: trendPoints.slice(-15) // Show last 15 matching points
-    };
-  }, [summaries, histYear, histMonth, histGender, histDaerah, histDesa, histKelompok, histAge]);
-
-  // Overall statistics cards layout setup
-  const stats = [
-    { label: 'Total Logs', value: logs.length, icon: Users, color: 'text-blue-600', bg: 'bg-blue-50', trend: `${overallPresenceRate}% Hadir` },
-    { label: 'Hadir Hari Ini', value: todayLogs.filter(l => l.status === 'Hadir').length, icon: UserCheck, color: 'text-emerald-600', bg: 'bg-emerald-50', trend: 'Presensi' },
-    { label: 'Izin / Sakit', value: todayLogs.filter(l => l.status === 'Izin' || l.status === 'Sakit').length, icon: CalendarCheck, color: 'text-amber-600', bg: 'bg-amber-50', trend: 'Medis/Izin' },
-    { label: 'Update Akhir', value: logs[0]?.dateInput ? new Date(logs[0].dateInput).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '-', icon: Clock, color: 'text-indigo-600', bg: 'bg-indigo-50', trend: 'Sinkron' },
+      title: 'IZIN / SAKIT',
+      icon: CalendarCheck,
+      badgeBg: 'bg-amber-50 text-amber-700 border-amber-100',
+      total: event3MeetingsSummary.totalIzin + event3MeetingsSummary.totalSakit,
+      percentage: `${totalLogsCount > 0 ? Math.round(((event3MeetingsSummary.totalIzin + event3MeetingsSummary.totalSakit) / totalLogsCount) * 100) : 0}%`,
+      pctColor: 'text-amber-600',
+      transparentPctColor: 'text-amber-300',
+    },
+    {
+      title: 'ALPA',
+      icon: AlertCircle,
+      badgeBg: 'bg-rose-50 text-rose-700 border-rose-100',
+      total: event3MeetingsSummary.totalAlpa,
+      percentage: `${totalLogsCount > 0 ? Math.round((event3MeetingsSummary.totalAlpa / totalLogsCount) * 100) : 0}%`,
+      pctColor: 'text-rose-600',
+      transparentPctColor: 'text-rose-300',
+    },
   ];
 
   return (
     <div className="h-full w-full overflow-y-auto no-scrollbar bg-[#F8FAFC]">
       <div className="max-w-6xl mx-auto px-3 sm:px-6 py-6 sm:py-8 pb-32 space-y-6 sm:space-y-8">
         
-        {/* Welcome Block: Elegant & Responsive */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-100 shadow-sm">
-          <div className="space-y-1">
-            <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-slate-950 tracking-tight">
+        {/* Welcome Block & Quick Header - Exact Treasury Saldo Card Style */}
+        <div className="relative overflow-hidden bg-gradient-to-br from-[#00A1E5] via-[#007CC2] to-[#004D90] p-5 sm:p-7 md:p-8 rounded-2xl sm:rounded-3xl shadow-xl text-white group">
+          {/* WAVE & CELESTIAL BACKGROUND PATTERN (Unified Theme) */}
+          <div className="absolute inset-0 pointer-events-none overflow-hidden select-none z-0">
+            {/* STARLIGHTS & METEORS */}
+            <svg className="absolute inset-0 w-full h-full opacity-35" viewBox="0 0 500 200" preserveAspectRatio="none" fill="none">
+              <defs>
+                <linearGradient id="dashAbsensiMeteorGrad" x1="1" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#ffffff" stopOpacity="0.95" />
+                  <stop offset="40%" stopColor="#38bdf8" stopOpacity="0.5" />
+                  <stop offset="100%" stopColor="#0284c7" stopOpacity="0" />
+                </linearGradient>
+              </defs>
+              <circle cx="45" cy="35" r="1.5" fill="#ffffff" opacity="0.8" />
+              <circle cx="120" cy="65" r="1" fill="#ffffff" opacity="0.55" />
+              <circle cx="160" cy="25" r="1.8" fill="#ffffff" opacity="0.9" />
+              <circle cx="210" cy="55" r="1.2" fill="#ffffff" opacity="0.4" />
+              <circle cx="270" cy="85" r="1.5" fill="#ffffff" opacity="0.75" />
+              <circle cx="340" cy="45" r="1" fill="#ffffff" opacity="0.6" />
+              <circle cx="390" cy="75" r="1.6" fill="#ffffff" opacity="0.85" />
+              <circle cx="450" cy="35" r="1.2" fill="#ffffff" opacity="0.5" />
+              <circle cx="480" cy="95" r="1.8" fill="#ffffff" opacity="0.8" />
+              
+              <line x1="90" y1="15" x2="40" y2="55" stroke="url(#dashAbsensiMeteorGrad)" strokeWidth="2.2" strokeLinecap="round" />
+              <line x1="260" y1="20" x2="210" y2="60" stroke="url(#dashAbsensiMeteorGrad)" strokeWidth="1.8" strokeLinecap="round" />
+              <line x1="420" y1="25" x2="370" y2="65" stroke="url(#dashAbsensiMeteorGrad)" strokeWidth="2.5" strokeLinecap="round" />
+            </svg>
+
+            {/* OVERLAPPING CLOUDS & WAVES FLOW */}
+            <svg className="absolute bottom-0 left-0 w-full h-[60%] opacity-20" viewBox="0 0 500 150" preserveAspectRatio="none" fill="none">
+              <defs>
+                <linearGradient id="dashAbsensiCloudL1" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stopColor="#00AEEF" />
+                  <stop offset="100%" stopColor="#0054A6" />
+                </linearGradient>
+                <linearGradient id="dashAbsensiCloudL2" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stopColor="#009EE2" stopOpacity="0.85" />
+                  <stop offset="100%" stopColor="#004D8C" />
+                </linearGradient>
+                <linearGradient id="dashAbsensiCloudL3" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stopColor="#0072BC" />
+                  <stop offset="100%" stopColor="#003580" />
+                </linearGradient>
+              </defs>
+              <path d="M-50,75 Q100,25 240,65 T550,55 L550,150 L-50,150 Z" fill="url(#dashAbsensiCloudL1)" opacity="0.8" />
+              <path d="M-50,95 Q130,50 280,85 T550,70 L550,150 L-50,150 Z" fill="url(#dashAbsensiCloudL2)" opacity="0.85" />
+              <path d="M-50,110 Q160,75 320,105 T550,85 L550,150 L-50,150 Z" fill="url(#dashAbsensiCloudL3)" />
+            </svg>
+          </div>
+
+          {/* Subtle Background Watermark Icon */}
+          <UserCheck className="absolute right-4 sm:right-8 top-8 text-white/10 w-28 h-28 sm:w-36 sm:h-36 pointer-events-none stroke-[1.2] group-hover:scale-110 transition-transform duration-500 z-10" />
+
+          {/* Top Row: Pill Badge & Current Month */}
+          <div className="flex items-center justify-between gap-4 relative z-20">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/20 border border-white/20 backdrop-blur-md text-[10px] sm:text-xs font-black tracking-wider uppercase text-white shadow-xs">
+              <Zap size={13} className="text-amber-300 fill-amber-300" />
+              <span>DASHBOARD ABSENSI</span>
+            </div>
+            <span className="text-[10px] sm:text-xs font-black tracking-widest uppercase text-sky-100/90">
+              {new Date().toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }).toUpperCase()}
+            </span>
+          </div>
+
+          {/* Middle Row: Enlarged Welcome Greeting */}
+          <div className="mt-4 sm:mt-6 relative z-20">
+            <span className="text-[10px] sm:text-xs font-bold text-sky-200 uppercase tracking-widest">
+              PANEL UTAMA ABSENSI
+            </span>
+            <h1 className="text-2xl sm:text-4xl md:text-5xl font-black text-white tracking-tight mt-1">
               Selamat Datang, {username}
             </h1>
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse inline-block" />
-              <p className="text-[9px] sm:text-[11px] font-black text-slate-400 uppercase tracking-widest leading-none">
-                Beranda Sekretaris & Analisis Dashboard
+          </div>
+
+          {/* Divider Line */}
+          <div className="border-t border-white/20 my-4 sm:my-6 relative z-20" />
+
+          {/* Bottom Row: 3 Summary Cards Matrix (HADIR, IZIN/SAKIT, ALPA) - Transparent Glass Style */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4 relative z-20">
+            {summaryCards.map((card, idx) => (
+              <div 
+                key={idx}
+                className="bg-white/10 hover:bg-white/15 backdrop-blur-md text-white rounded-xl sm:rounded-2xl border border-white/20 overflow-hidden flex flex-col justify-between transition-all shadow-sm"
+              >
+                {/* Card Header */}
+                <div className="px-3.5 py-2 sm:px-4 sm:py-2.5 bg-white/10 border-b border-white/15 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 rounded-lg border border-white/20 bg-white/20 text-white">
+                      <card.icon size={14} strokeWidth={2.5} />
+                    </div>
+                    <h3 className="text-xs font-black text-white uppercase tracking-wider">
+                      {card.title}
+                    </h3>
+                  </div>
+                  <span className="text-[8px] sm:text-[9px] font-extrabold text-sky-100/80 uppercase tracking-widest">
+                    RINGKASAN 5 PERTEMUAN
+                  </span>
+                </div>
+
+                {/* Card Body: Split TOTAL & PERSENTASE */}
+                <div className="grid grid-cols-2 divide-x divide-white/15 text-center p-3 sm:p-4 bg-transparent">
+                  {/* Total */}
+                  <div className="flex flex-col justify-center items-center px-1">
+                    <span className="text-[9px] font-black text-sky-100/80 uppercase tracking-widest mb-0.5">
+                      TOTAL
+                    </span>
+                    <span className="text-xl sm:text-2xl font-black text-white tracking-tight">
+                      {isSummaryLoading ? '...' : card.total}
+                    </span>
+                  </div>
+
+                  {/* Percentage */}
+                  <div className="flex flex-col justify-center items-center px-1">
+                    <span className="text-[9px] font-black text-sky-100/80 uppercase tracking-widest mb-0.5">
+                      PERSENTASE
+                    </span>
+                    <span className={`text-xl sm:text-2xl font-black tracking-tight ${card.transparentPctColor}`}>
+                      {isSummaryLoading ? '...' : card.percentage}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Top 5 Most Recent Events Dropdown Filter Header */}
+        <div className="bg-white p-4 sm:p-5 rounded-2xl sm:rounded-3xl border border-slate-100 shadow-sm flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-rose-50 text-rose-600 rounded-xl border border-rose-100 shrink-0">
+              <CalendarDays size={20} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded border border-rose-100 uppercase tracking-wider">
+                  5 Event Update Terakhir
+                </span>
+              </div>
+              <h2 className="text-sm sm:text-base font-black text-slate-900 uppercase tracking-tight mt-0.5">
+                Pilih Kegiatan Rutin
+              </h2>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 w-full md:w-auto">
+            <Filter size={14} className="text-slate-400 shrink-0" />
+            <select
+              value={activeEventId}
+              onChange={(e) => setSelectedEventId(e.target.value)}
+              className="w-full md:w-[320px] bg-slate-50 border border-slate-200 text-xs font-black uppercase text-slate-800 rounded-xl px-3 py-2.5 shadow-sm focus:border-rose-500 focus:bg-white focus:outline-none transition-all cursor-pointer truncate"
+            >
+              {recentEvents.length === 0 ? (
+                <option value="">Belum Ada Kegiatan Terdaftar</option>
+              ) : (
+                recentEvents.map((evt, idx) => {
+                  const updateDateStr = evt.updated_at || evt.created_at;
+                  const dateLabel = updateDateStr 
+                    ? formatDateDDMMMYYYY(updateDateStr)
+                    : '';
+                  return (
+                    <option key={evt.id} value={evt.id}>
+                      {idx + 1}. {evt.nama_kegiatan.toUpperCase()} {dateLabel ? `(${dateLabel})` : ''}
+                    </option>
+                  );
+                })
+              )}
+            </select>
+          </div>
+        </div>
+
+        {/* Error Alert when Supabase RPC Function fails */}
+        {summaryError && (
+          <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 sm:p-5 flex items-start gap-3.5 text-rose-900 shadow-sm">
+            <AlertCircle size={20} className="text-rose-600 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <h3 className="text-xs sm:text-sm font-black uppercase tracking-tight text-rose-800">
+                Gagal Memanggil Function Agregasi Supabase
+              </h3>
+              <p className="text-xs text-rose-700 font-medium">
+                {summaryError}
+              </p>
+              <p className="text-[10px] text-rose-600 font-semibold mt-1">
+                Pastikan Anda telah menjalankan script SQL Stored Procedure <code className="bg-rose-100 px-1 py-0.5 rounded font-mono">get_event_dashboard_summary</code> pada SQL Editor di Supabase Dashboard.
               </p>
             </div>
           </div>
-          
-          <div className="flex items-center gap-2.5 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 shrink-0 self-stretch sm:self-auto justify-center">
-             <Activity className="text-emerald-500 shrink-0" size={14} />
-             <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider">MODUL AKTIF</span>
-          </div>
-        </div>
+        )}
 
-        {/* Dynamic Compact Numeric Stats Matrix (Scaled down for Mobile) */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 md:gap-6">
-          {stats.map((stat, i) => (
-            <motion.div 
-              key={i}
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05 }}
-              className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between"
-            >
-              <div className="flex justify-between items-center mb-2.5">
-                <div className={`${stat.bg} ${stat.color} p-2 rounded-lg shrink-0`}>
-                  <stat.icon size={16} strokeWidth={2.5} />
-                </div>
-                <span className="text-[8px] sm:text-[9px] font-black text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded uppercase tracking-wider">
-                  {stat.trend}
-                </span>
+        {/* Chart Panel: 5 Pertemuan Terakhir (Full Width) */}
+        <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
+          <div className="px-5 py-4 sm:px-6 sm:py-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-gradient-to-r from-slate-50 to-white">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <BarChart2 className="text-rose-600 shrink-0" size={16} />
+                <h3 className="text-[10px] sm:text-[11px] font-black text-slate-800 uppercase tracking-wider">
+                  Grafik 5 Pertemuan Terakhir
+                </h3>
               </div>
-              <div>
-                <p className="text-[8px] sm:text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">
-                  {stat.label}
-                </p>
-                <p className="text-base sm:text-xl md:text-2xl font-black text-slate-900 tracking-tight">
-                  {isLoading ? '...' : stat.value}
-                </p>
-              </div>
-            </motion.div>
-          ))}
-        </div>
-
-        {/* Dashboard Analytics & Line Graphs */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
-          
-          {/* Arsip Analisis Sejarah (Daily Summaries Engine) */}
-          <div className="lg:col-span-2 bg-white rounded-2xl sm:rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
-            <div className="px-5 py-4 sm:px-6 sm:py-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-gradient-to-r from-slate-50 to-white">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <Database className="text-blue-600 shrink-0" size={16} />
-                  <h3 className="text-[10px] sm:text-[11px] font-black text-slate-800 uppercase tracking-wider">
-                    Arsip Analisis Sejarah (Ringkasan Multi-Tahun)
-                  </h3>
-                </div>
-                <p className="text-[9px] font-medium text-slate-400">
-                  Pencarian instan arsip tanpa membebani kuota data. Diperbarui otomatis dari transaksi harian.
-                </p>
-              </div>
+              <p className="text-[9px] font-medium text-slate-400">
+                {activeEvent ? `Evaluasi keaktifan presensi untuk kegiatan "${activeEvent.nama_kegiatan.toUpperCase()}"` : 'Pilih kegiatan untuk melihat grafik'}
+              </p>
             </div>
 
-            <div className="p-5 sm:p-6 space-y-6">
-              {/* Filter Grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 sm:gap-4 p-4 sm:p-5 bg-slate-50 rounded-2xl border border-slate-100">
-                
-                {/* Tahun */}
-                <div className="space-y-1">
-                  <label className="text-[8px] font-black text-slate-400 uppercase tracking-wider block">Tahun</label>
-                  <select
-                    value={histYear}
-                    onChange={(e) => setHistYear(e.target.value)}
-                    className="w-full bg-white border border-slate-200 text-[10px] sm:text-[11px] font-black uppercase text-slate-800 rounded-xl px-2.5 py-1.5 shadow-sm focus:border-blue-500 focus:outline-none font-sans"
-                  >
-                    <option value="All">Semua Tahun</option>
-                    {availableYears.map(y => (
-                      <option key={y} value={y}>{y}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Bulan */}
-                <div className="space-y-1">
-                  <label className="text-[8px] font-black text-slate-400 uppercase tracking-wider block">Bulan</label>
-                  <select
-                    value={histMonth}
-                    onChange={(e) => setHistMonth(e.target.value)}
-                    className="w-full bg-white border border-slate-200 text-[10px] sm:text-[11px] font-black uppercase text-slate-800 rounded-xl px-2.5 py-1.5 shadow-sm focus:border-blue-500 focus:outline-none font-sans"
-                  >
-                    <option value="All">Semua Bulan</option>
-                    {monthNames.map(m => (
-                      <option key={m.value} value={m.value}>{m.label}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Gender */}
-                <div className="space-y-1">
-                  <label className="text-[8px] font-black text-slate-400 uppercase tracking-wider block">Gender</label>
-                  <select
-                    value={histGender}
-                    onChange={(e) => {
-                      setHistGender(e.target.value);
-                      setHistDaerah('All'); setHistDesa('All'); setHistKelompok('All'); setHistAge('All');
-                    }}
-                    className="w-full bg-white border border-slate-200 text-[10px] sm:text-[11px] font-black uppercase text-slate-800 rounded-xl px-2.5 py-1.5 shadow-sm focus:border-blue-500 focus:outline-none font-sans"
-                  >
-                    <option value="All">Semua Gender</option>
-                    <option value="L">Laki-laki</option>
-                    <option value="P">Perempuan</option>
-                  </select>
-                </div>
-
-                {/* Daerah */}
-                <div className="space-y-1">
-                  <label className="text-[8px] font-black text-slate-400 uppercase tracking-wider block">Daerah</label>
-                  <select
-                    value={histDaerah}
-                    onChange={(e) => {
-                      setHistDaerah(e.target.value);
-                      setHistGender('All'); setHistDesa('All'); setHistKelompok('All'); setHistAge('All');
-                    }}
-                    className="w-full bg-white border border-slate-200 text-[10px] sm:text-[11px] font-black uppercase text-slate-800 rounded-xl px-2.5 py-1.5 shadow-sm focus:border-blue-500 focus:outline-none font-sans"
-                  >
-                    <option value="All">Semua Daerah</option>
-                    {daerahs.map(d => (
-                      <option key={d.id} value={d.id}>{d.nama_daerah}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Desa */}
-                <div className="space-y-1">
-                  <label className="text-[8px] font-black text-slate-400 uppercase tracking-wider block">Desa</label>
-                  <select
-                    value={histDesa}
-                    onChange={(e) => {
-                      setHistDesa(e.target.value);
-                      setHistGender('All'); setHistDaerah('All'); setHistKelompok('All'); setHistAge('All');
-                    }}
-                    className="w-full bg-white border border-slate-200 text-[10px] sm:text-[11px] font-black uppercase text-slate-800 rounded-xl px-2.5 py-1.5 shadow-sm focus:border-blue-500 focus:outline-none font-sans"
-                  >
-                    <option value="All">Semua Desa</option>
-                    {desas.map(d => (
-                      <option key={d.id} value={d.id}>{d.nama_desa}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Kelompok */}
-                <div className="space-y-1">
-                  <label className="text-[8px] font-black text-slate-400 uppercase tracking-wider block">Kelompok</label>
-                  <select
-                    value={histKelompok}
-                    onChange={(e) => {
-                      setHistKelompok(e.target.value);
-                      setHistGender('All'); setHistDaerah('All'); setHistDesa('All'); setHistAge('All');
-                    }}
-                    className="w-full bg-white border border-slate-200 text-[10px] sm:text-[11px] font-black uppercase text-slate-800 rounded-xl px-2.5 py-1.5 shadow-sm focus:border-blue-500 focus:outline-none font-sans"
-                  >
-                    <option value="All">Semua Kelompok</option>
-                    {kelompoks.map(k => (
-                      <option key={k.id} value={k.id}>{k.nama_kelompok}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Kategori Umur */}
-                <div className="space-y-1">
-                  <label className="text-[8px] font-black text-slate-400 uppercase tracking-wider block">Umur</label>
-                  <select
-                    value={histAge}
-                    onChange={(e) => {
-                      setHistAge(e.target.value);
-                      setHistGender('All'); setHistDaerah('All'); setHistDesa('All'); setHistKelompok('All');
-                    }}
-                    className="w-full bg-white border border-slate-200 text-[10px] sm:text-[11px] font-black uppercase text-slate-800 rounded-xl px-2.5 py-1.5 shadow-sm focus:border-blue-500 focus:outline-none font-sans"
-                  >
-                    <option value="All">Semua Umur</option>
-                    {ages.map(a => (
-                      <option key={a.id} value={a.id}>{a.name}</option>
-                    ))}
-                  </select>
-                </div>
-
+            {activeEvent && (
+              <div className="px-2.5 py-1 bg-rose-50 text-rose-700 border border-rose-100 rounded-xl text-[9px] font-black uppercase tracking-wider self-start sm:self-auto">
+                {meetingStats.length} Pertemuan Terdata
               </div>
+            )}
+          </div>
 
-              {/* Aggregated Numbers Row */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 md:gap-6">
-                
-                {/* Total Summary Logs */}
-                <div className="p-4 rounded-2xl bg-blue-50/50 border border-blue-100 flex items-center justify-between">
-                  <div className="space-y-1 truncate">
-                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-wider block">Total Log Terarsip</span>
-                    <p className="text-xl sm:text-2xl font-black text-slate-900 leading-tight font-sans">
-                      {historicalStats.totalLogs}
-                    </p>
-                    <span className="text-[8px] font-black text-blue-500 uppercase tracking-widest block font-sans">Ringkasan</span>
-                  </div>
-                  <div className="p-2 bg-blue-100/50 rounded-xl text-blue-600 shrink-0">
-                    <Database size={16} />
-                  </div>
-                </div>
-
-                {/* Average Presence Rate */}
-                <div className="p-4 rounded-2xl bg-emerald-50/50 border border-emerald-100 flex items-center justify-between">
-                  <div className="space-y-1 truncate">
-                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-wider block">Persentase Hadir</span>
-                    <p className="text-xl sm:text-2xl font-black text-slate-900 leading-tight font-sans">
-                      {historicalStats.presenceRate}%
-                    </p>
-                    <span className="text-[8px] font-black text-emerald-500 uppercase tracking-widest block font-sans">Partisipasi</span>
-                  </div>
-                  <div className="p-2 bg-emerald-100/50 rounded-xl text-emerald-600 shrink-0">
-                    <UserCheck size={16} />
-                  </div>
-                </div>
-
-                {/* Excuse / Medical Leave */}
-                <div className="p-4 rounded-2xl bg-amber-50/50 border border-amber-100 flex items-center justify-between">
-                  <div className="space-y-1 truncate">
-                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-wider block">Izin & Sakit</span>
-                    <p className="text-xl sm:text-2xl font-black text-slate-900 leading-tight font-sans">
-                      {historicalStats.totalIzin + historicalStats.totalSakit}
-                    </p>
-                    <span className="text-[8px] font-black text-amber-500 uppercase tracking-widest block font-sans">Terverifikasi</span>
-                  </div>
-                  <div className="p-2 bg-amber-100/50 rounded-xl text-amber-600 shrink-0">
-                    <CalendarCheck size={16} />
-                  </div>
-                </div>
-
-                {/* Alpa */}
-                <div className="p-4 rounded-2xl bg-rose-50/50 border border-rose-100 flex items-center justify-between">
-                  <div className="space-y-1 truncate">
-                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-wider block">Alpa (Absen)</span>
-                    <p className="text-xl sm:text-2xl font-black text-slate-900 leading-tight font-sans">
-                      {historicalStats.totalAlpa}
-                    </p>
-                    <span className="text-[8px] font-black text-rose-500 uppercase tracking-widest block font-sans">Tanpa Keterangan</span>
-                  </div>
-                  <div className="p-2 bg-rose-100/50 rounded-xl text-rose-600 shrink-0">
-                    <AlertCircle size={16} />
-                  </div>
-                </div>
-
+          <div className="p-4 sm:p-6">
+            {meetingStats.length === 0 ? (
+              <div className="py-12 border border-dashed border-slate-200 rounded-3xl flex flex-col items-center justify-center text-center px-4 bg-slate-50/50">
+                <FileText className="text-slate-300 mb-2" size={24} />
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  Tidak Ada Data Presensi
+                </p>
+                <p className="text-[8px] text-slate-300 uppercase tracking-wide mt-1">
+                  Silakan lakukan presensi untuk kegiatan ini agar grafik dapat ditampilkan.
+                </p>
               </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-center">
+                {/* Left Side: Compact 2-Line Cards List (Stacked vertically) */}
+                <div className="lg:col-span-5 flex flex-col gap-2">
+                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider mb-0.5 block">
+                    Riwayat Pertemuan ({meetingStats.length})
+                  </span>
+                  {meetingStats.map((m) => (
+                    <div 
+                      key={m.dateStr} 
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100/80 border border-slate-100 transition-colors flex flex-col gap-0.5"
+                    >
+                      {/* Baris 1: Pertemuan, Tanggal & % Hadir */}
+                      <div className="flex items-center justify-between text-[10px] font-black uppercase">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-slate-800 tracking-tight font-black">
+                            P{m.meetingNumber}
+                          </span>
+                          <span className="text-[9px] font-bold text-slate-400 bg-white px-1.5 py-0.5 rounded border border-slate-100">
+                            📅 {formatDateDDMMMYYYY(m.dateStr || m.dateFormatted)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs font-black text-emerald-600">{m.pct}%</span>
+                          <span className="text-[9px] font-semibold text-slate-500">
+                            ({m.hadir}/{m.total})
+                          </span>
+                        </div>
+                      </div>
 
-              {/* Multi-Year Chart Panel */}
-              <div className="space-y-3">
-                <span className="text-[9px] font-black text-slate-700 uppercase tracking-wider block">
-                  Visualisasi Tren Kemajuan Sesi Terpilih
-                </span>
+                      {/* Baris 2: Detail status Izin, Sakit, Alpa terpisah */}
+                      <div className="flex items-center justify-between text-[9px] font-bold text-slate-400 border-t border-slate-200/50 pt-0.5 mt-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-amber-600">Izin: {m.izin}</span>
+                          <span className="text-sky-600">Sakit: {m.sakit}</span>
+                        </div>
+                        <span className="text-rose-500 font-extrabold">Alpa: {m.alpa}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
 
-                {historicalStats.trendPoints.length === 0 ? (
-                  <div className="py-12 border border-dashed border-slate-200 rounded-3xl flex flex-col items-center justify-center text-center px-4 bg-slate-50/50">
-                    <Database className="text-slate-300 mb-2" size={24} />
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                      Belum ada ringkasan summary terdaftar
-                    </p>
-                    <p className="text-[8px] text-slate-300 uppercase tracking-wide mt-1">
-                      Silakan isi dan transaksikan absensi baru di form untuk otomatisasi bagan harian.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="relative -mx-5 sm:-mx-6 w-[calc(100%+2.5rem)] sm:w-[calc(100%+3rem)] overflow-hidden bg-slate-50/40 border-y border-slate-100 px-2 sm:px-4 py-4">
+                {/* Right Side: Trend SVG Chart */}
+                <div className="lg:col-span-7 flex flex-col space-y-2">
+                  <span className="text-[9px] font-black text-slate-700 uppercase tracking-wider block">
+                    Bagan Tren Persentase Kehadiran (% Hadir)
+                  </span>
+
+                  <div className="relative w-full overflow-hidden bg-slate-50/60 border border-slate-100 rounded-2xl p-3 sm:p-4">
                     <svg 
                       viewBox="0 0 500 200" 
-                      className="w-full h-auto max-h-[140px] sm:max-h-[180px] overflow-visible"
+                      className="w-full h-auto max-h-[220px] overflow-visible"
                     >
                       {/* Grid Lines */}
                       {[0, 25, 50, 75, 100].map((val) => {
@@ -528,22 +534,21 @@ const DashboardAbsensi: React.FC<DashboardAbsensiProps> = ({
                         return (
                           <g key={val}>
                             <line 
-                              x1={24} 
+                              x1={35} 
                               y1={y} 
-                              x2={496} 
+                              x2={485} 
                               y2={y} 
                               stroke="#E2E8F0" 
                               strokeWidth="0.75"
                             />
                             <text 
-                              x={18} 
+                              x={28} 
                               y={y + 3.5} 
-                              fill="#0F172A" 
-                              fontSize="10" 
-                              fontWeight="900"
+                              fill="#64748B" 
+                              fontSize="9" 
+                              fontWeight="800"
                               textAnchor="end"
-                              className="font-mono font-black"
-                              style={{ stroke: "#0F172A", strokeWidth: "0.2px" }}
+                              className="font-mono"
                             >
                               {val}%
                             </text>
@@ -551,11 +556,11 @@ const DashboardAbsensi: React.FC<DashboardAbsensiProps> = ({
                         );
                       })}
 
-                      {/* Chart Paths */}
+                      {/* Chart Line & Area */}
                       {(() => {
-                        const pts = historicalStats.trendPoints.map((pt, index) => {
-                          const len = historicalStats.trendPoints.length;
-                          const x = len > 1 ? 24 + (index / (len - 1)) * (496 - 24) : 250;
+                        const pts = meetingStats.map((pt, index) => {
+                          const len = meetingStats.length;
+                          const x = len === 1 ? 260 : 60 + (index / (len - 1)) * (460 - 60);
                           const y = 15 + ((100 - pt.pct) / 100) * (200 - 15 - 38);
                           return { x, y, ...pt };
                         });
@@ -569,16 +574,16 @@ const DashboardAbsensi: React.FC<DashboardAbsensiProps> = ({
                         return (
                           <>
                             <defs>
-                              <linearGradient id="histGradient" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stopColor="#3B82F6" stopOpacity="0.12" />
-                                <stop offset="100%" stopColor="#3B82F6" stopOpacity="0.0" />
+                              <linearGradient id="eventGradient" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#E11D48" stopOpacity="0.15" />
+                                <stop offset="100%" stopColor="#E11D48" stopOpacity="0.0" />
                               </linearGradient>
                             </defs>
 
                             {fillPathStr && (
                               <path 
                                 d={fillPathStr} 
-                                fill="url(#histGradient)" 
+                                fill="url(#eventGradient)" 
                               />
                             )}
 
@@ -586,211 +591,311 @@ const DashboardAbsensi: React.FC<DashboardAbsensiProps> = ({
                               <path 
                                 d={pathStr} 
                                 fill="none" 
-                                stroke="#2563EB" 
-                                strokeWidth="2" 
+                                stroke="#E11D48" 
+                                strokeWidth="2.5" 
                                 strokeLinecap="round" 
                                 strokeLinejoin="round" 
-                            />
-                          )}
-
-                          {pts.map((p, idx) => (
-                            <g key={idx}>
-                              <circle 
-                                cx={p.x} 
-                                cy={p.y} 
-                                r="3.5" 
-                                fill="#FFFFFF" 
-                                stroke="#2563EB" 
-                                strokeWidth="1.75"
                               />
-                              <text 
-                                x={p.x} 
-                                y={200 - 10} 
-                                fill="#0F172A" 
-                                fontSize="9" 
-                                fontWeight="900"
-                                textAnchor="middle"
-                                className="uppercase tracking-wider font-sans font-black"
-                                style={{ stroke: "#0F172A", strokeWidth: "0.2px" }}
-                              >
-                                {p.label}
-                              </text>
-                            </g>
-                          ))}
-                        </>
-                      );
-                    })()}
-                  </svg>
+                            )}
+
+                            {pts.map((p, idx) => (
+                              <g key={idx}>
+                                <circle 
+                                  cx={p.x} 
+                                  cy={p.y} 
+                                  r="2.5" 
+                                  fill="#FFFFFF" 
+                                  stroke="#E11D48" 
+                                  strokeWidth="1.5"
+                                />
+                                <text 
+                                  x={p.x} 
+                                  y={p.y - 8} 
+                                  fill="#9F1239" 
+                                  fontSize="9" 
+                                  fontWeight="900"
+                                  textAnchor="middle"
+                                  className="font-mono font-black"
+                                >
+                                  {p.pct}%
+                                </text>
+                                <text 
+                                  x={p.x} 
+                                  y={200 - 12} 
+                                  fill="#0F172A" 
+                                  fontSize="8.5" 
+                                  fontWeight="800"
+                                  textAnchor="middle"
+                                  className="uppercase tracking-wider font-sans"
+                                >
+                                  P{p.meetingNumber} ({formatDateDDMMMYYYY(p.dateStr || p.dateFormatted)})
+                                </text>
+                              </g>
+                            ))}
+                          </>
+                        );
+                      })()}
+                    </svg>
+                  </div>
                 </div>
-              )}
-            </div>
-
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Right Column: Narrative Analytics Insights & Alerts */}
-          <div className="space-y-6">
-            
-            {/* Dynamic Insight Card Block (Insight Analisis Singkat) */}
-            <div className="bg-slate-950 p-5 sm:p-6 rounded-2xl sm:rounded-3xl shadow-lg text-white relative overflow-hidden flex flex-col justify-between">
-               <div className="absolute top-0 right-0 w-28 h-28 bg-blue-500/10 rounded-full blur-[40px] pointer-events-none" />
-               <div className="absolute bottom-0 left-0 w-28 h-28 bg-emerald-500/5 rounded-full blur-[40px] pointer-events-none" />
-               
-               <div>
-                 <h4 className="text-[10px] font-black uppercase tracking-widest text-[#94A3B8] mb-4 flex items-center gap-2">
-                   <Sparkles size={12} className="text-amber-400 shrink-0 animate-pulse" />
-                   Insight Analisis Singkat
-                 </h4>
-                 
-                 {/* Analytical deduction loops */}
-                 {isLoading ? (
-                   <p className="text-[9px] font-black text-slate-400 uppercase py-4">Memetakan pola data...</p>
-                 ) : (
-                   <div className="space-y-4">
-                     {narrativeInsights.map((ins) => (
-                       <div key={ins.id} className="flex items-start gap-3 bg-white/5 p-3 rounded-xl border border-white/[0.06] transition-colors hover:bg-white/[0.08]">
-                         <div className={`p-1.5 rounded-lg shrink-0 ${
-                           ins.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                           ins.type === 'warning' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' :
-                           'bg-blue-500/10 text-blue-400 border border-blue-500/20'
-                         }`}>
-                           <ins.icon size={13} strokeWidth={2.5} />
-                         </div>
-                         <div className="space-y-0.5 min-w-0">
-                            <p className="text-[9px] font-black uppercase tracking-wider text-slate-300 leading-tight">
-                              {ins.title}
-                            </p>
-                            <p className="text-[10px] font-semibold text-slate-400 leading-relaxed">
-                              {ins.desc}
-                            </p>
-                         </div>
-                       </div>
-                     ))}
-                   </div>
-                 )}
-               </div>
-
-               {/* Recommendation Footer Badge based on rate */}
-               <div className="mt-5 pt-4 border-t border-white/[0.06] flex items-center justify-between">
-                 <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Sistem Rekomendasi</span>
-                 <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider ${
-                    overallPresenceRate >= 85 
-                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
-                      : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                 }`}>
-                   {overallPresenceRate >= 85 ? 'Optimasi: Lanjutkan' : 'Optimasi: Monitor Kelompok'}
-                 </span>
-               </div>
-            </div>
-
-            {/* Announcement Box formatted beautifully for mobile/desktop */}
-            <div className="bg-emerald-600 px-5 py-4 sm:p-6 rounded-2xl sm:rounded-3xl shadow-sm text-emerald-50 relative overflow-hidden">
-               <div className="absolute right-0 bottom-0 translate-x-4 translate-y-4 opacity-10">
-                 <CheckCircle2 size={120} />
-               </div>
-               <h4 className="text-[9px] font-black uppercase tracking-[0.25em] text-emerald-200 mb-2 leading-none">
-                 PENGUMUMAN PENTING
-               </h4>
-               <p className="text-xs sm:text-sm font-black tracking-tight leading-snug">
-                 Jangan lupa untuk memverifikasi data dan menyinkronkan seluruh absensi kelompok sebelum tenggat pukul 21:00 WIB.
-               </p>
-            </div>
-
-          </div>
-        </div>
-
-        {/* Activity feed containing the latest updates */}
+        {/* Top 5 Members Attendance Section (3 Pertemuan Terakhir) */}
         <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
-          <div className="px-5 py-4 sm:px-6 sm:py-5 border-b border-slate-100 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-1.5 h-4 sm:h-5 bg-blue-600 rounded-full" />
-              <h3 className="text-[10px] sm:text-[11px] font-black text-slate-800 uppercase tracking-widest">
-                Riwayat Aktivitas Presensi
-              </h3>
+          <div className="px-5 py-4 sm:px-6 sm:py-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gradient-to-r from-amber-50/50 via-white to-white">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 bg-amber-100 text-amber-600 rounded-xl shrink-0">
+                <Trophy size={18} strokeWidth={2.5} />
+              </div>
+              <div>
+                <h3 className="text-xs sm:text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                  Top 5 {topCategory === 'hadir' ? 'Hadir' : topCategory === 'izin' ? 'Izin / Sakit' : topCategory === 'alpa' ? 'Alpa' : 'Terlambat'}
+                  <span className="text-[10px] text-slate-400 font-normal">
+                    {activeEvent ? `(${activeEvent.nama_kegiatan.toUpperCase()})` : ''}
+                  </span>
+                </h3>
+                <p className="text-[9px] font-medium text-slate-400">
+                  Peringkat berdasarkan 5 pertemuan terakhir
+                </p>
+              </div>
             </div>
-            
-            <div className="flex items-center gap-1 text-[8px] sm:text-[9px] font-black text-[#94A3B8] uppercase">
-              <Clock size={12} />
-              <span>Menampilkan up t. 8 Terakhir</span>
+
+            {/* Category Toggle Pills */}
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200/80 self-start sm:self-auto shrink-0 select-none">
+              <button
+                type="button"
+                onClick={() => setTopCategory('hadir')}
+                className={`py-1 px-3 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all duration-200 cursor-pointer ${
+                  topCategory === 'hadir'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-900'
+                }`}
+              >
+                Hadir
+              </button>
+              <button
+                type="button"
+                onClick={() => setTopCategory('izin')}
+                className={`py-1 px-3 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all duration-200 cursor-pointer ${
+                  topCategory === 'izin'
+                    ? 'bg-amber-500 text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-900'
+                }`}
+              >
+                Izin
+              </button>
+              <button
+                type="button"
+                onClick={() => setTopCategory('alpa')}
+                className={`py-1 px-3 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all duration-200 cursor-pointer ${
+                  topCategory === 'alpa'
+                    ? 'bg-rose-600 text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-900'
+                }`}
+              >
+                Alpa
+              </button>
+              <button
+                type="button"
+                onClick={() => setTopCategory('terlambat')}
+                className={`py-1 px-3 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all duration-200 cursor-pointer ${
+                  topCategory === 'terlambat'
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-900'
+                }`}
+              >
+                Terlambat
+              </button>
             </div>
           </div>
 
-          {/* Desktop Table View & Mobile Content Switcher */}
           <div className="flex-1">
             {isLoading ? (
                <div className="flex flex-col items-center py-12 gap-2">
-                  <div className="w-8 h-8 border-3 border-slate-100 border-t-blue-600 rounded-full animate-spin" />
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Menyelaraskan Data...</span>
+                  <div className="w-8 h-8 border-3 border-slate-100 border-t-amber-500 rounded-full animate-spin" />
+                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Menyelaraskan Data Top 5...</span>
                </div>
-            ) : logs.length === 0 ? (
+            ) : top5Members.length === 0 ? (
                <div className="flex flex-col items-center py-12 text-slate-400 gap-2">
                   <FileText size={32} className="opacity-20" />
-                  <span className="font-bold uppercase text-[9px] tracking-widest">Belum ada aktifitas hari ini</span>
+                  <span className="font-bold uppercase text-[9px] tracking-widest">
+                    Belum ada data member {topCategory} dalam 5 pertemuan terakhir
+                  </span>
                </div>
             ) : (
               <>
-                {/* 1. Desktop Mode Layout Table (>= sm size) */}
+                {/* Desktop View Table */}
                 <div className="hidden sm:block overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="text-[8px] sm:text-[9px] font-black text-[#94A3B8] uppercase tracking-wider border-b border-slate-50 bg-slate-50/50">
-                        <th className="px-5 py-3">Waktu Input</th>
+                        <th className="px-5 py-3 text-center w-16">Peringkat</th>
                         <th className="px-5 py-3">Nama Anggota</th>
                         <th className="px-5 py-3">Kelompok</th>
-                        <th className="px-5 py-3 text-center">Status</th>
+                        <th className="px-5 py-3 text-center">
+                          {topCategory === 'hadir' ? 'Kehadiran (5 Pertemuan)' : topCategory === 'izin' ? 'Izin/Sakit (5 Pertemuan)' : topCategory === 'alpa' ? 'Alpa (5 Pertemuan)' : 'Frekuensi Terlambat'}
+                        </th>
+                        <th className="px-5 py-3 text-center">
+                          {topCategory === 'hadir' ? 'Tingkat Kehadiran' : topCategory === 'izin' ? 'Rincian' : topCategory === 'alpa' ? 'Persentase Alpa' : 'Total Durasi Terlambat'}
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="text-[10px] sm:text-xs font-semibold text-slate-600">
-                      {logs.slice(0, 8).map((log, idx) => (
-                        <tr key={log.id} className={`hover:bg-slate-50/50 transition-colors ${idx !== 7 ? 'border-b border-slate-100' : ''}`}>
-                          <td className="px-5 py-4">
-                            <span className="font-mono text-slate-400 font-bold uppercase">
-                              {log.dateInput ? new Date(log.dateInput).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '-'}
-                            </span>
-                          </td>
-                          <td className="px-5 py-4 font-black uppercase text-slate-900">{log.memberName}</td>
-                          <td className="px-5 py-4 uppercase text-slate-500 font-bold">{log.kelompokName}</td>
-                          <td className="px-5 py-4 text-center">
-                            <span className={`px-2.5 py-1 rounded bg-slate-100 text-[8px] font-black uppercase tracking-wider ${
-                              log.status === 'Hadir' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' :
-                              log.status === 'Izin' ? 'bg-blue-50 text-blue-600 border border-blue-100' :
-                              log.status === 'Sakit' ? 'bg-amber-50 text-amber-600 border border-amber-100' :
-                              'bg-rose-50 text-rose-600 border border-rose-100'
-                            }`}>
-                              {log.status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
+                      {top5Members.map((m, idx) => {
+                        const totalMeetings = m.totalMeetings || meetingStats.length || 1;
+                        const hadirPct = m.pct !== undefined ? m.pct : Math.round((m.hadirCount / totalMeetings) * 100);
+                        const alpaPct = m.pct !== undefined ? m.pct : Math.round((m.alpaCount / totalMeetings) * 100);
+                        const isRank1 = idx === 0;
+                        const isRank2 = idx === 1;
+                        const isRank3 = idx === 2;
+
+                        return (
+                          <tr key={m.memberId} className={`hover:bg-slate-50/50 transition-colors ${idx !== top5Members.length - 1 ? 'border-b border-slate-100' : ''}`}>
+                            <td className="px-5 py-4 text-center">
+                              <span className={`inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-black ${
+                                isRank1 ? 'bg-amber-100 text-amber-700 border border-amber-300 shadow-xs' :
+                                isRank2 ? 'bg-slate-200 text-slate-700 border border-slate-300' :
+                                isRank3 ? 'bg-orange-100 text-orange-700 border border-orange-300' :
+                                'bg-slate-50 text-slate-500 border border-slate-200'
+                              }`}>
+                                {idx + 1}
+                              </span>
+                            </td>
+                            <td className="px-5 py-4 font-black uppercase text-slate-900 flex items-center gap-2">
+                              {m.memberName}
+                              {isRank1 && <span className="text-amber-500 text-xs">👑</span>}
+                            </td>
+                            <td className="px-5 py-4 uppercase text-slate-500 font-bold">{m.kelompokName}</td>
+                            <td className="px-5 py-4 text-center">
+                              {topCategory === 'hadir' && (
+                                <>
+                                  <span className="font-black text-emerald-700">
+                                    {m.hadirCount} <span className="text-slate-400 font-normal">/ {totalMeetings} Hadir</span>
+                                  </span>
+                                  {m.izinCount > 0 && <span className="text-[9px] text-amber-600 block font-bold">{m.izinCount} Izin</span>}
+                                </>
+                              )}
+                              {topCategory === 'izin' && (
+                                <span className="font-black text-amber-700">
+                                  {m.izinCount + m.sakitCount} <span className="text-slate-400 font-normal">/ {totalMeetings} Kali</span>
+                                </span>
+                              )}
+                              {topCategory === 'alpa' && (
+                                <span className="font-black text-rose-700">
+                                  {m.alpaCount} <span className="text-slate-400 font-normal">/ {totalMeetings} Alpa</span>
+                                </span>
+                              )}
+                              {topCategory === 'terlambat' && (
+                                <span className="font-black text-purple-700">
+                                  {m.lateCount} Kali <span className="text-slate-400 font-normal">/ {totalMeetings} Pertemuan</span>
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-5 py-4 text-center">
+                              {topCategory === 'hadir' && (
+                                <div className="flex items-center justify-center gap-2">
+                                  <div className="w-16 bg-slate-100 h-2 rounded-full overflow-hidden">
+                                    <div 
+                                      className={`h-full rounded-full ${hadirPct >= 80 ? 'bg-emerald-500' : hadirPct >= 50 ? 'bg-amber-500' : 'bg-rose-500'}`} 
+                                      style={{ width: `${hadirPct}%` }} 
+                                    />
+                                  </div>
+                                  <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
+                                    hadirPct >= 80 ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' :
+                                    hadirPct >= 50 ? 'bg-amber-50 text-amber-600 border border-amber-100' :
+                                    'bg-rose-50 text-rose-600 border border-rose-100'
+                                  }`}>
+                                    {hadirPct}%
+                                  </span>
+                                </div>
+                              )}
+                              {topCategory === 'izin' && (
+                                <div className="text-[9px] font-black uppercase text-amber-600">
+                                  Izin: {m.izinCount} • Sakit: {m.sakitCount}
+                                </div>
+                              )}
+                              {topCategory === 'alpa' && (
+                                <span className="px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-rose-50 text-rose-600 border border-rose-100">
+                                  {alpaPct}% Alpa
+                                </span>
+                              )}
+                              {topCategory === 'terlambat' && (
+                                <span className="px-2.5 py-1 rounded text-[9px] font-black uppercase tracking-wider bg-purple-50 text-purple-700 border border-purple-200">
+                                  ⏱️ {m.formattedLate} ({m.totalMinutes} m)
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
 
-                {/* 2. Mobile Cards Grid View (< sm size) */}
+                {/* Mobile Cards Grid View */}
                 <div className="sm:hidden divide-y divide-slate-100">
-                  {logs.slice(0, 8).map((log) => (
-                    <div key={log.id} className="p-4 flex justify-between items-center bg-white">
-                      <div className="space-y-1 truncate max-w-[70%]">
-                        <p className="text-[11px] font-black uppercase text-slate-950 truncate leading-none">
-                          {log.memberName}
-                        </p>
-                        <div className="flex items-center space-x-1.5 text-[8px] font-black text-slate-400 uppercase tracking-wide">
-                          <span className="truncate">{log.kelompokName}</span>
-                          <span>•</span>
-                          <span className="font-mono">{log.dateInput ? new Date(log.dateInput).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '-'}</span>
-                        </div>
-                      </div>
+                  {top5Members.map((m, idx) => {
+                    const totalMeetings = m.totalMeetings || meetingStats.length || 1;
+                    const hadirPct = m.pct !== undefined ? m.pct : Math.round((m.hadirCount / totalMeetings) * 100);
+                    const alpaPct = m.pct !== undefined ? m.pct : Math.round((m.alpaCount / totalMeetings) * 100);
+                    const isRank1 = idx === 0;
 
-                      <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider shrink-0 ${
-                        log.status === 'Hadir' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' :
-                        log.status === 'Izin' ? 'bg-blue-50 text-blue-600 border border-blue-100' :
-                        log.status === 'Sakit' ? 'bg-amber-50 text-amber-600 border border-amber-100' :
-                        'bg-rose-50 text-rose-600 border border-rose-100'
-                      }`}>
-                        {log.status}
-                      </span>
-                    </div>
-                  ))}
+                    return (
+                      <div key={m.memberId} className="p-4 flex justify-between items-center bg-white">
+                        <div className="flex items-center gap-3 min-w-0 pr-2">
+                          <span className={`inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-black shrink-0 ${
+                            isRank1 ? 'bg-amber-100 text-amber-700 border border-amber-300' : 'bg-slate-100 text-slate-600'
+                          }`}>
+                            {idx + 1}
+                          </span>
+                          <div className="space-y-0.5 truncate">
+                            <p className="text-[11px] font-black uppercase text-slate-950 truncate leading-none">
+                              {m.memberName} {isRank1 && '👑'}
+                            </p>
+                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-wide truncate">
+                              {m.kelompokName} • {
+                                topCategory === 'hadir' ? `${m.hadirCount}/${totalMeetings} Hadir` :
+                                topCategory === 'izin' ? `${m.izinCount + m.sakitCount}/${totalMeetings} Izin` :
+                                topCategory === 'alpa' ? `${m.alpaCount}/${totalMeetings} Alpa` :
+                                `Terlambat ${m.lateCount}x`
+                              }
+                            </p>
+                          </div>
+                        </div>
+
+                        {topCategory === 'hadir' && (
+                          <span className={`px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider shrink-0 ${
+                            hadirPct >= 80 ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' :
+                            hadirPct >= 50 ? 'bg-amber-50 text-amber-600 border border-amber-100' :
+                            'bg-rose-50 text-rose-600 border border-rose-100'
+                          }`}>
+                            {hadirPct}%
+                          </span>
+                        )}
+
+                        {topCategory === 'izin' && (
+                          <span className="px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider shrink-0 bg-amber-50 text-amber-600 border border-amber-100">
+                            {m.izinCount + m.sakitCount}x
+                          </span>
+                        )}
+
+                        {topCategory === 'alpa' && (
+                          <span className="px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider shrink-0 bg-rose-50 text-rose-600 border border-rose-100">
+                            {alpaPct}%
+                          </span>
+                        )}
+
+                        {topCategory === 'terlambat' && (
+                          <span className="px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider shrink-0 bg-purple-50 text-purple-700 border border-purple-200">
+                            ⏱️ {m.formattedLate}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </>
             )}

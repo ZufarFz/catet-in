@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { motion } from 'motion/react';
+import { motion, useMotionValue, useTransform } from 'motion/react';
 import { 
   Lock, User, Eye, EyeOff, Loader2, ArrowRight, XCircle, 
   RefreshCw, CheckCircle, Mail, Database, CheckSquare, Square,
-  Briefcase, X, Sparkles, AlertTriangle
+  Briefcase, X, Sparkles, AlertTriangle, ChevronDown
 } from 'lucide-react';
 import { db, centralClient } from '../../supabase';
 
@@ -23,6 +23,11 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
   // Self-Registration States
   const [isSelfReg, setIsSelfReg] = useState(false);
   const [mobilePhase, setMobilePhase] = useState<'login' | 'expandingToRegister' | 'register' | 'expandingToLogin'>('login');
+
+  // Motion values to dynamically sync opacities during pull / drag transitions
+  const mobileY = useMotionValue(-465);
+  const signUpOpacity = useTransform(mobileY, [-465, -230, 0], [0, 0.5, 1]);
+  const signInOpacity = useTransform(mobileY, [-465, -230, 0], [1, 0.3, 0]);
 
   // Social login coming soon states
   const [showSocialModal, setShowSocialModal] = useState(false);
@@ -60,6 +65,9 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
   const [regWebAccess, setRegWebAccess] = useState({ bendahara: true, absensi: true });
   const [regFirebaseConfig, setRegFirebaseConfig] = useState('');
   const [configs, setConfigs] = useState<any[]>([]);
+  const [isDesktopDropdownOpen, setIsDesktopDropdownOpen] = useState(false);
+  const [isMobileDropdownOpen, setIsMobileDropdownOpen] = useState(false);
+  const [isAppDropdownOpen, setIsAppDropdownOpen] = useState(false);
   
   // Custom Flow States
   const [isRegisteredCompleted, setIsRegisteredCompleted] = useState(false);
@@ -83,9 +91,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
           ...row
         }));
         setConfigs(list);
-        if (list.length > 0) {
-          setRegFirebaseConfig(list[0].id);
-        }
+        // Do not pre-select automatically, keep regFirebaseConfig as empty string
       } catch (err) {
         console.error("Gagal memuat list instansi dari Supabase:", err);
       }
@@ -120,6 +126,10 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
     }
     if (!regJabatan.trim()) {
       setRegisterError("Jabatan wajib diisi!");
+      return;
+    }
+    if (!regFirebaseConfig) {
+      setRegisterError("Silakan pilih Instansi Cabang terlebih dahulu!");
       return;
     }
 
@@ -332,7 +342,14 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
       localStorage.setItem('role', serverRole);
       localStorage.setItem('original_role', activeUserDoc.original_role || '');
       localStorage.setItem('instansi', instansiName);
+      localStorage.setItem('instansi_id', activeUserDoc.instansi || '');
       localStorage.setItem('web_access', webAccess);
+
+      localStorage.setItem('restricted_daerah_id', activeUserDoc.restricted_daerah_id || '');
+      localStorage.setItem('restricted_desa_id', activeUserDoc.restricted_desa_id || '');
+      localStorage.setItem('restricted_kelompok_id', activeUserDoc.restricted_kelompok_id || '');
+      localStorage.setItem('restricted_age_category_id', activeUserDoc.restricted_age_category_id || '');
+      localStorage.setItem('grouping_write_permissions', JSON.stringify(activeUserDoc.grouping_write_permissions || {}));
 
       localStorage.setItem('activeScriptUrl', appscriptBackup || 'native');
       localStorage.setItem('absensiMasterUrl', 'native');
@@ -343,6 +360,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
         id: activeUserId,
         firebase_config: instansiConfigMap,
         instansi: instansiName,
+        instansi_id: activeUserDoc.instansi,
         appsscript: appscriptBackup || 'native'
       };
 
@@ -406,11 +424,12 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
     <div className="fixed inset-0 bg-slate-50 flex items-center justify-center p-4 sm:p-6 z-[500] font-sans">
       
       {/* DESKTOP VIEW: Double Sliding Panels (from user design images) */}
-      <div className="hidden md:flex w-full max-w-4xl h-[620px] relative overflow-hidden bg-white rounded-[2rem] shadow-[0_20px_50px_rgba(8,112,184,0.12)] border border-slate-150 flex-row">
+      <div className="hidden md:flex w-full max-w-5xl h-[620px] relative overflow-hidden bg-white rounded-xl shadow-[0_20px_50px_rgba(8,112,184,0.12)] border border-slate-150 flex-row">
         
         {/* Forms - Left Slot: Sign In (Visible when isSelfReg is false) */}
         <motion.div 
-          className="absolute left-0 top-0 w-1/2 h-full z-10 flex flex-col justify-center px-12 py-8 text-left select-none"
+          className="absolute left-0 top-0 w-1/2 h-full z-10 flex flex-col justify-center pl-10 pr-16 py-8 text-left select-none"
+          initial={false}
           animate={{ 
             x: isSelfReg ? '30px' : '0px', 
             opacity: isSelfReg ? 0 : 1, 
@@ -419,8 +438,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
           transition={{ type: 'spring', damping: 25, stiffness: 120 }}
         >
           <div className="text-center mb-6">
-            <h1 className="text-2xl font-black tracking-tight text-slate-800 uppercase leading-none">Otorisasi Pengguna</h1>
-            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-2">Akses Modul Keuangan & Presensi Instansi</p>
+            <h1 className="text-2xl font-black tracking-tight text-slate-800 uppercase leading-none">SELAMAT DATANG</h1>
             
             {/* Brand social row with sleek vector icons instead of text G, f, X */}
             <div className="flex justify-center space-x-3.5 mt-4 mb-3">
@@ -455,10 +473,10 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
                 </svg>
               </button>
             </div>
-            <p className="text-[8px] text-slate-400 font-extrabold uppercase tracking-widest mt-1">atau menggunakan kredensial lokal</p>
+            <p className="text-[8px] text-slate-400 font-extrabold uppercase tracking-widest mt-1">atau menggunakan akun anda</p>
           </div>
 
-          <form onSubmit={handleLogin} className="space-y-4">
+          <form onSubmit={handleLogin} className="space-y-4 pr-4">
             <div className="space-y-1">
               <label className="text-[8.5px] font-black text-slate-400 uppercase tracking-widest ml-1 block">Email / Username</label>
               <div className="relative">
@@ -557,7 +575,8 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
 
         {/* Forms - Right Slot: Create Account (Visible when isSelfReg is true) */}
         <motion.div 
-          className="absolute left-1/2 top-0 w-1/2 h-full z-10 flex flex-col justify-center px-12 py-8 text-left select-none"
+          className="absolute left-1/2 top-0 w-1/2 h-full z-10 flex flex-col justify-center pl-16 pr-10 py-8 text-left select-none"
+          initial={false}
           animate={{ 
             x: isSelfReg ? '0px' : '-30px', 
             opacity: isSelfReg ? 1 : 0, 
@@ -567,7 +586,6 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
         >
           <div className="text-center mb-4 shrink-0">
             <h1 className="text-2xl font-black tracking-tight text-slate-800 uppercase leading-none">Registrasi Akun</h1>
-            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-2">Daftarkan Akun Operasional Instansi</p>
             
             {/* Brand social row with sleek vector icons instead of text G, f, X */}
             <div className="flex justify-center space-x-3.5 mt-4 mb-3">
@@ -605,7 +623,59 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
             <p className="text-[8px] text-slate-400 font-extrabold uppercase tracking-widest leading-none">atau isi formulir pendaftaran di bawah</p>
           </div>
 
-          <form onSubmit={handleRegisterSubmit} className="space-y-3 max-h-[420px] overflow-y-auto no-scrollbar pr-1">
+          <form onSubmit={handleRegisterSubmit} className="space-y-3 max-h-[420px] overflow-y-auto no-scrollbar pr-1 pl-4">
+            {/* Instansi Dropdown (Sleek UI Custom Dropdown) - Placed at the very top */}
+            <div className="space-y-0.5 relative">
+              <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest ml-0.5">Instansi Cabang</label>
+              <div className="relative">
+                <Database size={13} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 z-10" />
+                <button
+                  type="button"
+                  onClick={() => setIsDesktopDropdownOpen(!isDesktopDropdownOpen)}
+                  className="w-full pl-9 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-[10px] font-bold outline-none transition-all uppercase cursor-pointer text-slate-700 flex items-center justify-between min-h-[34px] hover:border-slate-300 focus:border-blue-500 focus:bg-white text-left shadow-sm"
+                >
+                  <span className="truncate">
+                    {regFirebaseConfig 
+                      ? (configs.find(c => c.id === regFirebaseConfig)?.instansiName || regFirebaseConfig).toUpperCase() 
+                      : "PILIH INSTANSI CABANG"}
+                  </span>
+                  <ChevronDown size={12} className={`text-slate-400 transition-transform duration-200 ${isDesktopDropdownOpen ? 'rotate-180' : ''}`} />
+                </button>
+              </div>
+
+              {isDesktopDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsDesktopDropdownOpen(false)} />
+                  <div className="absolute left-0 right-0 mt-1 bg-white/80 backdrop-blur-md border border-slate-200/50 rounded-xl shadow-xl z-50 max-h-48 overflow-y-auto py-1 animate-in fade-in slide-in-from-top-2 duration-150">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRegFirebaseConfig('');
+                        setIsDesktopDropdownOpen(false);
+                      }}
+                      className={`w-full text-left px-4 py-2.5 text-[9px] uppercase font-black tracking-wider transition-colors border-b border-slate-100/50 ${!regFirebaseConfig ? 'bg-blue-100/70 text-blue-800' : 'text-slate-400 hover:bg-blue-50/50 hover:text-blue-600'}`}
+                    >
+                      -- BELUM MEMILIH INSTANSI --
+                    </button>
+                    {configs.map(c => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => {
+                          setRegFirebaseConfig(c.id);
+                          setIsDesktopDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-4 py-2.5 text-[9px] uppercase font-bold transition-colors flex items-center justify-between ${regFirebaseConfig === c.id ? 'bg-blue-100 text-blue-900 font-extrabold hover:bg-blue-200' : 'text-slate-700 hover:bg-blue-50/50 hover:text-blue-600'}`}
+                      >
+                        <span className="truncate">{String(c.instansiName || c.id).toUpperCase()}</span>
+                        {regFirebaseConfig === c.id && <CheckCircle size={10} className="text-blue-600 shrink-0 ml-1" />}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               {/* Nama Lengkap */}
               <div className="space-y-0.5">
@@ -615,7 +685,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
                   <input
                     type="text"
                     required
-                    placeholder="Contoh: AHMAD"
+                    placeholder="Nama Lengkap Anda"
                     value={regFullName}
                     onChange={(e) => setRegFullName(e.target.value)}
                     className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all placeholder:font-normal placeholder:text-slate-400 uppercase"
@@ -631,7 +701,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
                   <input
                     type="text"
                     required
-                    placeholder="ahmad354"
+                    placeholder="username123"
                     value={regUsername}
                     onChange={(e) => setRegUsername(e.target.value)}
                     className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all placeholder:font-normal placeholder:text-slate-400"
@@ -649,7 +719,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
                   <input
                     type="email"
                     required
-                    placeholder="ahmad@gmail.com"
+                    placeholder="email@catetin.com"
                     value={regEmail}
                     onChange={(e) => setRegEmail(e.target.value)}
                     className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all placeholder:font-normal placeholder:text-slate-400"
@@ -674,40 +744,19 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              {/* Jabatan */}
-              <div className="space-y-0.5">
-                <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest ml-0.5">Jabatan / Posisi</label>
-                <div className="relative">
-                  <Briefcase size={13} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    required
-                    placeholder="Bendahara"
-                    value={regJabatan}
-                    onChange={(e) => setRegJabatan(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all placeholder:font-normal placeholder:text-slate-400 uppercase"
-                  />
-                </div>
-              </div>
-
-              {/* Instansi Dropdown */}
-              <div className="space-y-0.5">
-                <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest ml-0.5">Instansi Cabang</label>
-                <div className="relative">
-                  <Database size={13} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <select
-                    value={regFirebaseConfig}
-                    onChange={(e) => setRegFirebaseConfig(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-[10px] font-bold focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all uppercase cursor-pointer text-slate-700"
-                  >
-                    {configs.map(c => (
-                      <option key={c.id} value={c.id}>
-                        {String(c.instansiName || c.id).toUpperCase()}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+            {/* Jabatan - Full Width at bottom */}
+            <div className="space-y-0.5">
+              <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest ml-0.5">Jabatan / Posisi</label>
+              <div className="relative">
+                <Briefcase size={13} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  required
+                  placeholder="Jabatan Anda"
+                  value={regJabatan}
+                  onChange={(e) => setRegJabatan(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all placeholder:font-normal placeholder:text-slate-400 uppercase"
+                />
               </div>
             </div>
 
@@ -765,6 +814,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
         {/* Sliding Overlay Slider Side Container */}
         <motion.div 
           className="absolute top-0 w-1/2 h-full z-20 overflow-hidden"
+          initial={false}
           animate={{ 
             left: isSelfReg ? '0%' : '50%',
           }}
@@ -772,6 +822,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
         >
           <motion.div
             className="w-[200%] h-full flex relative"
+            initial={false}
             animate={{
               x: isSelfReg ? '0%' : '-50%'
             }}
@@ -852,36 +903,42 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
 
             {/* Left Box (Welcome Back - Overlay displays when isSelfReg is true, sliding over to the left side) */}
             <div className="w-1/2 h-full text-white flex flex-col justify-center items-center p-12 text-center relative select-none bg-transparent">
-              <div className="relative z-10 space-y-6 flex flex-col items-center">
+              <div className="relative z-10 space-y-5 flex flex-col items-center">
+                <div className="w-20 h-20 md:w-24 md:h-24 flex items-center justify-center">
+                  <img src="/icon-512.png" alt="Logo" className="w-full h-full object-contain" />
+                </div>
                 <h1 className="text-3xl font-black tracking-tight leading-none uppercase">Sudah Ada Akun?</h1>
-                <p className="text-xs text-blue-100/80 tracking-wide leading-relaxed max-w-sm mt-3 font-medium">
-                  Masuk menggunakan kredensial aktif untuk kembali mengelola administrasi keuangan dan presensi instansi Anda.
+                <p className="text-xs text-blue-100/80 tracking-wide leading-relaxed max-w-sm mt-2 font-medium">
+                  Masuk menggunakan akun anda untuk memulai mencatat administrasi keuangan dan presensi anda dengan aplikasi Catet-in.
                 </p>
                 
                 <button
                   type="button"
                   onClick={() => handleToggleMode(false)}
-                  className="px-10 py-3 rounded-full border-2 border-white/25 hover:border-white hover:bg-white hover:text-indigo-950 font-extrabold text-xs uppercase tracking-[0.15em] transition-all duration-300 active:scale-95 cursor-pointer mt-6 shadow-md"
+                  className="px-10 py-3 rounded-full border-2 border-white/25 hover:border-white hover:bg-white hover:text-indigo-950 font-extrabold text-xs uppercase tracking-[0.15em] transition-all duration-300 active:scale-95 cursor-pointer mt-4 shadow-md"
                 >
-                  MASUK PORTAL
+                  Masuk
                 </button>
               </div>
             </div>
 
             {/* Right Box (Hey There! - Overlay displays when isSelfReg is false, sliding over to the right side) */}
             <div className="w-1/2 h-full text-white flex flex-col justify-center items-center p-12 text-center relative select-none bg-transparent">
-              <div className="relative z-10 space-y-6 flex flex-col items-center">
+              <div className="relative z-10 space-y-5 flex flex-col items-center">
+                <div className="w-20 h-20 md:w-24 md:h-24 flex items-center justify-center">
+                  <img src="/icon-512.png" alt="Logo" className="w-full h-full object-contain" />
+                </div>
                 <h1 className="text-3xl font-black tracking-tight leading-none uppercase">Belum Terdaftar?</h1>
-                <p className="text-xs text-blue-100/80 tracking-wide leading-relaxed max-w-sm mt-3 font-medium">
-                  Daftarkan akun operasional mandiri pada cabang instansi Anda yang tersedia untuk memulai akses.
+                <p className="text-xs text-blue-100/80 tracking-wide leading-relaxed max-w-sm mt-2 font-medium">
+                  Daftarkan akun anda untuk memulai mencatat administrasi keuangan dan presensi anda dengan aplikasi Catet-in
                 </p>
 
                 <button
                   type="button"
                   onClick={() => handleToggleMode(true)}
-                  className="px-10 py-3 rounded-full bg-white text-indigo-900 hover:bg-indigo-50 border-2 border-white font-extrabold text-xs uppercase tracking-[0.15em] transition-all duration-300 active:scale-95 cursor-pointer mt-6 shadow-lg shadow-indigo-950/20"
+                  className="px-10 py-3 rounded-full bg-white text-indigo-900 hover:bg-indigo-50 border-2 border-white font-extrabold text-xs uppercase tracking-[0.15em] transition-all duration-300 active:scale-95 cursor-pointer mt-4 shadow-lg shadow-indigo-950/20"
                 >
-                  AJUKAN REGISTRASI
+                  Ajukan Pendaftaran
                 </button>
               </div>
             </div>
@@ -890,136 +947,270 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
       </div>
 
       {/* MOBILE VIEW: Compact Smooth Slider Container (Full Width Switcher) */}
-      <div className="w-full max-w-[328px] h-[540px] bg-white rounded-[2rem] shadow-2xl overflow-hidden border border-slate-100 flex flex-col md:hidden relative select-none mx-auto">
+      <div className="w-full max-w-[328px] h-[540px] bg-white rounded-xl shadow-2xl overflow-hidden border border-slate-100 flex flex-col md:hidden relative select-none mx-auto">
         
-        {/* Sliding Overlay Card for Mobile (z-20 so it slides/expands dynamically over the forms) */}
+        {/* SLIDING REGISTRATION PANEL (Full Width Curtain with bottom-attached Notch that supports drag & tap) */}
         <motion.div
-          className="absolute left-0 right-0 z-20 w-full overflow-hidden bg-gradient-to-br from-[#00A1E5] via-[#007CC2] to-[#004D90] flex flex-col justify-center items-center shadow-lg shadow-indigo-950/20"
-          animate={
-            mobilePhase === 'login' || mobilePhase === 'expandingToLogin'
-              ? {
-                  y: 0,
-                  height: 120,
-                  borderBottomLeftRadius: "2rem",
-                  borderBottomRightRadius: "2rem",
-                  borderTopLeftRadius: "2rem",
-                  borderTopRightRadius: "2rem",
-                }
-              : mobilePhase === 'register' || mobilePhase === 'expandingToRegister'
-              ? {
-                  y: 0,
-                  height: 420,
-                  borderBottomLeftRadius: "2rem",
-                  borderBottomRightRadius: "2rem",
-                  borderTopLeftRadius: "2rem",
-                  borderTopRightRadius: "2rem",
-                }
-              : {
-                  y: 0,
-                  height: 120,
-                  borderBottomLeftRadius: "2rem",
-                  borderBottomRightRadius: "2rem",
-                  borderTopLeftRadius: "2rem",
-                  borderTopRightRadius: "2rem",
-                }
-          }
-          transition={{ duration: 0.4, ease: [0.4, 0.0, 0.2, 1] }}
+          drag="y"
+          dragConstraints={{ top: -456, bottom: 0 }}
+          dragElastic={{ top: 0.05, bottom: 0.15 }}
+          dragMomentum={false}
+          style={{ y: mobileY }}
+          onDragEnd={(event, info) => {
+            if (mobilePhase === 'login' || mobilePhase === 'expandingToLogin') {
+              if (info.offset.y > 50) {
+                handleToggleMode(true);
+              }
+            } else if (mobilePhase === 'register' || mobilePhase === 'expandingToRegister') {
+              if (info.offset.y < -50) {
+                handleToggleMode(false);
+              }
+            }
+          }}
+          className="absolute top-0 left-0 right-0 h-[505px] bg-gradient-to-br from-[#00A1E5] via-[#007CC2] to-[#004D90] rounded-b-3xl shadow-xl z-20 flex flex-col justify-between cursor-grab active:cursor-grabbing"
+          initial={false}
+          animate={{
+            y: (mobilePhase === 'register' || mobilePhase === 'expandingToRegister') ? 0 : -456,
+          }}
+          transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
         >
-          {/* STARLIGHTS & METEORS BACKGROUND */}
-          <svg className="absolute inset-0 w-full h-full pointer-events-none select-none" viewBox="0 0 500 500" preserveAspectRatio="xMidYMid slice" fill="none">
-            <defs>
-              <linearGradient id="meteorGradMobile" x1="1" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#ffffff" stopOpacity="0.95" />
-                <stop offset="40%" stopColor="#38bdf8" stopOpacity="0.5" />
-                <stop offset="100%" stopColor="#0284c7" stopOpacity="0" />
-              </linearGradient>
-            </defs>
-            <circle cx="55" cy="85" r="1.5" fill="#ffffff" opacity="0.8" />
-            <circle cx="125" cy="45" r="1" fill="#ffffff" opacity="0.6" />
-            <circle cx="185" cy="135" r="2" fill="#ffffff" opacity="0.9" />
-            <circle cx="215" cy="65" r="1.5" fill="#ffffff" opacity="0.5" />
-            <circle cx="295" cy="105" r="1" fill="#ffffff" opacity="0.7" />
-            <circle cx="345" cy="55" r="2" fill="#ffffff" opacity="0.85" />
-            <circle cx="415" cy="125" r="1" fill="#ffffff" opacity="0.4" />
-            <circle cx="465" cy="85" r="1.5" fill="#ffffff" opacity="0.9" />
-            <circle cx="75" cy="195" r="1.5" fill="#ffffff" opacity="0.6" />
-            <circle cx="155" cy="165" r="2" fill="#ffffff" opacity="0.8" />
-            <circle cx="265" cy="215" r="1" fill="#ffffff" opacity="0.5" />
-            <circle cx="385" cy="185" r="1.5" fill="#ffffff" opacity="0.7" />
-            <circle cx="445" cy="225" r="2" fill="#ffffff" opacity="0.9" />
-            <line x1="120" y1="40" x2="60" y2="90" stroke="url(#meteorGradMobile)" strokeWidth="2.5" strokeLinecap="round" />
-            <line x1="280" y1="55" x2="230" y2="95" stroke="url(#meteorGradMobile)" strokeWidth="2" strokeLinecap="round" />
-            <line x1="430" y1="80" x2="370" y2="130" stroke="url(#meteorGradMobile)" strokeWidth="2.5" strokeLinecap="round" />
-          </svg>
+          {/* Inner content wrapper with inherited border radius and clipping to contain background graphics */}
+          <div className="absolute inset-0 overflow-hidden rounded-[inherit] pointer-events-none">
+            {/* STARLIGHTS & METEORS BACKGROUND */}
+            <svg className="absolute inset-0 w-full h-full pointer-events-none select-none" viewBox="0 0 500 500" preserveAspectRatio="xMidYMid slice" fill="none">
+              <defs>
+                <linearGradient id="meteorGradMobile" x1="1" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#ffffff" stopOpacity="0.95" />
+                  <stop offset="40%" stopColor="#38bdf8" stopOpacity="0.5" />
+                  <stop offset="100%" stopColor="#0284c7" stopOpacity="0" />
+                </linearGradient>
+              </defs>
+              <circle cx="55" cy="85" r="1.5" fill="#ffffff" opacity="0.8" />
+              <circle cx="125" cy="45" r="1" fill="#ffffff" opacity="0.6" />
+              <circle cx="185" cy="135" r="2" fill="#ffffff" opacity="0.9" />
+              <circle cx="215" cy="65" r="1.5" fill="#ffffff" opacity="0.5" />
+              <circle cx="295" cy="105" r="1" fill="#ffffff" opacity="0.7" />
+              <circle cx="345" cy="55" r="2" fill="#ffffff" opacity="0.85" />
+              <circle cx="415" cy="125" r="1" fill="#ffffff" opacity="0.4" />
+              <circle cx="465" cy="85" r="1.5" fill="#ffffff" opacity="0.9" />
+              <circle cx="75" cy="195" r="1.5" fill="#ffffff" opacity="0.6" />
+              <circle cx="155" cy="165" r="2" fill="#ffffff" opacity="0.8" />
+              <circle cx="265" cy="215" r="1" fill="#ffffff" opacity="0.5" />
+              <circle cx="385" cy="185" r="1.5" fill="#ffffff" opacity="0.7" />
+              <circle cx="445" cy="225" r="2" fill="#ffffff" opacity="0.9" />
+              <line x1="120" y1="40" x2="60" y2="90" stroke="url(#meteorGradMobile)" strokeWidth="2.5" strokeLinecap="round" />
+              <line x1="280" y1="55" x2="230" y2="95" stroke="url(#meteorGradMobile)" strokeWidth="2" strokeLinecap="round" />
+              <line x1="430" y1="80" x2="370" y2="130" stroke="url(#meteorGradMobile)" strokeWidth="2.5" strokeLinecap="round" />
+            </svg>
 
-          {/* OVERLAPPING CLOUDS FLOW */}
-          <svg className="absolute bottom-0 left-0 w-full h-[65%] pointer-events-none select-none" viewBox="0 0 500 300" preserveAspectRatio="none" fill="none">
-            <defs>
-              <linearGradient id="cloudMobileL1" x1="0%" y1="0%" x2="0%" y2="100%">
-                <stop offset="0%" stopColor="#00AEEF" />
-                <stop offset="100%" stopColor="#0054A6" />
-              </linearGradient>
-              <linearGradient id="cloudMobileL2" x1="0%" y1="0%" x2="0%" y2="100%">
-                <stop offset="0%" stopColor="#009EE2" stopOpacity="0.85" />
-                <stop offset="100%" stopColor="#004D8C" />
-              </linearGradient>
-              <linearGradient id="cloudMobileL3" x1="0%" y1="0%" x2="0%" y2="100%">
-                <stop offset="0%" stopColor="#0072BC" />
-                <stop offset="100%" stopColor="#003580" />
-              </linearGradient>
-            </defs>
-            <path d="M-50,180 Q20,100 120,150 T310,140 T550,160 L550,350 L-50,350 Z" fill="url(#cloudMobileL1)" opacity="0.85" />
-            <path d="M-50,210 Q90,130 220,180 T460,160 T550,200 L550,350 L-50,350 Z" fill="url(#cloudMobileL2)" opacity="0.9" />
-            <path d="M-50,240 Q150,180 300,230 T550,210 L550,350 L-50,350 Z" fill="url(#cloudMobileL3)" />
-          </svg>
-          
-          {/* 1. SIGN UP SWITCHER / GREETING (SHOWN WHEN BLUE CONTAINER IS SMALL AT TOP IN LOGIN MODE) */}
+            {/* OVERLAPPING CLOUDS FLOW */}
+            <svg className="absolute bottom-0 left-0 w-full h-[65%] pointer-events-none select-none" viewBox="0 0 500 300" preserveAspectRatio="none" fill="none">
+              <defs>
+                <linearGradient id="cloudMobileL1" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stopColor="#00AEEF" />
+                  <stop offset="100%" stopColor="#0054A6" />
+                </linearGradient>
+                <linearGradient id="cloudMobileL2" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stopColor="#009EE2" stopOpacity="0.85" />
+                  <stop offset="100%" stopColor="#004D8C" />
+                </linearGradient>
+                <linearGradient id="cloudMobileL3" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stopColor="#0072BC" />
+                  <stop offset="100%" stopColor="#003580" />
+                </linearGradient>
+              </defs>
+              <path d="M-50,180 Q20,100 120,150 T310,140 T550,160 L550,300 L-50,300 Z" fill="url(#cloudMobileL1)" opacity="0.85" />
+              <path d="M-50,210 Q90,130 220,180 T460,160 T550,200 L550,300 L-50,300 Z" fill="url(#cloudMobileL2)" opacity="0.9" />
+              <path d="M-50,240 Q150,180 300,230 T550,210 L550,300 L-50,300 Z" fill="url(#cloudMobileL3)" />
+            </svg>
+          </div>
+
+          {/* BELUM TERDAFTAR? TEXT (ABOVE THE NOTCH IN LOGIN MODE - VISIBLE AT THE TOP) */}
           <motion.div
-            className="absolute inset-x-0 top-0 h-[120px] flex flex-col justify-center items-center px-4 text-center z-10"
+            style={{ opacity: signInOpacity }}
+            className="absolute bottom-3.5 inset-x-0 px-2 flex flex-col justify-end items-center text-center select-none pointer-events-none pb-0 z-25"
             animate={{
-              opacity: (mobilePhase === 'login' || mobilePhase === 'expandingToLogin') ? 1 : 0,
-              pointerEvents: (mobilePhase === 'login' || mobilePhase === 'expandingToLogin') ? 'auto' : 'none',
-              y: (mobilePhase === 'login' || mobilePhase === 'expandingToLogin') ? 0 : -20
+              pointerEvents: (mobilePhase === 'login' || mobilePhase === 'expandingToLogin') ? 'auto' : 'none'
             }}
-            transition={{ duration: 0.35 }}
           >
-            <h2 className="text-xs font-black text-white uppercase tracking-wider mb-0.5 mt-1">PORTAL CABANG</h2>
-            <p className="text-[7.5px] text-blue-100 font-bold uppercase tracking-wider mb-2">Butuh akses akun operasional?</p>
-            <button
-              type="button"
-              onClick={() => handleToggleMode(true)}
-              className="px-6 py-1 rounded-full bg-white text-indigo-950 hover:bg-slate-50 font-black text-[8px] uppercase tracking-widest transition-all duration-300 active:scale-95 cursor-pointer shadow-md shadow-indigo-950/10"
-            >
-              BUAT AKUN
-            </button>
+            <p className="text-[7px] font-light text-blue-200/60 leading-tight max-w-[285px] uppercase tracking-wider">
+              Daftarkan akun anda untuk memulai mencatat administrasi keuangan dan presensi anda dengan aplikasi Catet-in.
+            </p>
           </motion.div>
 
-          {/* 2. SIGN UP FORM PANEL (INTEGRATED INSIDE THE BLUE CONTAINER IN REGISTER MODE) */}
+          {/* SIGN UP NOTCH (PONY) - Integrated at the bottom center of the sliding card (Seamless waterdrop design, no top shadow bleeding, exact color match) */}
+          <div 
+            className="absolute bottom-[-35px] left-1/2 -translate-x-1/2 w-[140px] h-[36px] z-10 flex items-center justify-center cursor-pointer select-none"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleToggleMode(mobilePhase === 'login' || mobilePhase === 'expandingToLogin');
+            }}
+          >
+            {/* Exact smooth SVG "valley" (u-notch) shape, shifted up to clip the top shadow */}
+            <svg 
+              className="absolute top-[-4px] left-0 w-full h-[40px] drop-shadow-[0_4px_10px_rgba(0,53,128,0.3)] overflow-visible" 
+              viewBox="0 0 140 40" 
+              fill="none" 
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path d="M 0,0 H 140 V 4 C 110,4 95,36 70,36 C 45,36 30,4 0,4 Z" fill="#003580" />
+            </svg>
+
+            {/* Starlight accents inside notch, vertically balanced */}
+            <span className="relative z-10 text-[9px] font-black uppercase tracking-widest text-white hover:text-blue-100 active:scale-95 transition-all pb-1.5 select-none flex items-center space-x-1">
+              <span>{(mobilePhase === 'login' || mobilePhase === 'expandingToLogin') ? 'Daftar?' : 'Masuk?'}</span>
+            </span>
+          </div>
+          
+          {/* 3. SIGN UP FORM PANEL (INTEGRATED INSIDE THE BLUE CONTAINER IN REGISTER MODE) */}
           <motion.div
-            className="absolute inset-x-0 top-0 h-[420px] px-5 py-4 flex flex-col justify-between"
+            className="absolute inset-x-0 top-0 h-[505px] px-5 pt-4 pb-2 flex flex-col justify-between z-20"
+            initial={false}
+            style={{ opacity: signUpOpacity }}
             animate={{
-              opacity: (mobilePhase === 'register' || mobilePhase === 'expandingToRegister') ? 1 : 0,
               y: (mobilePhase === 'register' || mobilePhase === 'expandingToRegister') ? 0 : 30,
               pointerEvents: (mobilePhase === 'register' || mobilePhase === 'expandingToRegister') ? 'auto' : 'none'
             }}
             transition={{ duration: 0.35 }}
           >
-            <div className="flex-1 flex flex-col min-h-0">
+            <div className="flex-[3] flex flex-col min-h-0 max-h-[385px]">
               <div className="text-center pt-0.5 mb-2 shrink-0">
-                <h1 className="text-lg font-black tracking-tight text-white uppercase leading-none mb-0.5">Pendaftaran</h1>
-                <p className="text-[7.5px] text-blue-200/95 font-bold uppercase tracking-[0.1em]">Formulir Akses Baru</p>
+                <h1 className="text-lg font-black tracking-tight text-white uppercase leading-none mb-0.5">REGISTRASI AKUN</h1>
               </div>
 
-              <form onSubmit={handleRegisterSubmit} className="space-y-2 flex-1 overflow-y-auto no-scrollbar pr-0.5">
+              <form 
+                onSubmit={handleRegisterSubmit} 
+                onPointerDownCapture={(e) => e.stopPropagation()}
+                className="space-y-1 flex-1 overflow-y-auto no-scrollbar pr-0.5"
+              >
+                {/* Side-by-side Dropdowns for Instansi Cabang and Aplikasi Akses */}
+                <div className="grid grid-cols-2 gap-1.5 relative z-50">
+                  {/* Instansi Cabang Custom Dropdown */}
+                  <div className="space-y-0.5 relative">
+                    <label className="text-[7.5px] font-black text-blue-100/90 uppercase tracking-widest ml-1 block">Instansi Cabang</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsMobileDropdownOpen(!isMobileDropdownOpen);
+                        setIsAppDropdownOpen(false);
+                      }}
+                      className="w-full px-2 py-1 bg-white/10 border border-white/15 focus:border-white focus:bg-white/20 text-white rounded-lg text-[10px] font-bold outline-none uppercase cursor-pointer flex items-center justify-between min-h-[26px] text-left"
+                    >
+                      <span className="truncate">
+                        {regFirebaseConfig 
+                          ? (configs.find(c => c.id === regFirebaseConfig)?.instansiName || regFirebaseConfig).toUpperCase() 
+                          : "PILIH INSTANSI"}
+                      </span>
+                      <ChevronDown size={11} className={`text-blue-100/80 transition-transform duration-200 ${isMobileDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {isMobileDropdownOpen && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setIsMobileDropdownOpen(false)} />
+                        <div className="absolute left-0 right-0 mt-1 bg-white/80 backdrop-blur-md border border-white/20 rounded-lg shadow-2xl z-50 max-h-44 overflow-y-auto py-1 animate-in fade-in slide-in-from-top-1 duration-150 text-slate-800">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRegFirebaseConfig('');
+                              setIsMobileDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-3 py-1.5 text-[8.5px] uppercase font-bold transition-colors border-b border-slate-100/50 ${!regFirebaseConfig ? 'bg-blue-100/70 text-blue-800 font-extrabold' : 'text-slate-400 hover:bg-blue-50/50 hover:text-blue-600'}`}
+                          >
+                            -- PILIH INSTANSI --
+                          </button>
+                          {configs.map(c => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => {
+                                setRegFirebaseConfig(c.id);
+                                setIsMobileDropdownOpen(false);
+                              }}
+                              className={`w-full text-left px-3 py-1.5 text-[8.5px] uppercase font-bold transition-colors flex items-center justify-between ${regFirebaseConfig === c.id ? 'bg-blue-100/90 text-blue-900 font-extrabold hover:bg-blue-200/80' : 'text-slate-700 hover:bg-blue-50/50 hover:text-blue-600'}`}
+                            >
+                              <span className="truncate">{String(c.instansiName || c.id).toUpperCase()}</span>
+                              {regFirebaseConfig === c.id && <CheckCircle size={9} className="text-blue-600 shrink-0 ml-1" />}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Aplikasi Akses Custom Dropdown */}
+                  <div className="space-y-0.5 relative">
+                    <label className="text-[7.5px] font-black text-blue-100/90 uppercase tracking-widest ml-1 block">Aplikasi Akses</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAppDropdownOpen(!isAppDropdownOpen);
+                        setIsMobileDropdownOpen(false);
+                      }}
+                      className="w-full px-2 py-1 bg-white/10 border border-white/15 focus:border-white focus:bg-white/20 text-white rounded-lg text-[10px] font-bold outline-none uppercase cursor-pointer flex items-center justify-between min-h-[26px] text-left"
+                    >
+                      <span className="truncate">
+                        {(() => {
+                          const selected = [];
+                          if (regWebAccess.bendahara) selected.push("BENDAHARA");
+                          if (regWebAccess.absensi) selected.push("ABSENSI");
+                          return selected.length > 0 ? selected.join(", ") : "PILIH AKSES";
+                        })()}
+                      </span>
+                      <ChevronDown size={11} className={`text-blue-100/80 transition-transform duration-200 ${isAppDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {isAppDropdownOpen && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setIsAppDropdownOpen(false)} />
+                        <div className="absolute left-0 right-0 mt-1 bg-white/80 backdrop-blur-md border border-white/20 rounded-lg shadow-2xl z-50 overflow-y-auto py-1 animate-in fade-in slide-in-from-top-1 duration-150 text-slate-800">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRegWebAccess({
+                                ...regWebAccess,
+                                bendahara: !regWebAccess.bendahara
+                              });
+                            }}
+                            className={`w-full text-left px-3 py-2 text-[8.5px] uppercase font-bold transition-colors flex items-center justify-between border-b border-slate-100/50 ${regWebAccess.bendahara ? 'bg-blue-100/90 text-blue-900 font-extrabold hover:bg-blue-200/80' : 'text-slate-700 hover:bg-blue-50/50 hover:text-blue-600'}`}
+                          >
+                            <span className="flex items-center space-x-1.5">
+                              {regWebAccess.bendahara ? <CheckSquare size={10} className="text-blue-700 shrink-0" /> : <Square size={10} className="text-slate-400 shrink-0" />}
+                              <span>BENDAHARA</span>
+                            </span>
+                            {regWebAccess.bendahara && <CheckCircle size={9} className="text-blue-600 shrink-0" />}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRegWebAccess({
+                                ...regWebAccess,
+                                absensi: !regWebAccess.absensi
+                              });
+                            }}
+                            className={`w-full text-left px-3 py-2 text-[8.5px] uppercase font-bold transition-colors flex items-center justify-between ${regWebAccess.absensi ? 'bg-blue-100/90 text-blue-900 font-extrabold hover:bg-blue-200/80' : 'text-slate-700 hover:bg-blue-50/50 hover:text-blue-600'}`}
+                          >
+                            <span className="flex items-center space-x-1.5">
+                              {regWebAccess.absensi ? <CheckSquare size={10} className="text-blue-700 shrink-0" /> : <Square size={10} className="text-slate-400 shrink-0" />}
+                              <span>ABSENSI</span>
+                            </span>
+                            {regWebAccess.absensi && <CheckCircle size={9} className="text-blue-600 shrink-0" />}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
                 <div className="space-y-0.5">
                   <label className="text-[7.5px] font-black text-blue-100/90 uppercase tracking-widest ml-1">Nama Lengkap</label>
                   <input
                     type="text"
                     required
-                    placeholder="Contoh: AHMAD"
+                    placeholder="Nama Lengkap Anda"
                     value={regFullName}
                     onChange={(e) => setRegFullName(e.target.value)}
-                    className="w-full px-2.5 py-1.5 bg-white/10 border border-white/15 focus:border-white focus:bg-white/20 text-white placeholder-blue-200/50 rounded-lg text-[10.5px] font-bold outline-none uppercase transition-all"
+                    className="w-full px-2.5 py-1 bg-white/10 border border-white/15 focus:border-white focus:bg-white/20 text-white placeholder-blue-200/50 rounded-lg text-[10.5px] font-bold outline-none uppercase transition-all"
                   />
                 </div>
 
@@ -1028,10 +1219,10 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
                   <input
                     type="text"
                     required
-                    placeholder="ahmad354"
+                    placeholder="username123"
                     value={regUsername}
                     onChange={(e) => setRegUsername(e.target.value)}
-                    className="w-full px-2.5 py-1.5 bg-white/10 border border-white/15 focus:border-white focus:bg-white/20 text-white placeholder-blue-200/50 rounded-lg text-[10.5px] font-bold outline-none transition-all"
+                    className="w-full px-2.5 py-1 bg-white/10 border border-white/15 focus:border-white focus:bg-white/20 text-white placeholder-blue-200/50 rounded-lg text-[10.5px] font-bold outline-none transition-all"
                   />
                 </div>
 
@@ -1040,10 +1231,10 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
                   <input
                     type="email"
                     required
-                    placeholder="ahmad@gmail.com"
+                    placeholder="email@catetin.com"
                     value={regEmail}
                     onChange={(e) => setRegEmail(e.target.value)}
-                    className="w-full px-2.5 py-1.5 bg-white/10 border border-white/15 focus:border-white focus:bg-white/20 text-white placeholder-blue-200/50 rounded-lg text-[10.5px] font-bold outline-none transition-all"
+                    className="w-full px-2.5 py-1 bg-white/10 border border-white/15 focus:border-white focus:bg-white/20 text-white placeholder-blue-200/50 rounded-lg text-[10.5px] font-bold outline-none transition-all"
                   />
                 </div>
 
@@ -1055,58 +1246,21 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
                     placeholder="Masukkan password"
                     value={regPassword}
                     onChange={(e) => setRegPassword(e.target.value)}
-                    className="w-full px-2.5 py-1.5 bg-white/10 border border-white/15 focus:border-white focus:bg-white/20 text-white placeholder-blue-200/50 rounded-lg text-[10.5px] font-bold outline-none transition-all"
+                    className="w-full px-2.5 py-1 bg-white/10 border border-white/15 focus:border-white focus:bg-white/20 text-white placeholder-blue-200/50 rounded-lg text-[10.5px] font-bold outline-none transition-all"
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="space-y-0.5">
-                    <label className="text-[7.5px] font-black text-blue-100/90 uppercase tracking-widest ml-1 block">Jabatan</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="BENDAHARA"
-                      value={regJabatan}
-                      onChange={(e) => setRegJabatan(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-white/10 border border-white/15 focus:border-white focus:bg-white/20 text-white placeholder-blue-200/50 rounded-lg text-[10.5px] font-bold outline-none uppercase transition-all"
-                    />
-                  </div>
-                  <div className="space-y-0.5">
-                    <label className="text-[7.5px] font-black text-blue-100/90 uppercase tracking-widest ml-1 block">Instansi Cabang</label>
-                    <select
-                      value={regFirebaseConfig}
-                      onChange={(e) => setRegFirebaseConfig(e.target.value)}
-                      className="w-full px-2 py-1.5 bg-white/10 border border-white/15 focus:border-white focus:bg-white/20 text-white rounded-lg text-[10px] font-bold outline-none uppercase cursor-pointer"
-                    >
-                      {configs.map(c => (
-                        <option key={c.id} value={c.id} className="text-slate-800 bg-white">
-                          {String(c.instansiName || c.id).toUpperCase()}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[7.5px] font-black text-blue-100/90 uppercase tracking-widest ml-1 block">Aplikasi Yang Diakses</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setRegWebAccess({ ...regWebAccess, bendahara: !regWebAccess.bendahara })}
-                      className={`px-2 py-1 rounded-lg border flex items-center justify-center space-x-1 cursor-pointer transition-all ${regWebAccess.bendahara ? 'bg-white/20 border-white text-white font-bold' : 'bg-white/5 border-white/10 text-blue-200 hover:bg-white/10'}`}
-                    >
-                      {regWebAccess.bendahara ? <CheckSquare size={10} className="text-white shrink-0" /> : <Square size={10} className="shrink-0" />}
-                      <span className="text-[8px] uppercase tracking-wider">Bendahara</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRegWebAccess({ ...regWebAccess, absensi: !regWebAccess.absensi })}
-                      className={`px-2 py-1 rounded-lg border flex items-center justify-center space-x-1 cursor-pointer transition-all ${regWebAccess.absensi ? 'bg-white/20 border-white text-white font-bold' : 'bg-white/5 border-white/10 text-blue-200 hover:bg-white/10'}`}
-                    >
-                      {regWebAccess.absensi ? <CheckSquare size={10} className="text-white shrink-0" /> : <Square size={10} className="shrink-0" />}
-                      <span className="text-[8px] uppercase tracking-wider">Absensi</span>
-                    </button>
-                  </div>
+                {/* Jabatan - Full Width below Password */}
+                <div className="space-y-0.5">
+                  <label className="text-[7.5px] font-black text-blue-100/90 uppercase tracking-widest ml-1 block">Jabatan</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Jabatan Anda"
+                    value={regJabatan}
+                    onChange={(e) => setRegJabatan(e.target.value)}
+                    className="w-full px-2.5 py-1 bg-white/10 border border-white/15 focus:border-white focus:bg-white/20 text-white placeholder-blue-200/50 rounded-lg text-[10.5px] font-bold outline-none uppercase transition-all"
+                  />
                 </div>
 
                 {registerError && (
@@ -1133,14 +1287,22 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
                 </div>
               </form>
             </div>
+
+            {/* SUDAH ADA AKUN? TEXT (ABOVE THE NOTCH IN REGISTER MODE) */}
+            <div className="flex flex-col justify-end items-center text-center pb-3.5 select-none pointer-events-none mt-1 shrink-0 px-2">
+              <p className="text-[7px] font-light text-blue-200/60 leading-tight max-w-[285px] uppercase tracking-wider">
+                Masuk menggunakan akun anda untuk memulai mencatat administrasi keuangan dan presensi anda dengan aplikasi Catet-in.
+              </p>
+            </div>
           </motion.div>
         </motion.div>
 
         {/* 3. SIGN IN FORM PANEL (STATIONARY ON SYSTEM WHITE CANVAS AT THE BOTTOM PORTION) */}
         <motion.div
-          className="absolute top-[120px] left-0 right-0 h-[420px] px-5 py-4 flex flex-col justify-between z-10"
+          className="absolute inset-x-0 top-[85px] bottom-0 px-5 pt-3 pb-6 flex flex-col justify-between z-10"
+          initial={false}
+          style={{ opacity: signInOpacity }}
           animate={{
-            opacity: (mobilePhase === 'login' || mobilePhase === 'expandingToLogin') ? 1 : 0,
             y: (mobilePhase === 'login' || mobilePhase === 'expandingToLogin') ? 0 : 20,
             pointerEvents: (mobilePhase === 'login' || mobilePhase === 'expandingToLogin') ? 'auto' : 'none'
           }}
@@ -1148,8 +1310,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
         >
           <div className="space-y-2.5">
             <div className="text-center pt-0.5">
-              <h1 className="text-lg font-black tracking-tight text-slate-800 uppercase leading-none mb-1">Masuk Sistem</h1>
-              <p className="text-[8px] text-slate-400 font-bold uppercase tracking-[0.1em]">Otorisasi Akses Cabang</p>
+              <h1 className="text-lg font-black tracking-tight text-slate-800 uppercase leading-none mb-1">SELAMAT DATANG</h1>
               
               <div className="flex justify-center space-x-3 mt-2 mb-0.5">
                 <button 
@@ -1176,12 +1337,16 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
                   type="button" 
                   onClick={() => handleSocialClick('twitter')}
                   title="Sign in with X"
-                  className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-505 hover:bg-slate-50 hover:text-slate-900 active:scale-95 cursor-pointer transition-all shadow-sm bg-white"
+                  className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-550 hover:bg-slate-50 hover:text-slate-900 active:scale-95 cursor-pointer transition-all shadow-sm bg-white"
                 >
                   <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
                   </svg>
                 </button>
+              </div>
+
+              <div className="text-center mt-1.5">
+                <p className="text-[7.5px] text-slate-400 font-extrabold uppercase tracking-widest">atau menggunakan akun anda</p>
               </div>
             </div>
 
@@ -1248,7 +1413,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
                   <Loader2 size={11} className="animate-spin text-white" />
                 ) : (
                   <>
-                    <span>MASUK PORTAL</span>
+                    <span>MASUK SISTEM</span>
                     <ArrowRight size={11} className="text-white" />
                   </>
                 )}
@@ -1279,25 +1444,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
           </div>
         </motion.div>
 
-        {/* 4. WELCOME BACK SWITCHER (STATIONARY ON WHITE BG AT BOTTOM WHEN IN REGISTER MODE) */}
-        <motion.div
-          className="absolute bottom-0 left-0 right-0 h-[120px] flex flex-col justify-center items-center px-4 text-center bg-white z-10"
-          animate={{
-            opacity: (mobilePhase === 'register' || mobilePhase === 'expandingToRegister') ? 1 : 0,
-            y: (mobilePhase === 'register' || mobilePhase === 'expandingToRegister') ? 0 : 20,
-            pointerEvents: (mobilePhase === 'register' || mobilePhase === 'expandingToRegister') ? 'auto' : 'none'
-          }}
-          transition={{ duration: 0.3 }}
-        >
-          <p className="text-[8.5px] text-slate-400 font-extrabold uppercase tracking-wider mb-2">Sudah punya akun resmi instansi cabang?</p>
-          <button
-            type="button"
-            onClick={() => handleToggleMode(false)}
-            className="px-8 py-1.5 rounded-full bg-slate-950 text-white hover:bg-slate-900 font-black text-[8px] uppercase tracking-widest transition-all duration-300 active:scale-95 cursor-pointer shadow-md shadow-slate-900/10"
-          >
-            Masuk Portal
-          </button>
-        </motion.div>
+
       </div>
 
       {/* COMING SOON SOCIAL LOGIN MODAL */}

@@ -502,6 +502,49 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
     }
   };
 
+  const handleOpenAdd = () => {
+    try {
+      if (editingMember !== null) {
+        setEditingMember(null);
+      }
+      const initialForm: Partial<AbsensiMember> = {
+        nama_lengkap: "",
+        daerah_id: daerahs.length === 1 ? String(daerahs[0].id) : "",
+        desa_id: desas.length === 1 ? String(desas[0].id) : "",
+        kelompok_id: kelompoks.length === 1 ? String(kelompoks[0].id) : "",
+        age_category_id: ages.length === 1 ? String(ages[0].id) : "",
+        tempat_lahir: "",
+        tanggal_lahir: "",
+        no_hp_anggota: "",
+        jenis_kelamin: "Laki-laki",
+        alamat_rumah: "",
+        pendidikan: "",
+        kelas: "",
+        rfid: "",
+        rfid_ktp: "",
+        family_id: "",
+        relationship_id: "",
+        pekerjaan: "",
+        status: "",
+      };
+      
+      const savedDraft = localStorage.getItem("absensi_member_registration_draft");
+      if (savedDraft) {
+        const parsedDraft = JSON.parse(savedDraft);
+        if (daerahs.length === 1) parsedDraft.daerah_id = String(daerahs[0].id);
+        if (desas.length === 1) parsedDraft.desa_id = String(desas[0].id);
+        if (kelompoks.length === 1) parsedDraft.kelompok_id = String(kelompoks[0].id);
+        if (ages.length === 1) parsedDraft.age_category_id = String(ages[0].id);
+        setFormData(parsedDraft);
+      } else {
+        setFormData(initialForm);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    setShowModal(true);
+  };
+
   const handleEdit = (member: AbsensiMember) => {
     setEditingMember(member);
     setFormData({
@@ -1491,43 +1534,9 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                   Import
                 </button>
 
-                {/* Registrasi Anggota (Desktop) */}
+                 {/* Registrasi Anggota (Desktop) */}
                 <button
-                  onClick={() => {
-                    setEditingMember(null);
-                    try {
-                      const savedDraft = localStorage.getItem(
-                        "absensi_member_registration_draft",
-                      );
-                      if (savedDraft) {
-                        setFormData(JSON.parse(savedDraft));
-                      } else {
-                        setFormData({
-                          nama_lengkap: "",
-                          daerah_id: "",
-                          desa_id: "",
-                          kelompok_id: "",
-                          age_category_id: "",
-                          tempat_lahir: "",
-                          tanggal_lahir: "",
-                          no_hp_anggota: "",
-                          jenis_kelamin: "Laki-laki",
-                          alamat_rumah: "",
-                          pendidikan: "",
-                          kelas: "",
-                          rfid: "",
-                          rfid_ktp: "",
-                          family_id: "",
-                          relationship_id: "",
-                          pekerjaan: "",
-                          status: "",
-                        });
-                      }
-                    } catch (e) {
-                      console.error(e);
-                    }
-                    setShowModal(true);
-                  }}
+                  onClick={handleOpenAdd}
                   className="hidden md:flex px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold items-center justify-center gap-2 transition-all shadow-lg shadow-blue-200"
                 >
                   <UserPlus size={20} />
@@ -4105,41 +4114,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
           initial={{ scale: 0, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           whileTap={{ scale: 0.9 }}
-          onClick={() => {
-            setEditingMember(null);
-            try {
-              const savedDraft = localStorage.getItem(
-                "absensi_member_registration_draft",
-              );
-              if (savedDraft) {
-                setFormData(JSON.parse(savedDraft));
-              } else {
-                setFormData({
-                  nama_lengkap: "",
-                  daerah_id: "",
-                  desa_id: "",
-                  kelompok_id: "",
-                  age_category_id: "",
-                  tempat_lahir: "",
-                  tanggal_lahir: "",
-                  no_hp_anggota: "",
-                  jenis_kelamin: "Laki-laki",
-                  alamat_rumah: "",
-                  pendidikan: "",
-                  kelas: "",
-                  rfid: "",
-                  rfid_ktp: "",
-                  family_id: "",
-                  relationship_id: "",
-                  pekerjaan: "",
-                  status: "",
-                });
-              }
-            } catch (e) {
-              console.error(e);
-            }
-            setShowModal(true);
-          }}
+          onClick={handleOpenAdd}
           className="md:hidden fixed right-6 bottom-24 z-40 w-14 h-14 bg-blue-600 text-white rounded-full shadow-2xl flex items-center justify-center active:scale-95 transition-all"
         >
           <UserPlus size={24} />

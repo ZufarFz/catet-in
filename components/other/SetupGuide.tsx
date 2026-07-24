@@ -235,6 +235,14 @@ const SUPABASE_CENTRAL_SQL = `-- ===============================================
 create extension if not exists pgcrypto;
 
 -- 2. CENTRAL TABLES
+-- MIGRATION NOTE FOR EXISTING DATABASE:
+-- Jika tabel 'public.users' Anda sudah ada dari setup sebelumnya, jalankan query berikut untuk menambahkan kolom pembatasan akses data:
+-- ALTER TABLE public.users ADD COLUMN IF NOT EXISTS restricted_daerah_id text;
+-- ALTER TABLE public.users ADD COLUMN IF NOT EXISTS restricted_desa_id text;
+-- ALTER TABLE public.users ADD COLUMN IF NOT EXISTS restricted_kelompok_id text;
+-- ALTER TABLE public.users ADD COLUMN IF NOT EXISTS restricted_age_category_id text;
+-- ALTER TABLE public.users ADD COLUMN IF NOT EXISTS grouping_write_permissions jsonb;
+
 create table if not exists public.users (
   id text primary key, -- mapped from user auth UID
   email text,
@@ -245,6 +253,11 @@ create table if not exists public.users (
   instansi text, -- reference instance Id
   web_access text default 'bendahara,absensi', -- comma-separated (e.g. 'bendahara,absensi')
   status text default 'Pending',
+  restricted_daerah_id text, -- granular access constraint: Daerah
+  restricted_desa_id text, -- granular access constraint: Desa
+  restricted_kelompok_id text, -- granular access constraint: Kelompok
+  restricted_age_category_id text, -- granular access constraint: Kategori Usia
+  grouping_write_permissions jsonb default '{}'::jsonb, -- jsonb-based granular grouping write permissions (Age, Daerah, Desa, Kelompok, Event, Family, Relationship, Label)
   created_at timestamp with time zone default timezone('utc'::text, now())
 );
 
@@ -370,8 +383,6 @@ create table if not exists public.transactions (
   project_name text,
   debit numeric default 0,
   credit numeric default 0,
-  balance numeric default 0,
-  amount numeric default 0,
   created_at text,
   created_by text,
   created_by_role text,
@@ -390,8 +401,6 @@ create table if not exists public.deleted_transactions (
   project_name text,
   debit numeric default 0,
   credit numeric default 0,
-  balance numeric default 0,
-  amount numeric default 0,
   created_at text,
   created_by text,
   created_by_role text,
@@ -557,12 +566,15 @@ create table if not exists public.attendance_logs (
 );
 
 -- events table
+-- MIGRATION NOTE UNTUK DATABASE DENGAN TABEL EVENTS LAMA:
+-- ALTER TABLE public.events ADD COLUMN IF NOT EXISTS updated_at timestamp with time zone default now();
+-- ALTER TABLE public.events DROP COLUMN IF EXISTS tanggal_kegiatan;
 create table if not exists public.events (
   id text primary key,
   nama_kegiatan text not null,
-  tanggal_kegiatan text,
   keterangan text,
   created_at timestamp with time zone default now(),
+  updated_at timestamp with time zone default now(),
   jam_mulai text,
   target_labels text[],
   instansi text not null default public.get_user_instansi()
@@ -762,6 +774,251 @@ create policy "Strict Instansi Select RLS" on public.events for select to authen
 create policy "Strict Instansi Insert RLS" on public.events for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
 create policy "Strict Instansi Update RLS" on public.events for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
 create policy "Strict Instansi Delete RLS" on public.events for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- 5. TABEL KEEP-ALIVE SUPABASE (Khusus RLS Bebas Tanpa Login / Public Untuk Cron Job)
+create table if not exists public.supabase_keep_alive (
+  id integer primary key,
+  last_ping timestamp with time zone default timezone('utc'::text, now()),
+  project_name text default 'Catet-In Keep Alive'
+);
+
+-- Masukkan data awal tunggal (single record) jika belum ada
+insert into public.supabase_keep_alive (id, last_ping, project_name)
+values (1, now(), 'Catet-In Keep Alive')
+on conflict (id) do nothing;
+
+-- Aktifkan Row Level Security (RLS) khusus untuk tabel keep_alive ini
+alter table public.supabase_keep_alive enable row level security;
+
+-- Drop policy lama jika ada
+drop policy if exists "Allow public select on keep alive" on public.supabase_keep_alive;
+drop policy if exists "Allow public update on keep alive" on public.supabase_keep_alive;
+
+-- Buat policy baru: Akses publik khusus Read-Only (SELECT) saja tanpa login (menggunakan anon key / REST)
+-- Catatan: Akses INSERT, UPDATE, dan DELETE ditolak secara otomatis untuk anon/publik karena tidak memiliki policy yang mengizinkannya.
+create policy "Allow public select on keep alive" on public.supabase_keep_alive for select using (true);
+
+-- 6. RPC AGGREGATION FUNCTION UNTUK DASHBOARD TERPISAH (SANGAT HEMAT BANDWIDTH / EGRESS)
+create or replace function public.get_event_dashboard_summary(p_event_id text, p_instansi text default null)
+returns jsonb as $$
+declare
+  v_last_5_dates text[];
+  v_meeting_stats jsonb;
+  v_overall jsonb;
+  v_top_hadir jsonb;
+  v_top_izin jsonb;
+  v_top_alpa jsonb;
+  v_top_terlambat jsonb;
+  v_total_meetings int;
+begin
+  select array_agg(d) into v_last_5_dates
+  from (
+    select distinct split_part(date, ' ', 1) as d
+    from public.attendance_logs
+    where event_id = p_event_id
+      and (p_instansi is null or instansi = p_instansi)
+      and date is not null
+    order by d desc
+    limit 5
+  ) t;
+
+  if v_last_5_dates is null or array_length(v_last_5_dates, 1) = 0 then
+    return jsonb_build_object(
+      'eventId', p_event_id,
+      'meetingStats', '[]'::jsonb,
+      'overall', jsonb_build_object('totalLogs', 0, 'totalHadir', 0, 'totalIzin', 0, 'totalSakit', 0, 'totalAlpa', 0, 'presenceRate', 0, 'meetingCount', 0),
+      'top5Hadir', '[]'::jsonb,
+      'top5Izin', '[]'::jsonb,
+      'top5Alpa', '[]'::jsonb,
+      'top5Terlambat', '[]'::jsonb
+    );
+  end if;
+
+  v_total_meetings := array_length(v_last_5_dates, 1);
+
+  select jsonb_agg(
+    jsonb_build_object(
+      'meetingNumber', row_number,
+      'dateStr', d,
+      'dateFormatted', d,
+      'total', coalesce(total, 0),
+      'hadir', coalesce(hadir, 0),
+      'izin', coalesce(izin, 0),
+      'sakit', coalesce(sakit, 0),
+      'alpa', coalesce(alpa, 0),
+      'pct', case when coalesce(total,0) > 0 then round((coalesce(hadir,0)::numeric / total::numeric) * 100) else 0 end
+    )
+  ) into v_meeting_stats
+  from (
+    select 
+      d,
+      row_number() over (order by d asc) as row_number,
+      count(*) as total,
+      count(*) filter (where status = 'Hadir') as hadir,
+      count(*) filter (where status = 'Izin') as izin,
+      count(*) filter (where status = 'Sakit') as sakit,
+      count(*) filter (where status = 'Alpa') as alpa
+    from unnest(v_last_5_dates) as d
+    left join public.attendance_logs l 
+      on l.event_id = p_event_id 
+     and (p_instansi is null or l.instansi = p_instansi)
+     and l.date like d || '%'
+    group by d
+    order by d asc
+  ) sub;
+
+  select jsonb_build_object(
+    'totalLogs', count(*),
+    'totalHadir', count(*) filter (where status = 'Hadir'),
+    'totalIzin', count(*) filter (where status = 'Izin'),
+    'totalSakit', count(*) filter (where status = 'Sakit'),
+    'totalAlpa', count(*) filter (where status = 'Alpa'),
+    'presenceRate', case when count(*) > 0 then round((count(*) filter (where status = 'Hadir')::numeric / count(*)::numeric) * 100) else 0 end,
+    'meetingCount', v_total_meetings
+  ) into v_overall
+  from public.attendance_logs
+  where event_id = p_event_id
+    and (p_instansi is null or instansi = p_instansi)
+    and split_part(date, ' ', 1) = any(v_last_5_dates);
+
+  select coalesce(jsonb_agg(
+    jsonb_build_object(
+      'memberId', coalesce("memberId", 'unknown'),
+      'memberName', coalesce("memberName", 'Tanpa Nama'),
+      'kelompokName', coalesce("kelompokName", '-'),
+      'count', hadir_cnt,
+      'totalMeetings', v_total_meetings,
+      'pct', round((hadir_cnt::numeric / v_total_meetings::numeric) * 100),
+      'izinCount', izin_cnt
+    )
+  ), '[]'::jsonb) into v_top_hadir
+  from (
+    select "memberId", "memberName", "kelompokName",
+           count(*) filter (where status = 'Hadir') as hadir_cnt,
+           count(*) filter (where status = 'Izin') as izin_cnt,
+           count(*) as total_rec
+    from public.attendance_logs
+    where event_id = p_event_id
+      and (p_instansi is null or instansi = p_instansi)
+      and split_part(date, ' ', 1) = any(v_last_5_dates)
+    group by "memberId", "memberName", "kelompokName"
+    having count(*) filter (where status = 'Hadir') > 0
+    order by hadir_cnt desc, total_rec desc
+    limit 5
+  ) t_h;
+
+  select coalesce(jsonb_agg(
+    jsonb_build_object(
+      'memberId', coalesce("memberId", 'unknown'),
+      'memberName', coalesce("memberName", 'Tanpa Nama'),
+      'kelompokName', coalesce("kelompokName", '-'),
+      'count', izin_sakit_cnt,
+      'totalMeetings', v_total_meetings,
+      'izinCount', izin_cnt,
+      'sakitCount', sakit_cnt
+    )
+  ), '[]'::jsonb) into v_top_izin
+  from (
+    select "memberId", "memberName", "kelompokName",
+           count(*) filter (where status in ('Izin', 'Sakit')) as izin_sakit_cnt,
+           count(*) filter (where status = 'Izin') as izin_cnt,
+           count(*) filter (where status = 'Sakit') as sakit_cnt
+    from public.attendance_logs
+    where event_id = p_event_id
+      and (p_instansi is null or instansi = p_instansi)
+      and split_part(date, ' ', 1) = any(v_last_5_dates)
+    group by "memberId", "memberName", "kelompokName"
+    having count(*) filter (where status in ('Izin', 'Sakit')) > 0
+    order by izin_sakit_cnt desc
+    limit 5
+  ) t_i;
+
+  select coalesce(jsonb_agg(
+    jsonb_build_object(
+      'memberId', coalesce("memberId", 'unknown'),
+      'memberName', coalesce("memberName", 'Tanpa Nama'),
+      'kelompokName', coalesce("kelompokName", '-'),
+      'count', alpa_cnt,
+      'totalMeetings', v_total_meetings,
+      'pct', round((alpa_cnt::numeric / v_total_meetings::numeric) * 100)
+    )
+  ), '[]'::jsonb) into v_top_alpa
+  from (
+    select "memberId", "memberName", "kelompokName",
+           count(*) filter (where status = 'Alpa') as alpa_cnt
+    from public.attendance_logs
+    where event_id = p_event_id
+      and (p_instansi is null or instansi = p_instansi)
+      and split_part(date, ' ', 1) = any(v_last_5_dates)
+    group by "memberId", "memberName", "kelompokName"
+    having count(*) filter (where status = 'Alpa') > 0
+    order by alpa_cnt desc
+    limit 5
+  ) t_a;
+
+  select coalesce(jsonb_agg(
+    jsonb_build_object(
+      'memberId', coalesce("memberId", 'unknown'),
+      'memberName', coalesce("memberName", 'Tanpa Nama'),
+      'kelompokName', coalesce("kelompokName", '-'),
+      'count', late_cnt,
+      'totalMinutes', total_late_min,
+      'totalMeetings', v_total_meetings,
+      'formattedLate', case 
+        when total_late_min >= 60 then (total_late_min / 60)::text || 'j ' || (total_late_min % 60)::text || 'm'
+        else total_late_min::text || 'm'
+      end
+    )
+  ), '[]'::jsonb) into v_top_terlambat
+  from (
+    select 
+      sub."memberId", 
+      sub."memberName", 
+      sub."kelompokName",
+      count(*) as late_cnt,
+      sum(sub.late_min)::int as total_late_min
+    from (
+      select 
+        l."memberId",
+        l."memberName",
+        l."kelompokName",
+        greatest(
+          0,
+          floor(
+            extract(
+              epoch from (
+                (substring(coalesce(nullif(l.date, ''), nullif(l."dateInput", '')) from '([0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)'))::time - 
+                (substring(coalesce(nullif(l.jam_mulai, ''), nullif(e.jam_mulai, '')) from '([0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)'))::time
+              )
+            ) / 60
+          )
+        ) as late_min
+      from public.attendance_logs l
+      left join public.events e on e.id = l.event_id
+      where l.event_id = p_event_id
+        and (p_instansi is null or l.instansi = p_instansi)
+        and split_part(l.date, ' ', 1) = any(v_last_5_dates)
+        and l.status = 'Hadir'
+        and coalesce(nullif(l.jam_mulai, ''), nullif(e.jam_mulai, ''), '') ~ '[0-9]{1,2}:[0-9]{2}'
+        and coalesce(nullif(l.date, ''), nullif(l."dateInput", ''), '') ~ '[0-9]{1,2}:[0-9]{2}'
+    ) sub
+    where sub.late_min > 0
+    group by sub."memberId", sub."memberName", sub."kelompokName"
+    order by total_late_min desc, late_cnt desc
+    limit 5
+  ) t_t;
+
+  return jsonb_build_object(
+    'eventId', p_event_id,
+    'meetingStats', coalesce(v_meeting_stats, '[]'::jsonb),
+    'overall', coalesce(v_overall, jsonb_build_object('totalLogs', 0, 'totalHadir', 0, 'totalIzin', 0, 'totalSakit', 0, 'totalAlpa', 0, 'presenceRate', 0, 'meetingCount', 0)),
+    'top5Hadir', coalesce(v_top_hadir, '[]'::jsonb),
+    'top5Izin', coalesce(v_top_izin, '[]'::jsonb),
+    'top5Alpa', coalesce(v_top_alpa, '[]'::jsonb),
+    'top5Terlambat', coalesce(v_top_terlambat, '[]'::jsonb)
+  );
+end;
+$$ language plpgsql security definer;
 `;
 
 const SUPABASE_OPERATIONAL_SQL = `-- =========================================================================
@@ -1249,9 +1506,12 @@ const SetupGuide: React.FC<SetupGuideProps> = ({ onLogout }) => {
              <div className="p-5 bg-white rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-between space-y-4">
                <div className="space-y-2">
                  <span className="px-2 py-0.5 bg-rose-100 text-rose-700 rounded-lg text-[8px] font-black uppercase tracking-widest font-mono">METODE PINGER JALUR API LUAR</span>
-                 <h6 className="text-[11px] font-black uppercase tracking-tight text-rose-950 font-bold">B. Cron-Job / UptimeRobot REST Ping</h6>
+                 <h6 className="text-[11px] font-black uppercase tracking-tight text-rose-950 font-bold">B. Cron-Job / UptimeRobot REST Ping (Tabel Khusus)</h6>
                  <p className="text-[9.5px] text-rose-700 leading-relaxed font-semibold">
-                   Cara paling kredibel & jaminan 100% database Anda tidak tidur adalah mendaftarkan URL HTTPS REST API Supabase ke layanan ping harian pihak ketiga yang gratis (seperti <b>cron-job.org</b> atau <b>UptimeRobot</b>).
+                   Cara paling kredibel & jaminan 100% database Anda tidak tidur adalah mendaftarkan URL HTTPS REST API Supabase ke layanan ping harian gratis (seperti <b>cron-job.org</b> atau <b>UptimeRobot</b>).
+                  </p>
+                  <p className="text-[8.5px] text-rose-600 font-bold leading-normal">
+                    💡 Khusus tabel <code className="bg-rose-50 px-1 py-0.5 rounded text-rose-850 font-mono text-[8px]">supabase_keep_alive</code>, RLS diset publik tanpa perlu login (bebas diakses anonim) demi mempermudah cron-job eksternal. Sementara tabel operasional lainnya tetap terproteksi penuh oleh RLS login Anda!
                  </p>
                </div>
 
@@ -1260,12 +1520,22 @@ const SetupGuide: React.FC<SetupGuideProps> = ({ onLogout }) => {
                  <ol className="list-decimal list-inside space-y-1 text-rose-700">
                    <li>Masuk dan buat akun gratis di <a href="https://cron-job.org" target="_blank" rel="noreferrer" className="text-rose-650 font-black underline">cron-job.org</a></li>
                    <li>Klik <b>Create Cronjob</b>, beri nama: <i>keep-supabase-awake</i></li>
-                   <li>Silakan pilih interval / frekuensi eksekusi: <span className="text-rose-950">Setiap 1 hari</span></li>
-                   <li>Di kolom Target URL, masukkan URL API Rest Anda: <br/>
-                     <code className="bg-white/80 p-0.5 font-mono text-[8px] border border-rose-150 rounded select-all font-semibold">
-                       {supabaseUrl ? `${supabaseUrl}/rest/v1/projects` : 'https://[your-supabase-url]/rest/v1/projects'}
+                   <li>Silakan pilih interval / frekuensi eksekusi: <span className="text-rose-950">Setiap 1 hari / Setiap jam</span></li>
+                   <li>Di kolom Target URL, masukkan URL Rest tabel keep-alive: <br/>
+                     <code className="bg-white/80 p-0.5 font-mono text-[8px] border border-rose-150 rounded select-all font-semibold block mt-1 overflow-x-auto whitespace-nowrap">
+                       {supabaseUrl ? `${supabaseUrl}/rest/v1/supabase_keep_alive?select=*` : 'https://[your-supabase-url]/rest/v1/supabase_keep_alive?select=*'}
                      </code>
                    </li>
+                    <li className="mt-1">
+                      Di bagian <b>Request Headers</b>, tambahkan dua header berikut agar lolos otentikasi REST Supabase secara publik:
+                      <div className="mt-1 font-mono text-[8px] bg-slate-900 text-slate-200 p-2 rounded space-y-1 text-left">
+                        <div><b>Key:</b> <code className="text-amber-300 font-mono">apikey</code></div>
+                        <div className="truncate"><b>Value:</b> <code className="text-emerald-300 font-mono font-semibold select-all">{supabaseAnonKey || '[ANON_KEY_ANDA]'}</code></div>
+                        <div className="border-t border-slate-700 my-1"></div>
+                        <div><b>Key:</b> <code className="text-amber-300 font-mono">Authorization</code></div>
+                        <div className="truncate"><b>Value:</b> <code className="text-emerald-300 font-mono font-semibold select-all">{supabaseAnonKey ? `Bearer ${supabaseAnonKey}` : 'Bearer [ANON_KEY_ANDA]'}</code></div>
+                      </div>
+                    </li>
                  </ol>
                </div>
              </div>

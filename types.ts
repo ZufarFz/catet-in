@@ -162,11 +162,11 @@ export interface AgeCategoryData {
 export interface EventData {
   id: string;
   nama_kegiatan: string;
-  tanggal_kegiatan?: string;
   keterangan?: string;
   created_at?: string;
+  updated_at?: string;
   jam_mulai?: string;
-  target_labels?: string[]; // New: list of custom label strings required/targeted for this event
+  target_labels?: string[]; // list of custom label strings required/targeted for this event
 }
 
 export interface LabelData {

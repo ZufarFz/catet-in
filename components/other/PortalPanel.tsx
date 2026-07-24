@@ -35,6 +35,19 @@ export const PortalPanel: React.FC<PortalPanelProps> = ({ onLogout, notify, conf
   const [editWebAccess, setEditWebAccess] = useState({ bendahara: true, absensi: true });
   const [editFirebaseConfig, setEditFirebaseConfig] = useState('');
   const [editStatus, setEditStatus] = useState('Active');
+  
+  // Scoped Restrictions states
+  const [editRestrictedDaerah, setEditRestrictedDaerah] = useState('');
+  const [editRestrictedDesa, setEditRestrictedDesa] = useState('');
+  const [editRestrictedKelompok, setEditRestrictedKelompok] = useState('');
+  const [editRestrictedAgeCategory, setEditRestrictedAgeCategory] = useState('');
+  const [editGroupingWritePermissions, setEditGroupingWritePermissions] = useState<Record<string, boolean>>({});
+
+  // Geographical lists for dropdowns
+  const [allDaerahs, setAllDaerahs] = useState<any[]>([]);
+  const [allDesas, setAllDesas] = useState<any[]>([]);
+  const [allKelompoks, setAllKelompoks] = useState<any[]>([]);
+  const [allAgeCategories, setAllAgeCategories] = useState<any[]>([]);
 
   const activeClient = centralClient || db;
 
@@ -57,6 +70,22 @@ export const PortalPanel: React.FC<PortalPanelProps> = ({ onLogout, notify, conf
       if (usersErr) throw usersErr;
 
       setUsers(usersList || []);
+
+      // 3. Fetch geographical lists for granular user restrictions
+      try {
+        const [dRes, dsRes, kRes, aRes] = await Promise.all([
+          activeClient.from('daerahs').select('*'),
+          activeClient.from('desas').select('*'),
+          activeClient.from('kelompoks').select('*'),
+          activeClient.from('age_categories').select('*')
+        ]);
+        setAllDaerahs(dRes.data || []);
+        setAllDesas(dsRes.data || []);
+        setAllKelompoks(kRes.data || []);
+        setAllAgeCategories(aRes.data || []);
+      } catch (metaErr) {
+        console.warn("Failed to load geographic metadata for user restrictions:", metaErr);
+      }
     } catch (err: any) {
       console.error("Error fetching portal data from Supabase:", err);
       notify("Gagal memuat data portal: " + (err.message || String(err)), "error");
@@ -92,11 +121,22 @@ export const PortalPanel: React.FC<PortalPanelProps> = ({ onLogout, notify, conf
     } else {
       setEditFirebaseConfig(configs[0]?.id || '');
     }
+
+    setEditRestrictedDaerah(user.restricted_daerah_id || '');
+    setEditRestrictedDesa(user.restricted_desa_id || '');
+    setEditRestrictedKelompok(user.restricted_kelompok_id || '');
+    setEditRestrictedAgeCategory(user.restricted_age_category_id || '');
+    setEditGroupingWritePermissions(user.grouping_write_permissions || {});
   };
 
   const handleCloseEdit = () => {
     setEditingUser(null);
     setEditStatus('Active');
+    setEditRestrictedDaerah('');
+    setEditRestrictedDesa('');
+    setEditRestrictedKelompok('');
+    setEditRestrictedAgeCategory('');
+    setEditGroupingWritePermissions({});
   };
 
   // Instansi crud functions
@@ -220,7 +260,12 @@ export const PortalPanel: React.FC<PortalPanelProps> = ({ onLogout, notify, conf
         original_role: editOriginalRole.trim() || editRole,
         web_access: webAccessStr,
         instansi: editFirebaseConfig || null,
-        status: editStatus
+        status: editStatus,
+        restricted_daerah_id: editRestrictedDaerah || null,
+        restricted_desa_id: editRestrictedDesa || null,
+        restricted_kelompok_id: editRestrictedKelompok || null,
+        restricted_age_category_id: editRestrictedAgeCategory || null,
+        grouping_write_permissions: editGroupingWritePermissions
       };
 
       // 1. Update user inside Central DB
@@ -853,6 +898,108 @@ export const PortalPanel: React.FC<PortalPanelProps> = ({ onLogout, notify, conf
                 </select>
               </div>
 
+              {/* PEMBATASAN AKSES DATA (GRANULAR) */}
+              <div className="p-4 bg-amber-50/60 border border-amber-200/50 rounded-2xl space-y-3.5">
+                <div className="text-[9px] font-black text-amber-700 uppercase tracking-widest flex items-center space-x-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                  <span>Batasan Akses Data (Sistem Tunggal)</span>
+                </div>
+
+                {/* Batasi Daerah */}
+                <div className="space-y-1">
+                  <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest block">Batasan Daerah</label>
+                  <select 
+                    value={editRestrictedDaerah}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setEditRestrictedDaerah(val);
+                      // Clear subordinate restrictions if invalid
+                      if (val) {
+                        const isDesaValid = allDesas.some(d => d.id === editRestrictedDesa && d.daerah_id === val);
+                        if (!isDesaValid) setEditRestrictedDesa('');
+                      }
+                    }}
+                    className="w-full bg-white border border-slate-200 focus:border-amber-500 px-3 py-2 rounded-xl text-xs font-bold outline-none transition-all"
+                  >
+                    <option value="">SEMUA DAERAH (TANPA BATASAN)</option>
+                    {allDaerahs.map(d => (
+                      <option key={d.id} value={d.id}>{String(d.nama_daerah).toUpperCase()}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Batasi Desa */}
+                <div className="space-y-1">
+                  <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest block">Batasan Desa</label>
+                  <select 
+                    value={editRestrictedDesa}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setEditRestrictedDesa(val);
+                      if (val) {
+                        const matchedDesa = allDesas.find(d => d.id === val);
+                        if (matchedDesa && matchedDesa.daerah_id) {
+                          setEditRestrictedDaerah(matchedDesa.daerah_id);
+                        }
+                      }
+                    }}
+                    className="w-full bg-white border border-slate-200 focus:border-amber-500 px-3 py-2 rounded-xl text-xs font-bold outline-none transition-all"
+                  >
+                    <option value="">SEMUA DESA (TANPA BATASAN)</option>
+                    {allDesas
+                      .filter(d => !editRestrictedDaerah || d.daerah_id === editRestrictedDaerah)
+                      .map(d => (
+                        <option key={d.id} value={d.id}>{String(d.nama_desa).toUpperCase()}</option>
+                      ))}
+                  </select>
+                </div>
+
+                {/* Batasi Kelompok */}
+                <div className="space-y-1">
+                  <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest block">Batasan Kelompok</label>
+                  <select 
+                    value={editRestrictedKelompok}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setEditRestrictedKelompok(val);
+                      if (val) {
+                        const matchedKelompok = allKelompoks.find(k => k.id === val);
+                        if (matchedKelompok && matchedKelompok.desa_id) {
+                          setEditRestrictedDesa(matchedKelompok.desa_id);
+                          const matchedDesa = allDesas.find(d => d.id === matchedKelompok.desa_id);
+                          if (matchedDesa && matchedDesa.daerah_id) {
+                            setEditRestrictedDaerah(matchedDesa.daerah_id);
+                          }
+                        }
+                      }
+                    }}
+                    className="w-full bg-white border border-slate-200 focus:border-amber-500 px-3 py-2 rounded-xl text-xs font-bold outline-none transition-all"
+                  >
+                    <option value="">SEMUA KELOMPOK (TANPA BATASAN)</option>
+                    {allKelompoks
+                      .filter(k => !editRestrictedDesa || k.desa_id === editRestrictedDesa)
+                      .map(k => (
+                        <option key={k.id} value={k.id}>{String(k.nama_kelompok).toUpperCase()}</option>
+                      ))}
+                  </select>
+                </div>
+
+                {/* Batasi Kategori Usia */}
+                <div className="space-y-1">
+                  <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest block">Batasan Kategori Usia</label>
+                  <select 
+                    value={editRestrictedAgeCategory}
+                    onChange={(e) => setEditRestrictedAgeCategory(e.target.value)}
+                    className="w-full bg-white border border-slate-200 focus:border-amber-500 px-3 py-2 rounded-xl text-xs font-bold outline-none transition-all"
+                  >
+                    <option value="">SEMUA KATEGORI USIA (TANPA BATASAN)</option>
+                    {allAgeCategories.map(a => (
+                      <option key={a.id} value={a.id}>{String(a.name).toUpperCase()}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
               {/* Web Access Checklists */}
               <div className="space-y-2">
                 <label className="text-[8.5px] font-black text-slate-400 uppercase tracking-widest block">Fitur Aplikasi Yang Diaktifkan</label>
@@ -876,6 +1023,40 @@ export const PortalPanel: React.FC<PortalPanelProps> = ({ onLogout, notify, conf
                     />
                     <span className="text-[10px] uppercase tracking-wider">Absensi</span>
                   </label>
+                </div>
+              </div>
+
+              {/* Hak Edit Grouping & Master (JSONB) */}
+              <div className="space-y-2 p-4 bg-slate-50 border border-slate-200/50 rounded-2xl">
+                <label className="text-[8.5px] font-black text-slate-500 uppercase tracking-widest block">Hak Edit Grouping &amp; Master (Absensi)</label>
+                <p className="text-[8px] text-slate-400 font-bold uppercase mt-[-4px]">Pilih menu grouping yang BOLEH di-edit/tambah/hapus oleh user ini:</p>
+                <div className="grid grid-cols-2 gap-2 mt-1">
+                  {[
+                    { key: 'age', label: 'Kategori Usia' },
+                    { key: 'daerah', label: 'Daerah' },
+                    { key: 'desa', label: 'Desa' },
+                    { key: 'kelompok', label: 'Kelompok' },
+                    { key: 'event', label: 'Event / Kegiatan' },
+                    { key: 'family', label: 'Keluarga' },
+                    { key: 'relationship', label: 'Hubungan Keluarga' },
+                    { key: 'label', label: 'Label Absensi' }
+                  ].map(item => {
+                    const isChecked = editGroupingWritePermissions[item.key] !== false; // default true
+                    return (
+                      <label key={item.key} className={`p-2.5 rounded-xl border flex items-center space-x-2 transition-all cursor-pointer ${isChecked ? 'bg-indigo-50/50 border-indigo-200 text-indigo-700 font-bold' : 'bg-white border-slate-200 text-slate-400 font-semibold'}`}>
+                        <input 
+                          type="checkbox" 
+                          className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                          checked={isChecked}
+                          onChange={(e) => setEditGroupingWritePermissions({
+                            ...editGroupingWritePermissions,
+                            [item.key]: e.target.checked
+                          })}
+                        />
+                        <span className="text-[9px] uppercase tracking-wide">{item.label}</span>
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
 

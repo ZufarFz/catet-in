@@ -453,7 +453,7 @@ const HistoryView: React.FC<HistoryViewProps> = ({
 
         return (
           <div className="fixed inset-0 z-[10001] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4 animate-backdrop">
-            <div className="hidden md:flex bg-white w-full max-w-4xl max-h-[85vh] rounded-[3rem] shadow-2xl overflow-hidden animate-dialog-bounce border border-white mx-auto flex flex-row">
+            <div className="hidden md:flex bg-white w-full max-w-4xl max-h-[85vh] rounded-2xl shadow-2xl overflow-hidden animate-dialog-bounce border border-white mx-auto flex flex-row">
                 <div className={`${viewDetail.type === 'masuk' ? 'bg-emerald-600' : 'bg-rose-600'} w-[32%] p-8 lg:p-10 text-white flex flex-col justify-between shrink-0 relative overflow-hidden`}>
                     <div className="absolute top-0 right-0 p-8 opacity-10 pointer-none transform rotate-12 scale-150"><Wallet size={160} /></div>
                     <div className="space-y-8 relative z-10">
@@ -506,13 +506,13 @@ const HistoryView: React.FC<HistoryViewProps> = ({
                           </div>
                           {getVersionBadge(viewDetail.edit_version)}
                         </div>
-                        <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 flex items-center justify-center text-center relative min-h-[80px]">
+                        <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 flex items-center justify-center text-center relative min-h-[80px]">
                           <p className="text-base lg:text-lg font-bold text-slate-700 leading-relaxed break-words px-4 italic">"{viewDetail.description}"</p>
                         </div>
                     </div>
 
                     <div className="grid grid-cols-1 gap-4 lg:gap-6 shrink-0">
-                        <div className="bg-slate-50 p-4 lg:p-5 rounded-[1.5rem] border border-slate-100 flex flex-col items-center justify-center space-y-1 shadow-sm">
+                        <div className="bg-slate-50 p-4 lg:p-5 rounded-xl border border-slate-100 flex flex-col items-center justify-center space-y-1 shadow-sm">
                           <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Nominal</span>
                           <div className="flex items-baseline gap-1.5 whitespace-nowrap overflow-hidden">
                             <span className={`text-sm lg:text-base font-bold opacity-60 ${viewDetail.type === 'masuk' ? 'text-emerald-600' : 'text-rose-600'}`}>Rp</span>
@@ -553,7 +553,7 @@ const HistoryView: React.FC<HistoryViewProps> = ({
                 </div>
             </div>
 
-            <div className="md:hidden bg-white w-full max-w-[290px] max-h-[85vh] rounded-[2.5rem] shadow-2xl overflow-hidden animate-dialog-bounce border border-white mx-auto flex flex-col">
+            <div className="md:hidden bg-white w-full max-w-[290px] max-h-[85vh] rounded-2xl shadow-2xl overflow-hidden animate-dialog-bounce border border-white mx-auto flex flex-col">
                 <div className={`${viewDetail.type === 'masuk' ? 'bg-emerald-600' : 'bg-rose-600'} px-5 py-4 text-white flex items-center justify-between shrink-0`}>
                   <div className="flex items-center space-x-3 min-w-0">
                       <div className="bg-white/20 p-1 rounded-lg shrink-0"><Receipt size={14} /></div>

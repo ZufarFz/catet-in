@@ -45,6 +45,25 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
   appScriptMaster, canWrite, onRefresh, isLoading 
 }) => {
   const [activeType, setActiveType] = useState<GroupType>('age');
+
+  const isAllowedToEditActiveType = React.useMemo(() => {
+    if (!canWrite) return false;
+    const userRole = localStorage.getItem('role') || 'Viewer';
+    if (userRole === 'PortalMaster' || userRole === 'Admin') return true;
+
+    try {
+      const cachedPermissions = localStorage.getItem('grouping_write_permissions');
+      if (cachedPermissions) {
+        const permissions = JSON.parse(cachedPermissions);
+        if (permissions[activeType] === false) {
+          return false;
+        }
+      }
+    } catch (e) {
+      console.warn("Error reading grouping_write_permissions:", e);
+    }
+    return true;
+  }, [canWrite, activeType]);
   const [isOpenTypeDropdown, setIsOpenTypeDropdown] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [labels, setLabels] = useState<LabelData[]>([]);
@@ -86,6 +105,7 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
   };
 
   const handleDelete = async (id: string) => {
+    if (!isAllowedToEditActiveType) return;
     setIsSubmitting(true);
     try {
       if (activeType === 'age') {
@@ -125,6 +145,7 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
   };
 
   const handleMoveAgeCategory = async (item: AgeCategoryData, direction: 'up' | 'down') => {
+    if (!isAllowedToEditActiveType) return;
     if (!ages || ages.length <= 1) return;
     
     // Sort a copy of ages based on current sorted order first, to be absolutely sure
@@ -168,7 +189,7 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canWrite) return;
+    if (!isAllowedToEditActiveType) return;
     setIsSubmitting(true);
     setMessage(null);
 
@@ -440,7 +461,7 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
   };
 
   const applyRelationshipPresets = async () => {
-    if (!canWrite) return;
+    if (!isAllowedToEditActiveType) return;
     setIsSubmitting(true);
     setMessage(null);
     try {
@@ -512,14 +533,46 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
               placeholder="Contoh: Keterangan tambahan atau lokasi acara"
             />
           </div>
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Jam Mulai Acara / Kegiatan (HH:MM)</label>
-            <input
-              type="time"
-              value={formData.jam_mulai || ''}
-              onChange={(e) => setFormData({...formData, jam_mulai: e.target.value})}
-              className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl font-bold text-xs text-slate-700 focus:border-rose-500 focus:bg-white outline-none transition-all"
-            />
+          <div className="bg-slate-50/60 border border-slate-200/80 p-4 rounded-2xl space-y-3.5">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">Deteksi Keterlambatan</label>
+                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tight">Aktifkan batas waktu mulai kegiatan</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const isCurrentlyEnabled = !!formData.jam_mulai;
+                  if (isCurrentlyEnabled) {
+                    setFormData({ ...formData, jam_mulai: '' });
+                  } else {
+                    setFormData({ ...formData, jam_mulai: '07:00' });
+                  }
+                }}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  formData.jam_mulai ? 'bg-rose-600' : 'bg-slate-200'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                    formData.jam_mulai ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {!!formData.jam_mulai && (
+              <div className="space-y-1.5 animate-in fade-in slide-in-from-top-1 duration-200 pt-1">
+                <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Jam Mulai Acara / Kegiatan (HH:MM) *</label>
+                <input
+                  required={!!formData.jam_mulai}
+                  type="time"
+                  value={formData.jam_mulai || ''}
+                  onChange={(e) => setFormData({...formData, jam_mulai: e.target.value})}
+                  className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl font-bold text-xs text-slate-700 focus:border-rose-500 outline-none transition-all"
+                />
+              </div>
+            )}
           </div>
           <div className="space-y-1.5">
             <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Target Label Peserta (Opsional)</label>
@@ -844,7 +897,7 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
           <h2 className="text-base md:text-2xl font-black text-slate-800 tracking-tight leading-none">Manajemen Group &amp; Master</h2>
           <p className="text-[8px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest mt-0.5 md:mt-1 leading-none">Kelola Kategori Usia, Daerah, Desa, Kelompok, &amp; Kegiatan</p>
         </div>
-        {canWrite && (
+        {isAllowedToEditActiveType && (
           <button 
             onClick={() => { setEditingItem(null); setFormData({}); setShowModal(true); }}
             className={`flex items-center space-x-1 md:space-x-2 px-3 py-2 md:px-6 md:py-3 text-white rounded-xl md:rounded-2xl font-black text-[8px] md:text-[10px] uppercase tracking-wider md:tracking-widest transition-all shadow-md select-none ${
@@ -968,7 +1021,7 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
       {/* Content */}
       <div className="flex-1 bg-white rounded-2xl md:rounded-[2.5rem] border border-slate-100 shadow-xs flex flex-col overflow-hidden">
         <div className="overflow-y-auto grow p-3 md:p-8 pb-32 no-scrollbar">
-          {activeType === 'relationship' && canWrite && (
+          {activeType === 'relationship' && isAllowedToEditActiveType && (
             <div className="mb-6 p-4 md:p-5 bg-gradient-to-r from-violet-50/55 to-indigo-50/55 border border-violet-100 rounded-2xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shadow-xs">
               <div className="space-y-1">
                 <h3 className="text-xs md:text-sm font-black text-violet-800 uppercase tracking-wider flex items-center gap-2">
@@ -1097,11 +1150,11 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
                                     </span>
                                   </>
                                 )}
-                                {(item.keterangan || item.jam_mulai) && (item.tanggal_kegiatan || item.created_at) && (
+                                {(item.keterangan || item.jam_mulai) && (item.created_at || item.updated_at) && (
                                   <span className="text-slate-200 font-normal">|</span>
                                 )}
                                 <span className="font-semibold text-slate-400 italic truncate max-w-[120px]">
-                                  📅 {item.tanggal_kegiatan || item.created_at ? new Date(item.tanggal_kegiatan || item.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Tanggal tidak tertera'}
+                                  📅 {item.created_at || item.updated_at ? new Date(item.created_at || item.updated_at!).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Tanggal tidak tertera'}
                                 </span>
                               </div>
                               {item.target_labels && item.target_labels.length > 0 && (
@@ -1161,33 +1214,33 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
                     </div>
 
                     {/* Compact actions block */}
-                    <div className="flex items-center gap-1 shrink-0 bg-slate-100/40 hover:bg-slate-100/80 p-0.5 rounded-lg border border-slate-100 transition-colors">
-                      {isAge && canWrite && (
-                        <>
-                          <button 
-                            onClick={() => handleMoveAgeCategory(item, 'up')} 
-                            className="p-1 text-indigo-600 hover:bg-white rounded-md transition-all active:scale-95 flex items-center justify-center"
-                            title="Pindahkan Ke Atas"
-                          >
-                            <ArrowUp className="size-3 md:size-3.5" />
-                          </button>
-                          <button 
-                            onClick={() => handleMoveAgeCategory(item, 'down')} 
-                            className="p-1 text-indigo-600 hover:bg-white rounded-md transition-all active:scale-95 flex items-center justify-center"
-                            title="Pindahkan Ke Bawah"
-                          >
-                            <ArrowDown className="size-3 md:size-3.5" />
-                          </button>
-                        </>
-                      )}
-                      <button 
-                        onClick={() => handleEdit(item)} 
-                        className="p-1 text-blue-500 hover:bg-white rounded-md transition-all active:scale-95 flex items-center justify-center"
-                        title="Edit Data"
-                      >
-                        <Edit2 className="size-3 md:size-3.5" />
-                      </button>
-                      {canWrite && (
+                    {isAllowedToEditActiveType && (
+                      <div className="flex items-center gap-1 shrink-0 bg-slate-100/40 hover:bg-slate-100/80 p-0.5 rounded-lg border border-slate-100 transition-colors">
+                        {isAge && (
+                          <>
+                            <button 
+                              onClick={() => handleMoveAgeCategory(item, 'up')} 
+                              className="p-1 text-indigo-600 hover:bg-white rounded-md transition-all active:scale-95 flex items-center justify-center"
+                              title="Pindahkan Ke Atas"
+                            >
+                              <ArrowUp className="size-3 md:size-3.5" />
+                            </button>
+                            <button 
+                              onClick={() => handleMoveAgeCategory(item, 'down')} 
+                              className="p-1 text-indigo-600 hover:bg-white rounded-md transition-all active:scale-95 flex items-center justify-center"
+                              title="Pindahkan Ke Bawah"
+                            >
+                              <ArrowDown className="size-3 md:size-3.5" />
+                            </button>
+                          </>
+                        )}
+                        <button 
+                          onClick={() => handleEdit(item)} 
+                          className="p-1 text-blue-500 hover:bg-white rounded-md transition-all active:scale-95 flex items-center justify-center"
+                          title="Edit Data"
+                        >
+                          <Edit2 className="size-3 md:size-3.5" />
+                        </button>
                         <button 
                           onClick={() => setDeleteConfirmId(item.id)} 
                           className="p-1 text-rose-500 hover:bg-white rounded-md transition-all active:scale-95 flex items-center justify-center"
@@ -1195,8 +1248,8 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
                         >
                           <Trash2 className="size-3 md:size-3.5" />
                         </button>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}

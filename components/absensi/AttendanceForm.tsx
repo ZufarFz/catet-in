@@ -18,7 +18,8 @@ import {
   X,
   Filter,
   ChevronUp,
-  ChevronDown
+  ChevronDown,
+  CheckSquare
 } from 'lucide-react';
 import { AbsensiMember, AttendanceLog, EventData, AgeCategoryData } from '../../types';
 import ModernSelect from '../ui/ModernSelect';
@@ -70,6 +71,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
   const [onlyShowTargetLabels, setOnlyShowTargetLabels] = useState(true);
   const [showInitialFilterModal, setShowInitialFilterModal] = useState(true);
   const [showInlineFilters, setShowInlineFilters] = useState(false);
+  const [showSelesaiModal, setShowSelesaiModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [batchStatuses, setBatchStatuses] = useState<Record<string, 'Hadir' | 'Izin' | 'Sakit' | 'Alpa' | ''>>({});
   const [batchNotes, setBatchNotes] = useState<Record<string, string>>({});
@@ -613,6 +615,28 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
     };
   }, [members, searchTerm, filterKelompok, filterDesa, filterDaerah, filterAgeCategory, filterGender, recordedMemberIds, selectedDate, selectedEventId, selectedEvent, onlyShowTargetLabels, ages]);
 
+  const unrecordedWajibMembers = useMemo(() => {
+    if (!selectedEvent || !selectedEvent.target_labels || selectedEvent.target_labels.length === 0) {
+      return [];
+    }
+    const filtered = members.filter(m => {
+      const id = String(m.id).trim().toUpperCase();
+      if (recordedMemberIds.has(id)) return false;
+
+      const matchKelompok = filterKelompok === 'ALL' || String(m.kelompok_id) === String(filterKelompok);
+      const matchDesa = filterDesa === 'ALL' || String(m.desa_id) === String(filterDesa);
+      const matchDaerah = filterDaerah === 'ALL' || String(m.daerah_id) === String(filterDaerah);
+      const matchAge = filterAgeCategory === 'ALL' || String(m.age_category_id) === String(filterAgeCategory);
+      const matchGender = filterGender === 'ALL' || (m.jenis_kelamin && m.jenis_kelamin.toLowerCase() === filterGender.toLowerCase());
+      
+      const hasMatchingLabel = (m.labels || []).some(lbl => selectedEvent.target_labels?.includes(lbl));
+
+      return matchKelompok && matchDesa && matchDaerah && matchAge && matchGender && hasMatchingLabel;
+    });
+
+    return [...filtered].sort((a, b) => (a.nama_lengkap || '').localeCompare(b.nama_lengkap || ''));
+  }, [members, filterKelompok, filterDesa, filterDaerah, filterAgeCategory, filterGender, recordedMemberIds, selectedEvent]);
+
   // Dynamic Options pulled from live Members list
   const uniqueKelompoks = useMemo(() => {
     const map = new Map();
@@ -811,6 +835,74 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
     }
   };
 
+  const submitSelesaiAbsen = async () => {
+    if (unrecordedWajibMembers.length === 0) {
+      notify("Tidak ada anggota wajib hadir yang belum absen", "error");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const selectedEvent = (events || []).find(e => e.id === selectedEventId);
+      const jamMulaiEvent = selectedEvent?.jam_mulai || null;
+      const logsToSubmit: AttendanceLog[] = unrecordedWajibMembers.map(m => {
+        const memberSuffix = m.id.slice(-4);
+        const generatedId = `LOG-${Date.now().toString(36).toUpperCase()}-${memberSuffix}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+        const ddmmyy = getDdmmyy(selectedDate);
+        const uniqRefVal = `${m.id}-${ddmmyy}-${selectedEventId || 'no_event'}`;
+        return {
+          id: generatedId,
+          memberId: m.id,
+          memberName: m.nama_lengkap,
+          ageCategoryId: m.age_category_id || '',
+          ageName: m.age_category_name || '',
+          kelompokId: m.kelompok_id || '',
+          kelompokName: m.kelompok_name || '',
+          desaId: m.desa_id || '',
+          desaName: m.desa_name || '',
+          daerahId: m.daerah_id || '',
+          daerahName: m.daerah_name || '',
+          gender: m.jenis_kelamin || 'Unknown',
+          date: selectedDate + ' ' + new Date().toTimeString().split(' ')[0], 
+          dateInput: new Date().toISOString(),
+          status: 'Alpa',
+          note: 'Selesai Absen (Sistem)',
+          createdBy: username,
+          event_id: selectedEventId || null,
+          metode: 'manual',
+          uniq_ref: uniqRefVal,
+          jam_mulai: jamMulaiEvent
+        } as any;
+      });
+
+      await dbAddAttendanceLogs(logsToSubmit);
+
+      notify(`Berhasil mengirim ${logsToSubmit.length} data absensi ALFA`, "success");
+      setShowSelesaiModal(false);
+      onSuccess();
+    } catch (e: any) {
+      let cleanMsg = e.message || "Kesalahan database tidak dikenal";
+      const isDbDuplicate = cleanMsg.toLowerCase().includes('uniq_ref') || 
+                            cleanMsg.toLowerCase().includes('23505') || 
+                            cleanMsg.toLowerCase().includes('duplicate key');
+      if (isDbDuplicate) {
+        notify("Gagal simpan: Salah satu atau beberapa anggota sudah melakukan presensi hari ini!", "error");
+      } else {
+        try {
+          const parsed = JSON.parse(e.message);
+          if (parsed && parsed.error) {
+            cleanMsg = parsed.error;
+          }
+        } catch {
+          // Not a JSON error
+        }
+        notify("Gagal simpan absensi: " + cleanMsg, "error");
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const stats = useMemo(() => {
     const counts = { Hadir: 0, Izin: 0, Sakit: 0, Alpa: 0, Total: 0 };
     notRecordedMembers.forEach(m => {
@@ -832,6 +924,136 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
     <div className="h-full w-full overflow-y-auto no-scrollbar bg-[#F8FAFC]">
       {/* INITIAL FILTER POPUP MODAL */}
       <AnimatePresence>
+        {showSelesaiModal && (
+          <div className="fixed inset-0 z-[1001] flex items-start md:items-center justify-center p-3 pt-2 pb-[88px] md:p-4 overflow-y-auto no-scrollbar">
+            {/* Backdrop */}
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !isSubmitting && setShowSelesaiModal(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md cursor-pointer"
+            />
+            
+            {/* Modal Body */}
+            <motion.div 
+              layout
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              transition={{ duration: 0.25, ease: 'easeOut' }}
+              className="relative w-full max-w-lg bg-white rounded-3xl p-5 md:p-6 shadow-2xl border border-slate-100 flex flex-col space-y-4 overflow-visible my-auto z-10"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="bg-rose-100 p-1.5 rounded-lg text-rose-600 shadow-xs shrink-0">
+                    <CheckSquare size={16} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider leading-none">Selesai Absensi</h3>
+                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tight mt-1">Konfirmasi & Kirim Anggota Belum Hadir sebagai ALFA</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => !isSubmitting && setShowSelesaiModal(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              {/* Modal Content */}
+              <div className="space-y-4">
+                <div className="bg-amber-50 border border-amber-200/65 rounded-2xl p-3.5 flex items-start gap-3">
+                  <Info size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="text-[10px] md:text-xs font-bold text-amber-800 leading-normal">
+                      Apakah Anda yakin ingin menyelesaikan absensi untuk acara ini?
+                    </p>
+                    <p className="text-[9px] font-medium text-amber-700/90 leading-relaxed">
+                      Seluruh anggota wajib hadir yang belum melakukan absensi (terdaftar di bawah ini) akan dikirim dan disimpan secara otomatis dengan status <span className="font-extrabold text-rose-600">ALFA</span>.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-black uppercase text-slate-400 tracking-wider">
+                      Daftar Wajib Hadir Belum Absen ({unrecordedWajibMembers.length})
+                    </span>
+                  </div>
+
+                  {unrecordedWajibMembers.length > 0 ? (
+                    <div className="border border-slate-100 rounded-2xl bg-slate-50/40 p-2.5 max-h-[220px] overflow-y-auto space-y-1.5 no-scrollbar">
+                      {unrecordedWajibMembers.map((member) => (
+                        <div key={member.id} className="flex items-center justify-between p-2 bg-white rounded-xl border border-slate-150/65 shadow-2xs">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-2 h-2 rounded-full bg-rose-500 shrink-0" />
+                            <span className="text-[10px] md:text-[11px] font-black text-slate-700 uppercase truncate">
+                              {member.nama_lengkap}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-[8px] font-extrabold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 border border-slate-200/50 uppercase leading-none">
+                              {member.kelompok_name || "Tanpa Kelompok"}
+                            </span>
+                            {member.labels && member.labels.length > 0 && (
+                              <span className="text-[7px] font-black text-indigo-600 bg-indigo-50 px-1 py-0.2 rounded uppercase border border-indigo-100/30">
+                                {member.labels[0]}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="border border-dashed border-slate-200 rounded-2xl p-6 text-center space-y-2 bg-slate-50/30">
+                      <CheckCircle2 size={24} className="text-emerald-500 mx-auto" />
+                      <div className="space-y-0.5">
+                        <p className="text-[10px] font-black text-slate-700 uppercase">Semua Sudah Absen</p>
+                        <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">
+                          Seluruh anggota wajib hadir untuk acara ini telah melakukan presensi.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Modal Footer / Actions */}
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={() => setShowSelesaiModal(false)}
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-600 font-black text-[10px] uppercase tracking-wider rounded-xl transition-colors cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={isSubmitting || unrecordedWajibMembers.length === 0}
+                  onClick={submitSelesaiAbsen}
+                  className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:bg-slate-200 disabled:text-slate-400 disabled:border-transparent disabled:shadow-none text-white font-black text-[10px] uppercase tracking-widest rounded-xl transition-all shadow-md shadow-rose-500/10 flex items-center gap-2 cursor-pointer active:scale-95"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 size={12} className="animate-spin" />
+                      <span>Memproses...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckSquare size={12} />
+                      <span>Kirim Sisa sebagai Alfa ({unrecordedWajibMembers.length})</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
         {showInitialFilterModal && (
           <div className="fixed inset-0 z-[1000] flex items-start md:items-center justify-center p-3 pt-2 pb-[88px] md:p-4 overflow-y-auto no-scrollbar">
             {/* Backdrop */}
@@ -1279,53 +1501,66 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                       </div>
                     </div>
 
-                    {/* Right Side: Wajib / Tidak Wajib Toggle Switch */}
-                    {selectedEvent && selectedEvent.target_labels && selectedEvent.target_labels.length > 0 ? (
-                      <div className="flex items-center bg-slate-800 p-0.5 rounded-lg border border-slate-700/80 select-none shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setOnlyShowTargetLabels(true);
-                            clearBatch();
-                          }}
-                          className="relative py-1 px-2.5 rounded-md text-[8px] md:text-[9px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-400 hover:text-slate-200 transition-colors duration-200"
-                        >
-                          {onlyShowTargetLabels && (
-                            <motion.div
-                              layoutId="wajibTogglePill"
-                              className="absolute inset-0 bg-blue-600 rounded-md shadow-xs"
-                              transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                            />
-                          )}
-                          <span className={`relative z-10 ${onlyShowTargetLabels ? 'text-white' : 'text-slate-400'}`}>
-                            Wajib
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setOnlyShowTargetLabels(false);
-                            clearBatch();
-                          }}
-                          className="relative py-1 px-2.5 rounded-md text-[8px] md:text-[9px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-400 hover:text-slate-200 transition-colors duration-200"
-                        >
-                          {!onlyShowTargetLabels && (
-                            <motion.div
-                              layoutId="wajibTogglePill"
-                              className="absolute inset-0 bg-blue-600 rounded-md shadow-xs"
-                              transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                            />
-                          )}
-                          <span className={`relative z-10 ${!onlyShowTargetLabels ? 'text-white' : 'text-slate-400'}`}>
-                            Tidak Wajib
-                          </span>
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="text-[8px] md:text-[9px] font-extrabold text-slate-500 uppercase tracking-widest px-2.5 py-1 bg-slate-800/50 rounded-lg">
-                        Umum / Semua
-                      </div>
-                    )}
+                    {/* Right Side: Wajib / Tidak Wajib Toggle Switch & Hadir Semua Button */}
+                    <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
+                      {selectedEvent && selectedEvent.target_labels && selectedEvent.target_labels.length > 0 ? (
+                        <div className="flex items-center bg-slate-800 p-0.5 rounded-lg border border-slate-700/80 select-none shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOnlyShowTargetLabels(true);
+                              clearBatch();
+                            }}
+                            className="relative py-1 px-2.5 rounded-md text-[8px] md:text-[9px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-400 hover:text-slate-200 transition-colors duration-200"
+                          >
+                            {onlyShowTargetLabels && (
+                              <motion.div
+                                layoutId="wajibTogglePill"
+                                className="absolute inset-0 bg-blue-600 rounded-md shadow-xs"
+                                transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                              />
+                            )}
+                            <span className={`relative z-10 ${onlyShowTargetLabels ? 'text-white' : 'text-slate-400'}`}>
+                              Wajib
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOnlyShowTargetLabels(false);
+                              clearBatch();
+                            }}
+                            className="relative py-1 px-2.5 rounded-md text-[8px] md:text-[9px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-400 hover:text-slate-200 transition-colors duration-200"
+                          >
+                            {!onlyShowTargetLabels && (
+                              <motion.div
+                                layoutId="wajibTogglePill"
+                                className="absolute inset-0 bg-blue-600 rounded-md shadow-xs"
+                                transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                              />
+                            )}
+                            <span className={`relative z-10 ${!onlyShowTargetLabels ? 'text-white' : 'text-slate-400'}`}>
+                              Tidak Wajib
+                            </span>
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="text-[8px] md:text-[9px] font-extrabold text-slate-500 uppercase tracking-widest px-2.5 py-1 bg-slate-800/50 rounded-lg">
+                          Umum / Semua
+                        </div>
+                      )}
+
+                      {/* Tombol Hadir Semua */}
+                      <button
+                        type="button"
+                        onClick={() => setAllStatus('Hadir')}
+                        className="py-1 px-2.5 rounded-lg text-[8px] md:text-[9px] font-black uppercase tracking-wider bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white shadow-xs transition-all flex items-center gap-1 cursor-pointer shrink-0 border border-emerald-500/50"
+                        title="Tandai Hadir Semua Anggota Dalam Daftar"
+                      >
+                        <UserCheck size={12} className="shrink-0" />
+                        <span>Hadir Semua</span>
+                      </button>
+                    </div>
 
                   </div>
                 </div>
@@ -1541,6 +1776,22 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* Selesai Absen Button at the very bottom (Desktop & Mobile) */}
+            {notRecordedMembers.length > 0 && selectedEvent && selectedEvent.target_labels && selectedEvent.target_labels.length > 0 && (
+              <div className="flex justify-end pt-3 pb-1">
+                <button 
+                  type="button"
+                  onClick={() => setShowSelesaiModal(true)}
+                  disabled={isSubmitting || stats.Total > 0}
+                  className="w-full sm:w-auto px-6 py-2.5 md:py-3 bg-rose-600 hover:bg-rose-500 disabled:opacity-35 disabled:cursor-not-allowed rounded-xl flex items-center justify-center gap-2 transition-all text-white font-black text-[10px] md:text-xs uppercase tracking-widest shadow-md shadow-rose-500/20 active:scale-98"
+                  title={stats.Total > 0 ? "Kirim atau bersihkan status absensi yang aktif sebelum menyelesaikan" : "Selesaikan absen"}
+                >
+                  <CheckSquare size={12} className="shrink-0" />
+                  <span>Selesai Absen</span>
+                </button>
               </div>
             )}
           </>

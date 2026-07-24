@@ -60,7 +60,7 @@ const TabView: React.FC<{ id: AppTab; activeTab: AppTab; children: React.ReactNo
 const NavItem: React.FC<{ tab: AppTab, activeTab: AppTab, icon: any, label: string, sidebarCollapsed: boolean, setActiveTab: (tab: AppTab) => void }> = ({ tab, activeTab, icon: Icon, label, sidebarCollapsed, setActiveTab }) => (
   <button 
     onClick={() => setActiveTab(tab)} 
-    className={`w-full flex items-center px-4 rounded-xl transition-all duration-500 relative z-10 h-[42px] justify-start ${activeTab === tab ? 'text-white' : 'text-slate-400 hover:text-white'}`}
+    className={`w-full flex items-center px-4 rounded-xl transition-all duration-500 relative z-10 h-[42px] justify-start outline-none focus:outline-none ${activeTab === tab ? 'text-white' : 'text-slate-400 hover:text-white'}`}
   >
     <Icon size={18} className="flex-shrink-0" />
     <span 
@@ -165,72 +165,6 @@ const App: React.FC = () => {
     }
     return [];
   });
-  const absensiSummaries = useMemo(() => {
-    const logsByDate: { [dateStr: string]: AttendanceLog[] } = {};
-    for (const log of absensiLogs) {
-      const rawDate = log.date || '';
-      const dateStr = rawDate.split(' ')[0] || rawDate.split('T')[0];
-      if (dateStr) {
-        if (!logsByDate[dateStr]) logsByDate[dateStr] = [];
-        logsByDate[dateStr].push(log);
-      }
-    }
-
-    return Object.entries(logsByDate).map(([dateStr, dateLogs]) => {
-      const totalCount = dateLogs.length;
-      const statusCounts = { Hadir: 0, Izin: 0, Sakit: 0, Alpa: 0 };
-      const genderCounts: { [gender: string]: any } = {};
-      const daerahCounts: { [daerahId: string]: any } = {};
-      const desaCounts: { [desaId: string]: any } = {};
-      const kelompokCounts: { [kelompokId: string]: any } = {};
-      const ageCategoryCounts: { [ageCategoryId: string]: any } = {};
-
-      for (const log of dateLogs) {
-        const status = log.status;
-        if (!status) continue;
-        
-        if (status === 'Hadir' || status === 'Izin' || status === 'Sakit' || status === 'Alpa') {
-          statusCounts[status]++;
-        }
-
-        const member = rawMembers.find(m => String(m.id) === String(log.memberId));
-        
-        const gender = (member?.jenis_kelamin || (log as any).gender || 'L').toUpperCase().startsWith('P') ? 'P' : 'L';
-        const ageId = member?.age_category_id || (log as any).ageCategoryId || log.ageName || 'Unknown';
-        const kelompokId = member?.kelompok_id || (log as any).kelompokId || log.kelompokName || 'Unknown';
-        const desaId = member?.desa_id || (log as any).desaId || log.desaName || 'Unknown';
-        const daerahId = member?.daerah_id || (log as any).daerahId || log.daerahName || 'Unknown';
-
-        const updateMap = (subMap: any, key: string) => {
-          const checkKey = key || 'Unknown';
-          if (!subMap[checkKey]) {
-            subMap[checkKey] = { Hadir: 0, Izin: 0, Sakit: 0, Alpa: 0 };
-          }
-          if (subMap[checkKey][status] !== undefined) {
-            subMap[checkKey][status]++;
-          }
-        };
-
-        updateMap(genderCounts, gender);
-        updateMap(daerahCounts, daerahId);
-        updateMap(desaCounts, desaId);
-        updateMap(kelompokCounts, kelompokId);
-        updateMap(ageCategoryCounts, ageId);
-      }
-
-      return {
-        id: dateStr,
-        date: dateStr,
-        totalCount,
-        statusCounts,
-        genderCounts,
-        daerahCounts,
-        desaCounts,
-        kelompokCounts,
-        ageCategoryCounts
-      };
-    });
-  }, [absensiLogs, rawMembers]);
   const [absensiDaerahs, setAbsensiDaerahs] = useState<DaerahData[]>(() => {
     try {
       const inst = localStorage.getItem('instansi') || '';
@@ -309,6 +243,156 @@ const App: React.FC = () => {
       return [];
     }
   });
+
+  // Granular Access Control Restrictions
+  const [restrictedDaerahId, setRestrictedDaerahId] = useState<string>(() => localStorage.getItem('restricted_daerah_id') || '');
+  const [restrictedDesaId, setRestrictedDesaId] = useState<string>(() => localStorage.getItem('restricted_desa_id') || '');
+  const [restrictedKelompokId, setRestrictedKelompokId] = useState<string>(() => localStorage.getItem('restricted_kelompok_id') || '');
+  const [restrictedAgeCategoryId, setRestrictedAgeCategoryId] = useState<string>(() => localStorage.getItem('restricted_age_category_id') || '');
+
+  const scopedDaerahs = useMemo(() => {
+    let list = absensiDaerahs || [];
+    if (restrictedDaerahId) {
+      list = list.filter(d => String(d.id) === String(restrictedDaerahId));
+    } else if (restrictedDesaId) {
+      const targetDesa = (absensiDesas || []).find(d => String(d.id) === String(restrictedDesaId));
+      if (targetDesa && targetDesa.daerah_id) {
+        list = list.filter(d => String(d.id) === String(targetDesa.daerah_id));
+      }
+    } else if (restrictedKelompokId) {
+      const targetKelompok = (absensiKelompoks || []).find(k => String(k.id) === String(restrictedKelompokId));
+      const targetDesa = targetKelompok ? (absensiDesas || []).find(d => String(d.id) === String(targetKelompok.desa_id)) : null;
+      if (targetDesa && targetDesa.daerah_id) {
+        list = list.filter(d => String(d.id) === String(targetDesa.daerah_id));
+      }
+    }
+    return list;
+  }, [absensiDaerahs, absensiDesas, absensiKelompoks, restrictedDaerahId, restrictedDesaId, restrictedKelompokId]);
+
+  const scopedDesas = useMemo(() => {
+    let list = absensiDesas || [];
+    if (restrictedDesaId) {
+      list = list.filter(d => String(d.id) === String(restrictedDesaId));
+    } else if (restrictedKelompokId) {
+      const targetKelompok = (absensiKelompoks || []).find(k => String(k.id) === String(restrictedKelompokId));
+      if (targetKelompok && targetKelompok.desa_id) {
+        list = list.filter(d => String(d.id) === String(targetKelompok.desa_id));
+      }
+    } else if (restrictedDaerahId) {
+      list = list.filter(d => String(d.daerah_id) === String(restrictedDaerahId));
+    }
+    return list;
+  }, [absensiDesas, absensiKelompoks, restrictedDesaId, restrictedKelompokId, restrictedDaerahId]);
+
+  const scopedKelompoks = useMemo(() => {
+    let list = absensiKelompoks || [];
+    if (restrictedKelompokId) {
+      list = list.filter(k => String(k.id) === String(restrictedKelompokId));
+    } else if (restrictedDesaId) {
+      list = list.filter(k => String(k.desa_id) === String(restrictedDesaId));
+    } else if (restrictedDaerahId) {
+      const allowedDesaIds = new Set((absensiDesas || []).filter(d => String(d.daerah_id) === String(restrictedDaerahId)).map(d => String(d.id)));
+      list = list.filter(k => k.desa_id && allowedDesaIds.has(String(k.desa_id)));
+    }
+    return list;
+  }, [absensiKelompoks, absensiDesas, restrictedKelompokId, restrictedDesaId, restrictedDaerahId]);
+
+  const scopedAges = useMemo(() => {
+    let list = absensiAges || [];
+    if (restrictedAgeCategoryId) {
+      list = list.filter(a => String(a.id) === String(restrictedAgeCategoryId));
+    }
+    return list;
+  }, [absensiAges, restrictedAgeCategoryId]);
+
+  const scopedMembers = useMemo(() => {
+    let list = absensiMembers || [];
+    if (restrictedDaerahId) {
+      list = list.filter(m => String(m.daerah_id) === String(restrictedDaerahId));
+    }
+    if (restrictedDesaId) {
+      list = list.filter(m => String(m.desa_id) === String(restrictedDesaId));
+    }
+    if (restrictedKelompokId) {
+      list = list.filter(m => String(m.kelompok_id) === String(restrictedKelompokId));
+    }
+    if (restrictedAgeCategoryId) {
+      list = list.filter(m => String(m.age_category_id) === String(restrictedAgeCategoryId));
+    }
+    return list;
+  }, [absensiMembers, restrictedDaerahId, restrictedDesaId, restrictedKelompokId, restrictedAgeCategoryId]);
+
+  const scopedLogs = useMemo(() => {
+    const allowedMemberIds = new Set(scopedMembers.map(m => String(m.id)));
+    return (absensiLogs || []).filter(log => log && log.memberId && allowedMemberIds.has(String(log.memberId)));
+  }, [absensiLogs, scopedMembers]);
+
+  const absensiSummaries = useMemo(() => {
+    const logsByDate: { [dateStr: string]: AttendanceLog[] } = {};
+    for (const log of scopedLogs) {
+      const rawDate = log.date || '';
+      const dateStr = rawDate.split(' ')[0] || rawDate.split('T')[0];
+      if (dateStr) {
+        if (!logsByDate[dateStr]) logsByDate[dateStr] = [];
+        logsByDate[dateStr].push(log);
+      }
+    }
+
+    return Object.entries(logsByDate).map(([dateStr, dateLogs]) => {
+      const totalCount = dateLogs.length;
+      const statusCounts = { Hadir: 0, Izin: 0, Sakit: 0, Alpa: 0 };
+      const genderCounts: { [gender: string]: any } = {};
+      const daerahCounts: { [daerahId: string]: any } = {};
+      const desaCounts: { [desaId: string]: any } = {};
+      const kelompokCounts: { [kelompokId: string]: any } = {};
+      const ageCategoryCounts: { [ageCategoryId: string]: any } = {};
+
+      for (const log of dateLogs) {
+        const status = log.status;
+        if (!status) continue;
+        
+        if (status === 'Hadir' || status === 'Izin' || status === 'Sakit' || status === 'Alpa') {
+          statusCounts[status]++;
+        }
+
+        const member = rawMembers.find(m => String(m.id) === String(log.memberId));
+        
+        const gender = (member?.jenis_kelamin || (log as any).gender || 'L').toUpperCase().startsWith('P') ? 'P' : 'L';
+        const ageId = member?.age_category_id || (log as any).ageCategoryId || log.ageName || 'Unknown';
+        const kelompokId = member?.kelompok_id || (log as any).kelompokId || log.kelompokName || 'Unknown';
+        const desaId = member?.desa_id || (log as any).desaId || log.desaName || 'Unknown';
+        const daerahId = member?.daerah_id || (log as any).daerahId || log.daerahName || 'Unknown';
+
+        const updateMap = (subMap: any, key: string) => {
+          const checkKey = key || 'Unknown';
+          if (!subMap[checkKey]) {
+            subMap[checkKey] = { Hadir: 0, Izin: 0, Sakit: 0, Alpa: 0 };
+          }
+          if (subMap[checkKey][status] !== undefined) {
+            subMap[checkKey][status]++;
+          }
+        };
+
+        updateMap(genderCounts, gender);
+        updateMap(daerahCounts, daerahId);
+        updateMap(desaCounts, desaId);
+        updateMap(kelompokCounts, kelompokId);
+        updateMap(ageCategoryCounts, ageId);
+      }
+
+      return {
+        id: dateStr,
+        date: dateStr,
+        totalCount,
+        statusCounts,
+        genderCounts,
+        daerahCounts,
+        desaCounts,
+        kelompokCounts,
+        ageCategoryCounts
+      };
+    });
+  }, [scopedLogs, rawMembers]);
   const [isAbsensiLoading, setIsAbsensiLoading] = useState(false);
 
   const [hasLoadedBendahara, setHasLoadedBendahara] = useState<boolean>(false);
@@ -609,9 +693,20 @@ const App: React.FC = () => {
     setApprovalsList([]);
     setAbsensiMembers([]);
     setAbsensiLogs([]);
+    setRestrictedDaerahId('');
+    setRestrictedDesaId('');
+    setRestrictedKelompokId('');
+    setRestrictedAgeCategoryId('');
     setHasLoadedBendahara(false);
     setHasLoadedAbsensi(false);
     closeDialog();
+    if (window.location.hash !== '#/setup-guide') {
+      try {
+        window.history.replaceState(null, '', window.location.pathname + '#/');
+      } catch (e) {
+        window.location.hash = '#/';
+      }
+    }
     showToast("Berhasil keluar", "success");
   };
 
@@ -1287,10 +1382,18 @@ const App: React.FC = () => {
     setCurrentRole(serverRole); 
     setOriginalRole(data.original_role); 
     setInstansi(data.instansi); 
+    localStorage.setItem('instansi_id', data.instansi_id || data.instansi || ''); 
     setActiveScriptUrl(data.appsscript || 'native');
     setAbsensiMasterUrl(data.appsscript_master || 'native');
     setAbsensiLogUrl(data.appsscript_attendance || 'native');
     setWebAccessStrings(accessList);
+
+    setRestrictedDaerahId(data.restricted_daerah_id || '');
+    setRestrictedDesaId(data.restricted_desa_id || '');
+    setRestrictedKelompokId(data.restricted_kelompok_id || '');
+    setRestrictedAgeCategoryId(data.restricted_age_category_id || '');
+    localStorage.setItem('grouping_write_permissions', JSON.stringify(data.grouping_write_permissions || {}));
+
     setCurrentApp(defaultApp);
     localStorage.setItem('currentApp', defaultApp);
     window.location.replace(defaultApp === 'bendahara' ? '#/treasurer' : '#/attendance');
@@ -1318,12 +1421,29 @@ const App: React.FC = () => {
       if (window.location.hash !== expectedHash) {
         window.location.replace(expectedHash);
       }
+    } else {
+      if (window.location.hash !== '#/setup-guide' && window.location.hash !== '#/' && window.location.hash !== '') {
+        try {
+          window.history.replaceState(null, '', window.location.pathname + '#/');
+        } catch (e) {
+          window.location.replace('#/');
+        }
+      }
     }
   }, [isLoggedIn, currentApp, currentRole]);
 
   useEffect(() => {
     const handleHashChange = () => {
-      if (!isLoggedIn) return;
+      if (!isLoggedIn) {
+        if (window.location.hash !== '#/setup-guide' && window.location.hash !== '#/' && window.location.hash !== '') {
+          try {
+            window.history.replaceState(null, '', window.location.pathname + '#/');
+          } catch (e) {
+            window.location.replace('#/');
+          }
+        }
+        return;
+      }
       const hash = window.location.hash;
       if (currentRole === 'PortalMaster' || currentRole === 'Super' + 'admin') {
         if (hash !== '#/admin') {
@@ -1839,8 +1959,8 @@ const App: React.FC = () => {
           {sidebarCollapsed ? <ChevronsRight size={14} strokeWidth={3} /> : <ChevronsLeft size={14} strokeWidth={3} />}
         </button>
         <div className="flex flex-col transition-all duration-500 ease-in-out px-4 items-center py-8 relative z-10">
-          <div className={`bg-[#007CC2] rounded-2xl flex items-center justify-center text-white shadow-lg shadow-sky-500/20 transition-all duration-500 ${sidebarCollapsed ? 'w-10 h-10' : 'w-12 h-12'}`}>
-            <Wallet size={sidebarCollapsed ? 20 : 24} />
+          <div className={`bg-transparent flex items-center justify-center transition-all duration-500 overflow-hidden ${sidebarCollapsed ? 'w-11 h-11' : 'w-16 h-16'}`}>
+            <img src="/icon-192.png" alt="Logo" className="w-full h-full object-contain" />
           </div>
           <div 
             style={{
@@ -1891,7 +2011,7 @@ const App: React.FC = () => {
         <div className="flex-1 py-2 px-4 space-y-1.5 overflow-y-auto no-scrollbar relative z-10">
           {activeNavIndex !== -1 && (
             <div 
-              className="absolute left-4 right-4 h-[42px] top-2 bg-[#007CC2] rounded-xl shadow-lg shadow-sky-950/20 transition-all duration-500 ease-in-out z-0"
+              className="absolute left-4 right-4 h-[42px] top-[14px] bg-[#007CC2] rounded-xl shadow-lg shadow-sky-950/20 transition-all duration-500 ease-in-out z-0"
               style={{ transform: `translateY(${activeNavIndex * (42 + 6)}px)` }} 
             />
           )}
@@ -1940,19 +2060,21 @@ const App: React.FC = () => {
       </div>
 
       <div className="flex-1 relative flex flex-col min-w-0 h-full overflow-hidden">
-        <div className="md:hidden flex items-center justify-between px-6 py-4 bg-white border-b border-slate-100 z-30 shadow-sm">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-[#007CC2] rounded-xl flex items-center justify-center text-white shadow-md"><Wallet size={18}/></div>
-            <div className="flex flex-col">
-              <span className="font-black text-[11px] uppercase text-slate-800 truncate max-w-[140px] leading-tight">{instansi}</span>
-              <span className="text-[9px] font-black text-[#007CC2] uppercase tracking-tight">{fullName} ({displayRole})</span>
+        <div className="md:hidden flex items-center justify-between px-4 py-2 bg-white border-b border-slate-100 z-30 shadow-sm h-[50px]">
+          <div className="flex items-center space-x-2.5 min-w-0">
+            <div className="w-8 h-8 bg-transparent flex items-center justify-center overflow-hidden shrink-0">
+              <img src="/icon-192.png" alt="Logo" className="w-full h-full object-contain" />
+            </div>
+            <div className="flex flex-col min-w-0">
+              <span className="font-black text-[11px] uppercase text-slate-800 truncate max-w-[150px] leading-tight">{instansi}</span>
+              <span className="text-[9px] font-black text-[#007CC2] uppercase tracking-tight truncate max-w-[150px]">{fullName} ({displayRole})</span>
             </div>
           </div>
-          <div className="flex items-center space-x-2">
-            <button onClick={refreshAllData} className="p-2 text-[#007CC2] bg-sky-50 rounded-xl transition-all border border-sky-100">
-              <RefreshCw size={18} className={(currentApp === 'absensi' ? isAbsensiLoading : isLoading) ? 'animate-spin' : ''} />
+          <div className="flex items-center space-x-1.5 shrink-0">
+            <button onClick={refreshAllData} className="p-1.5 text-[#007CC2] bg-sky-50 rounded-lg transition-all border border-sky-100">
+              <RefreshCw size={16} className={(currentApp === 'absensi' ? isAbsensiLoading : isLoading) ? 'animate-spin' : ''} />
             </button>
-            <button onClick={() => openConfirm("Keluar?", "Sesi akan diakhiri.", "Ya, Keluar", handleLogout, true)} className="p-2 text-rose-500 bg-rose-50 rounded-xl transition-all border border-rose-100"><LogOut size={18} /></button>
+            <button onClick={() => openConfirm("Keluar?", "Sesi akan diakhiri.", "Ya, Keluar", handleLogout, true)} className="p-1.5 text-rose-500 bg-rose-50 rounded-lg transition-all border border-rose-100"><LogOut size={16} /></button>
           </div>
         </div>
         <div className="flex-1 relative overflow-hidden bg-slate-50/20 pb-[50px] md:pb-0">
@@ -1993,11 +2115,11 @@ const App: React.FC = () => {
             </>
           ) : (
             <>
-              <TabView id="dashboard" activeTab={activeTab}><DashboardAbsensi logs={absensiLogs} isLoading={isAbsensiLoading} username={fullName} summaries={absensiSummaries} ages={absensiAges} daerahs={absensiDaerahs} desas={absensiDesas} kelompoks={absensiKelompoks} /></TabView>
-              <TabView id="absensi_form" activeTab={activeTab}><AttendanceForm members={absensiMembers} logs={absensiLogs} logUrl={absensiLogUrl} username={fullName} notify={showToast} onSuccess={() => refreshAllAbsensi(true)} events={absensiEvents} ages={absensiAges} onLogsUpdated={handleMergeLogs} /></TabView>
-              <TabView id="absensi_members" activeTab={activeTab}><MemberManagement daerahs={absensiDaerahs} desas={absensiDesas} kelompoks={absensiKelompoks} ages={absensiAges} members={absensiMembers} setMembers={setAbsensiMembers} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} families={absensiFamilies} relationships={absensiRelationships} /></TabView>
-              <TabView id="absensi_groups" activeTab={activeTab}><GroupManagement daerahs={absensiDaerahs} setDaerahs={setAbsensiDaerahs} desas={absensiDesas} setDesas={setAbsensiDesas} kelompoks={absensiKelompoks} setKelompoks={setAbsensiKelompoks} ages={absensiAges} setAges={setAbsensiAges} events={absensiEvents} setEvents={setAbsensiEvents} families={absensiFamilies} setFamilies={setAbsensiFamilies} relationships={absensiRelationships} setRelationships={setAbsensiRelationships} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} /></TabView>
-              <TabView id="absensi_history" activeTab={activeTab}><AttendanceHistory logs={absensiLogs} isLoading={isAbsensiLoading} logUrl={absensiLogUrl} onRefresh={() => refreshAllAbsensi(true)} notify={showToast} events={absensiEvents} /></TabView>
+              <TabView id="dashboard" activeTab={activeTab}><DashboardAbsensi logs={scopedLogs} isLoading={isAbsensiLoading} username={fullName} summaries={absensiSummaries} ages={scopedAges} daerahs={scopedDaerahs} desas={scopedDesas} kelompoks={scopedKelompoks} events={absensiEvents} /></TabView>
+              <TabView id="absensi_form" activeTab={activeTab}><AttendanceForm members={scopedMembers} logs={scopedLogs} logUrl={absensiLogUrl} username={fullName} notify={showToast} onSuccess={() => refreshAllAbsensi(true)} events={absensiEvents} ages={scopedAges} onLogsUpdated={handleMergeLogs} /></TabView>
+              <TabView id="absensi_members" activeTab={activeTab}><MemberManagement daerahs={scopedDaerahs} desas={scopedDesas} kelompoks={scopedKelompoks} ages={scopedAges} members={scopedMembers} setMembers={setAbsensiMembers} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} families={absensiFamilies} relationships={absensiRelationships} /></TabView>
+              <TabView id="absensi_groups" activeTab={activeTab}><GroupManagement daerahs={scopedDaerahs} setDaerahs={setAbsensiDaerahs} desas={scopedDesas} setDesas={setAbsensiDesas} kelompoks={scopedKelompoks} setKelompoks={setAbsensiKelompoks} ages={scopedAges} setAges={setAbsensiAges} events={absensiEvents} setEvents={setAbsensiEvents} families={absensiFamilies} setFamilies={setAbsensiFamilies} relationships={absensiRelationships} setRelationships={setAbsensiRelationships} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} /></TabView>
+              <TabView id="absensi_history" activeTab={activeTab}><AttendanceHistory logs={scopedLogs} isLoading={isAbsensiLoading} logUrl={absensiLogUrl} onRefresh={() => refreshAllAbsensi(true)} notify={showToast} events={absensiEvents} /></TabView>
             </>
           )}
           {canChangePassword && (

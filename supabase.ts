@@ -101,6 +101,10 @@ export function handleSupabaseError(error: any, operationType: OperationType, pa
   }));
 }
 
+export function getInstansiContext(): string {
+  return localStorage.getItem('instansi_id') || localStorage.getItem('instansi') || '';
+}
+
 // Ensure Central configuration can be saved
 export function saveCentralConfig(url: string, key: string) {
   localStorage.setItem('supabase_central_url', url);
@@ -215,6 +219,11 @@ export async function dbGetTransactions(limitDateStr?: string, projectName?: str
     const client = getActiveDb();
     let query = client.from('transactions').select('*');
     
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    
     if (createdAfterStr) {
       query = query.gte('created_at', createdAfterStr);
     } else if (projectName && limitDateStr && endDateStr) {
@@ -238,6 +247,8 @@ export async function dbGetTransactions(limitDateStr?: string, projectName?: str
     const mapped = (data || []).map((row: any) => ({
       ...row,
       formattedDate: row.formatted_date || row.formattedDate || '',
+      amount: Number(row.debit || row.credit || 0),
+      balance: 0, // balance is computed dynamically on the fly in the frontend
     }));
     return mapped as Transaction[];
   } catch (err) {
@@ -248,11 +259,23 @@ export async function dbGetTransactions(limitDateStr?: string, projectName?: str
 export async function dbAddTransaction(tx: Transaction) {
   try {
     const client = getActiveDb();
-    const { formattedDate, is_approve, approve_by, approve_date, approver_role, ...rest } = tx as any;
     const dbTx = {
-      ...rest,
-      formatted_date: formattedDate || tx.formattedDate || (tx as any).formatted_date || '',
-    };
+      ...tx,
+      formatted_date: tx.formattedDate || (tx as any).formatted_date || '',
+    } as any;
+    delete dbTx.formattedDate;
+    delete dbTx.is_approve;
+    delete dbTx.approve_by;
+    delete dbTx.approve_date;
+    delete dbTx.approver_role;
+    delete dbTx.amount;
+    delete dbTx.balance;
+
+    const instansi = getInstansiContext();
+    if (instansi && !dbTx.instansi) {
+      dbTx.instansi = instansi;
+    }
+
     const { error } = await client.from('transactions').upsert([dbTx]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `transactions/${tx.id}`);
     return true;
@@ -276,12 +299,19 @@ export async function dbDeleteTransaction(id: string) {
 export async function dbGetDeletedTransactions() {
   try {
     const client = getActiveDb();
-    const { data, error } = await client.from('deleted_transactions').select('*').order('deleted_at', { ascending: false });
+    let query = client.from('deleted_transactions').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    const { data, error } = await query.order('deleted_at', { ascending: false });
     if (error) return handleSupabaseError(error, OperationType.LIST, 'deleted_transactions');
     
     const mapped = (data || []).map((row: any) => ({
       ...row,
       formattedDate: row.formatted_date || row.formattedDate || '',
+      amount: Number(row.debit || row.credit || 0),
+      balance: 0,
     }));
     return mapped as DeletedTransaction[];
   } catch (err) {
@@ -292,11 +322,19 @@ export async function dbGetDeletedTransactions() {
 export async function dbAddDeletedTransaction(dtx: DeletedTransaction) {
   try {
     const client = getActiveDb();
-    const { formattedDate, ...rest } = dtx as any;
     const dbDtx = {
-      ...rest,
-      formatted_date: formattedDate || dtx.formattedDate || (dtx as any).formatted_date || '',
-    };
+      ...dtx,
+      formatted_date: dtx.formattedDate || (dtx as any).formatted_date || '',
+    } as any;
+    delete dbDtx.formattedDate;
+    delete dbDtx.amount;
+    delete dbDtx.balance;
+
+    const instansi = getInstansiContext();
+    if (instansi && !dbDtx.instansi) {
+      dbDtx.instansi = instansi;
+    }
+
     const { error } = await client.from('deleted_transactions').upsert([dbDtx]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `deleted_transactions/${dtx.id}`);
     return true;
@@ -309,7 +347,12 @@ export async function dbAddDeletedTransaction(dtx: DeletedTransaction) {
 export async function dbGetEditHistory() {
   try {
     const client = getActiveDb();
-    const { data, error } = await client.from('edit_history').select('*').order('edited_at', { ascending: false });
+    let query = client.from('edit_history').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    const { data, error } = await query.order('edited_at', { ascending: false });
     if (error) return handleSupabaseError(error, OperationType.LIST, 'edit_history');
     return (data || []) as EditHistory[];
   } catch (err) {
@@ -320,7 +363,12 @@ export async function dbGetEditHistory() {
 export async function dbAddEditHistory(eh: EditHistory) {
   try {
     const client = getActiveDb();
-    const { error } = await client.from('edit_history').upsert([eh]);
+    const instansi = getInstansiContext();
+    const dbEh = { ...eh } as any;
+    if (instansi && !dbEh.instansi) {
+      dbEh.instansi = instansi;
+    }
+    const { error } = await client.from('edit_history').upsert([dbEh]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `edit_history/${eh.id}`);
     return true;
   } catch (err) {
@@ -332,7 +380,12 @@ export async function dbAddEditHistory(eh: EditHistory) {
 export async function dbGetProjects() {
   try {
     const client = getActiveDb();
-    const { data, error } = await client.from('projects').select('*').order('name', { ascending: true });
+    let query = client.from('projects').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    const { data, error } = await query.order('name', { ascending: true });
     if (error) return handleSupabaseError(error, OperationType.LIST, 'projects');
     return (data || []) as ProjectMetadata[];
   } catch (err) {
@@ -343,7 +396,12 @@ export async function dbGetProjects() {
 export async function dbAddProject(proj: ProjectMetadata) {
   try {
     const client = getActiveDb();
-    const { error } = await client.from('projects').upsert([proj]);
+    const instansi = getInstansiContext();
+    const dbProj = { ...proj } as any;
+    if (instansi && !dbProj.instansi) {
+      dbProj.instansi = instansi;
+    }
+    const { error } = await client.from('projects').upsert([dbProj]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `projects/${proj.name}`);
     return true;
   } catch (err) {
@@ -355,7 +413,12 @@ export async function dbAddProject(proj: ProjectMetadata) {
 export async function dbGetCategories() {
   try {
     const client = getActiveDb();
-    const { data, error } = await client.from('categories').select('name').order('name', { ascending: true });
+    let query = client.from('categories').select('name');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    const { data, error } = await query.order('name', { ascending: true });
     if (error) return handleSupabaseError(error, OperationType.LIST, 'categories');
     return (data || []).map(row => row.name) as string[];
   } catch (err) {
@@ -367,7 +430,12 @@ export async function dbAddCategory(name: string) {
   try {
     const client = getActiveDb();
     const id = name.toLowerCase().replace(/ /g, '_');
-    const { error } = await client.from('categories').upsert([{ id, name }]);
+    const instansi = getInstansiContext();
+    const payload: any = { id, name };
+    if (instansi) {
+      payload.instansi = instansi;
+    }
+    const { error } = await client.from('categories').upsert([payload]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `categories/${id}`);
     return true;
   } catch (err) {
@@ -379,7 +447,12 @@ export async function dbAddCategory(name: string) {
 export async function dbGetApprovals() {
   try {
     const client = getActiveDb();
-    const { data, error } = await client.from('approvals').select('*');
+    let query = client.from('approvals').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    const { data, error } = await query;
     if (error) return handleSupabaseError(error, OperationType.LIST, 'approvals');
     return data || [];
   } catch (err) {
@@ -391,7 +464,12 @@ export async function dbAddApproval(appr: any) {
   try {
     const client = getActiveDb();
     const id = `${appr.period_id}-${appr.project_name.toLowerCase().replace(/ /g, '_')}`;
-    const { error } = await client.from('approvals').upsert([{ id, ...appr }]);
+    const instansi = getInstansiContext();
+    const payload = { id, ...appr } as any;
+    if (instansi && !payload.instansi) {
+      payload.instansi = instansi;
+    }
+    const { error } = await client.from('approvals').upsert([payload]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `approvals/${id}`);
     return true;
   } catch (err) {
@@ -426,7 +504,12 @@ export async function dbUpdateProjectStatus(name: string, status: string) {
 export async function dbGetMembers() {
   try {
     const client = getActiveDb();
-    const { data, error } = await client.from('members').select('*').order('nama_lengkap', { ascending: true });
+    let query = client.from('members').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    const { data, error } = await query.order('nama_lengkap', { ascending: true });
     if (error) return handleSupabaseError(error, OperationType.LIST, 'members');
     return (data || []) as AbsensiMember[];
   } catch (err) {
@@ -439,6 +522,10 @@ export async function dbAddMember(mbr: AbsensiMember) {
   try {
     const client = getActiveDb();
     const { daerah_name, desa_name, kelompok_name, age_category_name, family_name, relationship_name, is_wali, nama_ortu, no_hp_ortu, pekerjaan_ortu, ...cleanMbr } = mbr;
+    const instansi = getInstansiContext();
+    if (instansi && !(cleanMbr as any).instansi) {
+      (cleanMbr as any).instansi = instansi;
+    }
     const { error } = await client.from('members').upsert([cleanMbr]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `members/${mbr.id}`);
     return true;
@@ -451,6 +538,10 @@ export async function dbUpdateMember(id: string, mbr: Partial<AbsensiMember>) {
   try {
     const client = getActiveDb();
     const { daerah_name, desa_name, kelompok_name, age_category_name, family_name, relationship_name, is_wali, nama_ortu, no_hp_ortu, pekerjaan_ortu, ...cleanMbr } = mbr as any;
+    const instansi = getInstansiContext();
+    if (instansi && !cleanMbr.instansi) {
+      cleanMbr.instansi = instansi;
+    }
     const { error } = await client.from('members').update(cleanMbr).eq('id', id);
     if (error) return handleSupabaseError(error, OperationType.UPDATE, `members/${id}`);
     return true;
@@ -463,7 +554,12 @@ export async function dbUpdateMember(id: string, mbr: Partial<AbsensiMember>) {
 export async function dbGetFamilies() {
   try {
     const client = getActiveDb();
-    const { data, error } = await client.from('families').select('*').order('nama_keluarga', { ascending: true });
+    let query = client.from('families').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    const { data, error } = await query.order('nama_keluarga', { ascending: true });
     if (error) return handleSupabaseError(error, OperationType.LIST, 'families');
     return (data || []) as Family[];
   } catch (err) {
@@ -475,7 +571,12 @@ export async function dbGetFamilies() {
 export async function dbAddFamily(fam: Family) {
   try {
     const client = getActiveDb();
-    const { error } = await client.from('families').upsert([fam]);
+    const instansi = getInstansiContext();
+    const dbFam = { ...fam } as any;
+    if (instansi && !dbFam.instansi) {
+      dbFam.instansi = instansi;
+    }
+    const { error } = await client.from('families').upsert([dbFam]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `families/${fam.id}`);
     return true;
   } catch (err) {
@@ -497,7 +598,12 @@ export async function dbDeleteFamily(id: string) {
 export async function dbGetFamilyRelationships() {
   try {
     const client = getActiveDb();
-    const { data, error } = await client.from('family_relationships').select('*').order('name', { ascending: true });
+    let query = client.from('family_relationships').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    const { data, error } = await query.order('name', { ascending: true });
     if (error) return handleSupabaseError(error, OperationType.LIST, 'family_relationships');
     return (data || []) as FamilyRelationship[];
   } catch (err) {
@@ -509,7 +615,12 @@ export async function dbGetFamilyRelationships() {
 export async function dbAddFamilyRelationship(rel: FamilyRelationship) {
   try {
     const client = getActiveDb();
-    const { error } = await client.from('family_relationships').upsert([rel]);
+    const instansi = getInstansiContext();
+    const dbRel = { ...rel } as any;
+    if (instansi && !dbRel.instansi) {
+      dbRel.instansi = instansi;
+    }
+    const { error } = await client.from('family_relationships').upsert([dbRel]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `family_relationships/${rel.id}`);
     return true;
   } catch (err) {
@@ -529,10 +640,121 @@ export async function dbDeleteFamilyRelationship(id: string) {
 }
 
 // 9. Attendance Marking Logs
+export interface EventDashboardSummary {
+  eventId: string;
+  eventName?: string;
+  meetingStats: Array<{
+    meetingNumber: number;
+    dateStr: string;
+    dateFormatted: string;
+    total: number;
+    hadir: number;
+    izin: number;
+    sakit: number;
+    alpa: number;
+    pct: number;
+  }>;
+  overall: {
+    totalLogs: number;
+    totalHadir: number;
+    totalIzin: number;
+    totalSakit: number;
+    totalAlpa: number;
+    presenceRate: number;
+    meetingCount: number;
+  };
+  top5Hadir: Array<{
+    memberId: string;
+    memberName: string;
+    kelompokName: string;
+    count: number;
+    totalMeetings: number;
+    pct: number;
+    izinCount?: number;
+  }>;
+  top5Izin: Array<{
+    memberId: string;
+    memberName: string;
+    kelompokName: string;
+    count: number;
+    totalMeetings: number;
+    izinCount: number;
+    sakitCount: number;
+  }>;
+  top5Alpa: Array<{
+    memberId: string;
+    memberName: string;
+    kelompokName: string;
+    count: number;
+    totalMeetings: number;
+    pct: number;
+  }>;
+  top5Terlambat?: Array<{
+    memberId: string;
+    memberName: string;
+    kelompokName: string;
+    count: number;
+    totalMinutes: number;
+    totalMeetings: number;
+    formattedLate: string;
+  }>;
+}
+
+export async function dbGetRecentEvents(limitCount: number = 5): Promise<EventData[]> {
+  try {
+    const client = getActiveDb();
+    const instansi = getInstansiContext();
+    let query = client.from('events').select('*');
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    query = query.order('updated_at', { ascending: false }).limit(limitCount);
+    const { data, error } = await query;
+    if (error || !data || data.length === 0) {
+      let fallbackQuery = client.from('events').select('*');
+      if (instansi) fallbackQuery = fallbackQuery.eq('instansi', instansi);
+      fallbackQuery = fallbackQuery.order('created_at', { ascending: false }).limit(limitCount);
+      const { data: fallbackData } = await fallbackQuery;
+      return (fallbackData || []) as EventData[];
+    }
+    return (data || []) as EventData[];
+  } catch (err) {
+    return [];
+  }
+}
+
+export async function dbGetEventDashboardSummary(eventId: string): Promise<EventDashboardSummary | null> {
+  if (!eventId) return null;
+  const client = getActiveDb();
+  const instansi = getInstansiContext();
+
+  // STRICTLY execute Supabase RPC function for server-side aggregation (No fallback queries)
+  const { data: rpcData, error: rpcError } = await client.rpc('get_event_dashboard_summary', {
+    p_event_id: eventId,
+    p_instansi: instansi || null
+  });
+
+  if (rpcError) {
+    console.error("Error calling Supabase RPC function 'get_event_dashboard_summary':", rpcError);
+    throw new Error(`RPC function error: ${rpcError.message || JSON.stringify(rpcError)}`);
+  }
+
+  if (!rpcData) {
+    return null;
+  }
+
+  return rpcData as EventDashboardSummary;
+}
+
 export async function dbGetAttendanceLogs(limitCount?: number) {
   try {
     const client = getActiveDb();
-    let query = client.from('attendance_logs').select('*').order('date', { ascending: false });
+    let query = client.from('attendance_logs').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    query = query.order('date', { ascending: false });
     if (limitCount && limitCount > 0) {
       query = query.limit(limitCount);
     }
@@ -548,6 +770,10 @@ export async function dbGetFilteredAttendanceLogs(dateStr: string, eventId: stri
   try {
     const client = getActiveDb();
     let query = client.from('attendance_logs').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
     
     if (dateStr) {
       query = query.like('date', `${dateStr}%`);
@@ -571,7 +797,8 @@ export async function dbGetFilteredAttendanceLogs(dateStr: string, eventId: stri
 
 export async function dbAddAttendanceLog(log: AttendanceLog) {
   const client = getActiveDb();
-  const cleanLog = {
+  const instansi = getInstansiContext();
+  const cleanLog: any = {
     id: log.id,
     memberId: log.memberId,
     memberName: log.memberName,
@@ -588,36 +815,65 @@ export async function dbAddAttendanceLog(log: AttendanceLog) {
     uniq_ref: log.uniq_ref || null,
     jam_mulai: log.jam_mulai || null
   };
+  if (instansi) {
+    cleanLog.instansi = instansi;
+  }
   const { error } = await client.from('attendance_logs').upsert([cleanLog]);
   if (error) {
     handleSupabaseError(error, OperationType.WRITE, `attendance_logs/${log.id}`);
   }
+
+  if (log.event_id) {
+    try {
+      await client.from('events').update({ updated_at: new Date().toISOString() }).eq('id', log.event_id);
+    } catch (e) {
+      console.warn("Failed to update event updated_at:", e);
+    }
+  }
+
   return true;
 }
 
 export async function dbAddAttendanceLogs(logs: AttendanceLog[]) {
   const client = getActiveDb();
-  const cleanLogs = logs.map((log: any) => ({
-    id: log.id,
-    memberId: log.memberId,
-    memberName: log.memberName,
-    ageName: log.ageName,
-    kelompokName: log.kelompokName,
-    desaName: log.desaName,
-    daerahName: log.daerahName || null,
-    date: log.date,
-    dateInput: log.dateInput,
-    status: log.status,
-    note: log.note,
-    event_id: log.event_id || null,
-    metode: log.metode || 'manual',
-    uniq_ref: log.uniq_ref || null,
-    jam_mulai: log.jam_mulai || null
-  }));
+  const instansi = getInstansiContext();
+  const cleanLogs = logs.map((log: any) => {
+    const item: any = {
+      id: log.id,
+      memberId: log.memberId,
+      memberName: log.memberName,
+      ageName: log.ageName,
+      kelompokName: log.kelompokName,
+      desaName: log.desaName,
+      daerahName: log.daerahName || null,
+      date: log.date,
+      dateInput: log.dateInput,
+      status: log.status,
+      note: log.note,
+      event_id: log.event_id || null,
+      metode: log.metode || 'manual',
+      uniq_ref: log.uniq_ref || null,
+      jam_mulai: log.jam_mulai || null
+    };
+    if (instansi) {
+      item.instansi = instansi;
+    }
+    return item;
+  });
   const { error } = await client.from('attendance_logs').upsert(cleanLogs);
   if (error) {
     handleSupabaseError(error, OperationType.WRITE, `attendance_logs/batch`);
   }
+
+  const eventIds = Array.from(new Set(logs.map((l: any) => l.event_id).filter(Boolean)));
+  for (const eventId of eventIds) {
+    try {
+      await client.from('events').update({ updated_at: new Date().toISOString() }).eq('id', eventId);
+    } catch (e) {
+      console.warn("Failed to update event updated_at:", e);
+    }
+  }
+
   return true;
 }
 
@@ -636,7 +892,12 @@ export async function dbDeleteAttendanceLog(id: string) {
 export async function dbGetEvents() {
   try {
     const client = getActiveDb();
-    const { data, error } = await client.from('events').select('*').order('created_at', { ascending: false });
+    let query = client.from('events').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    const { data, error } = await query.order('updated_at', { ascending: false, nullsFirst: false });
     if (error) return handleSupabaseError(error, OperationType.LIST, 'events');
     return (data || []) as EventData[];
   } catch (err) {
@@ -648,7 +909,15 @@ export async function dbGetEvents() {
 export async function dbAddEvent(event: EventData) {
   try {
     const client = getActiveDb();
-    const { error } = await client.from('events').upsert([event]);
+    const instansi = getInstansiContext();
+    const dbEvent = { 
+      ...event, 
+      updated_at: new Date().toISOString() 
+    } as any;
+    if (instansi && !dbEvent.instansi) {
+      dbEvent.instansi = instansi;
+    }
+    const { error } = await client.from('events').upsert([dbEvent]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `events/${event.id}`);
     return true;
   } catch (err) {
@@ -677,7 +946,12 @@ export function dbSubscribeEvents(callback: (events: EventData[]) => void, onErr
 export async function dbGetLabels() {
   try {
     const client = getActiveDb();
-    const { data, error } = await client.from('labels').select('*').order('name', { ascending: true });
+    let query = client.from('labels').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    const { data, error } = await query.order('name', { ascending: true });
     if (error) return handleSupabaseError(error, OperationType.LIST, 'labels');
     return (data || []) as LabelData[];
   } catch (err) {
@@ -689,7 +963,12 @@ export async function dbGetLabels() {
 export async function dbAddLabel(lbl: LabelData) {
   try {
     const client = getActiveDb();
-    const { error } = await client.from('labels').upsert([lbl]);
+    const instansi = getInstansiContext();
+    const dbLbl = { ...lbl } as any;
+    if (instansi && !dbLbl.instansi) {
+      dbLbl.instansi = instansi;
+    }
+    const { error } = await client.from('labels').upsert([dbLbl]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `labels/${lbl.id}`);
     return true;
   } catch (err) {
@@ -712,7 +991,12 @@ export async function dbDeleteLabel(id: string) {
 export async function dbGetDaerahs() {
   try {
     const client = getActiveDb();
-    const { data, error } = await client.from('daerahs').select('*').order('nama_daerah', { ascending: true });
+    let query = client.from('daerahs').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    const { data, error } = await query.order('nama_daerah', { ascending: true });
     if (error) return handleSupabaseError(error, OperationType.LIST, 'daerahs');
     return (data || []) as DaerahData[];
   } catch (err) {
@@ -724,7 +1008,12 @@ export async function dbGetDaerahs() {
 export async function dbAddDaerah(daerah: DaerahData) {
   try {
     const client = getActiveDb();
-    const { error } = await client.from('daerahs').upsert([daerah]);
+    const instansi = getInstansiContext();
+    const dbDaerah = { ...daerah } as any;
+    if (instansi && !dbDaerah.instansi) {
+      dbDaerah.instansi = instansi;
+    }
+    const { error } = await client.from('daerahs').upsert([dbDaerah]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `daerahs/${daerah.id}`);
     return true;
   } catch (err) {
@@ -747,7 +1036,12 @@ export async function dbDeleteDaerah(id: string) {
 export async function dbGetDesas() {
   try {
     const client = getActiveDb();
-    const { data, error } = await client.from('desas').select('*').order('nama_desa', { ascending: true });
+    let query = client.from('desas').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    const { data, error } = await query.order('nama_desa', { ascending: true });
     if (error) return handleSupabaseError(error, OperationType.LIST, 'desas');
     return (data || []) as DesaData[];
   } catch (err) {
@@ -759,7 +1053,12 @@ export async function dbGetDesas() {
 export async function dbAddDesa(desa: DesaData) {
   try {
     const client = getActiveDb();
-    const { error } = await client.from('desas').upsert([desa]);
+    const instansi = getInstansiContext();
+    const dbDesa = { ...desa } as any;
+    if (instansi && !dbDesa.instansi) {
+      dbDesa.instansi = instansi;
+    }
+    const { error } = await client.from('desas').upsert([dbDesa]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `desas/${desa.id}`);
     return true;
   } catch (err) {
@@ -782,7 +1081,12 @@ export async function dbDeleteDesa(id: string) {
 export async function dbGetKelompoks() {
   try {
     const client = getActiveDb();
-    const { data, error } = await client.from('kelompoks').select('*').order('nama_kelompok', { ascending: true });
+    let query = client.from('kelompoks').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    const { data, error } = await query.order('nama_kelompok', { ascending: true });
     if (error) return handleSupabaseError(error, OperationType.LIST, 'kelompoks');
     return (data || []) as KelompokData[];
   } catch (err) {
@@ -794,7 +1098,12 @@ export async function dbGetKelompoks() {
 export async function dbAddKelompok(group: KelompokData) {
   try {
     const client = getActiveDb();
-    const { error } = await client.from('kelompoks').upsert([group]);
+    const instansi = getInstansiContext();
+    const dbGroup = { ...group } as any;
+    if (instansi && !dbGroup.instansi) {
+      dbGroup.instansi = instansi;
+    }
+    const { error } = await client.from('kelompoks').upsert([dbGroup]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `kelompoks/${group.id}`);
     return true;
   } catch (err) {
@@ -817,7 +1126,12 @@ export async function dbDeleteKelompok(id: string) {
 export async function dbGetAgeCategories() {
   try {
     const client = getActiveDb();
-    const { data, error } = await client.from('age_categories').select('*');
+    let query = client.from('age_categories').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    const { data, error } = await query;
     if (error) return handleSupabaseError(error, OperationType.LIST, 'age_categories');
     
     // Sort by sort_order ascending (null values go to end), then name ascending
@@ -838,7 +1152,12 @@ export async function dbGetAgeCategories() {
 export async function dbAddAgeCategory(ageCat: AgeCategoryData) {
   try {
     const client = getActiveDb();
-    const { error } = await client.from('age_categories').upsert([ageCat]);
+    const instansi = getInstansiContext();
+    const dbAgeCat = { ...ageCat } as any;
+    if (instansi && !dbAgeCat.instansi) {
+      dbAgeCat.instansi = instansi;
+    }
+    const { error } = await client.from('age_categories').upsert([dbAgeCat]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `age_categories/${ageCat.id}`);
     return true;
   } catch (err) {
