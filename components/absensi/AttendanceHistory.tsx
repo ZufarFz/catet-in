@@ -32,11 +32,12 @@ interface AttendanceHistoryProps {
   isLoading: boolean;
   logUrl: string;
   onRefresh: () => void;
+  onFetchMoreLogs?: (additionalBatchSize?: number) => Promise<void>;
   notify: (msg: string, type: 'success' | 'error') => void;
   events?: EventData[];
 }
 
-const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, logUrl, onRefresh, notify, events = [] }) => {
+const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, logUrl, onRefresh, onFetchMoreLogs, notify, events = [] }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterKelompok, setFilterKelompok] = useState('');
@@ -55,6 +56,35 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
   // Pagination states
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [isFetchingMore, setIsFetchingMore] = useState(false);
+
+  const handleNextPage = async () => {
+    const nextPage = currentPage + 1;
+    const requiredTotal = nextPage * itemsPerPage;
+    
+    if (onFetchMoreLogs && requiredTotal > logs.length) {
+      setIsFetchingMore(true);
+      try {
+        await onFetchMoreLogs(100);
+      } finally {
+        setIsFetchingMore(false);
+      }
+    }
+    setCurrentPage(nextPage);
+  };
+
+  const handleItemsPerPageChange = async (val: number) => {
+    setItemsPerPage(val);
+    setCurrentPage(1);
+    if (onFetchMoreLogs && val > logs.length) {
+      setIsFetchingMore(true);
+      try {
+        await onFetchMoreLogs(100);
+      } finally {
+        setIsFetchingMore(false);
+      }
+    }
+  };
 
   const handleDelete = async (id: string) => {
     setIsProcessing(id);
@@ -92,7 +122,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
   };
 
   const filteredLogs = useMemo(() => {
-    return logs.filter(l => {
+    const matched = logs.filter(l => {
       const matchSearch = (l.memberName || '').toLowerCase().includes(searchTerm.toLowerCase());
       const matchStatus = !filterStatus || l.status === filterStatus;
       const matchKelompok = !filterKelompok || l.kelompokName === filterKelompok;
@@ -101,6 +131,12 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
       const matchDesa = !filterDesa || l.desaName === filterDesa;
       const matchDaerah = !filterDaerah || l.daerahName === filterDaerah;
       return matchSearch && matchStatus && matchKelompok && matchEvent && matchAgeCategory && matchDesa && matchDaerah;
+    });
+
+    return matched.sort((a, b) => {
+      const timeA = a.dateInput ? new Date(a.dateInput).getTime() : (a.date ? new Date(a.date.replace(' ', 'T')).getTime() : 0);
+      const timeB = b.dateInput ? new Date(b.dateInput).getTime() : (b.date ? new Date(b.date.replace(' ', 'T')).getTime() : 0);
+      return timeB - timeA;
     });
   }, [logs, searchTerm, filterStatus, filterKelompok, filterEvent, filterAgeCategory, filterDesa, filterDaerah]);
 
@@ -152,37 +188,43 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
     } catch (e) { return String(dateStr); }
   };
 
-  // Group filtered logs by date (only the date portion, e.g. YYYY-MM-DD)
+  // Group filtered logs by dateInput (Tanggal Input) preserving input order
   const groupedLogs = useMemo(() => {
-    const groups: { [date: string]: AttendanceLog[] } = {};
+    const groupList: { dateInputKey: string; dateInputDisplay: string; items: AttendanceLog[] }[] = [];
+    const groupMap = new Map<string, AttendanceLog[]>();
+
     paginatedLogs.forEach(log => {
+      const rawDate = log.dateInput || log.date;
       let dKey = 'no-date';
-      if (log.date) {
+      if (rawDate) {
         try {
-          const d = new Date(log.date);
+          const d = new Date(rawDate);
           if (!isNaN(d.getTime())) {
             const year = d.getFullYear();
             const month = String(d.getMonth() + 1).padStart(2, '0');
             const day = String(d.getDate()).padStart(2, '0');
             dKey = `${year}-${month}-${day}`;
           } else {
-            dKey = log.date.substring(0, 10);
+            dKey = String(rawDate).substring(0, 10);
           }
         } catch (e) {
-          dKey = log.date.substring(0, 10);
+          dKey = String(rawDate).substring(0, 10);
         }
       }
-      if (!groups[dKey]) {
-        groups[dKey] = [];
+
+      if (!groupMap.has(dKey)) {
+        const newItems: AttendanceLog[] = [];
+        groupMap.set(dKey, newItems);
+        groupList.push({
+          dateInputKey: dKey,
+          dateInputDisplay: rawDate || '',
+          items: newItems
+        });
       }
-      groups[dKey].push(log);
+      groupMap.get(dKey)!.push(log);
     });
-    return Object.keys(groups)
-      .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())
-      .map(date => ({
-        date,
-        items: groups[date]
-      }));
+
+    return groupList;
   }, [paginatedLogs]);
 
   return (
@@ -382,21 +424,20 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
             ) : (
               <table className="w-full text-left border-collapse table-fixed">
                 <thead>
-                  <tr className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-[0.15em] md:tracking-[0.2em] border-b border-slate-100">
-                    <th className="px-4 py-4 md:px-6 w-[70%] md:w-[75%]">Anggota & Kegiatan</th>
-                    <th className="px-4 py-4 md:px-6 text-right w-[30%] md:w-[25%]">Status & Metode</th>
+                  <tr className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-[0.1em] md:tracking-[0.2em] border-b border-slate-100">
+                    <th className="px-3 py-3.5 md:px-6 w-[58%] sm:w-[65%] md:w-[75%] whitespace-nowrap">Anggota & Kegiatan</th>
+                    <th className="px-3 py-3.5 md:px-6 text-right w-[42%] sm:w-[35%] md:w-[25%] whitespace-nowrap">Status & Metode</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {groupedLogs.map((group) => (
-                    <React.Fragment key={group.date}>
+                    <React.Fragment key={group.dateInputKey}>
                       {/* Date Group Header Row */}
                       <tr className="bg-slate-50/70 border-y border-slate-100">
-                        <td colSpan={2} className="px-4 py-2.5 md:px-6">
+                        <td colSpan={2} className="px-3 py-2.5 md:px-6">
                           <div className="flex items-center gap-2 text-slate-600">
-                            <CalendarDays size={12} className="text-slate-400" />
-                            <span className="text-[10px] font-black uppercase tracking-widest text-slate-700">{formatDate(group.date)}</span>
-                            <span className="text-[9px] font-bold text-slate-400">({group.items.length} Kehadiran)</span>
+                            <CalendarDays size={12} className="text-blue-500 shrink-0" />
+                            <span className="text-[10px] font-black uppercase tracking-widest text-slate-700 whitespace-nowrap">TGL INPUT: {formatDate(group.dateInputDisplay)}</span>
                           </div>
                         </td>
                       </tr>
@@ -428,35 +469,34 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                             className="group hover:bg-slate-50/40 active:bg-slate-100/50 transition-colors cursor-pointer"
                           >
                             {/* Column 1: Anggota & Kegiatan */}
-                            <td className="px-4 py-3 md:px-6">
-                              <div className="flex items-center gap-2.5 md:gap-3">
-                                <div className={`w-7 h-7 md:w-8 md:h-8 rounded-xl flex items-center justify-center shadow-sm shrink-0 ${
-                                  log.status === 'Hadir' ? (isLate ? 'bg-amber-50 text-amber-600' : 'bg-emerald-50 text-emerald-600') :
-                                  log.status === 'Alpa' ? 'bg-rose-50 text-rose-600' :
-                                  'bg-blue-50 text-blue-600'
-                                }`}>
-                                  <User size={12} className="md:size-[14px]" />
+                            <td className="px-3 py-3 md:px-6">
+                              <div className="min-w-0 space-y-1">
+                                {/* Baris 1: Nama Member */}
+                                <h4 className="text-xs md:text-[13px] font-black text-slate-800 uppercase tracking-tight leading-tight truncate" title={log.memberName}>
+                                  {log.memberName}
+                                </h4>
+
+                                {/* Baris 2: Nama Kegiatan (DD MMM YYYY) */}
+                                <div className="text-[9.5px] md:text-[10.5px] font-bold uppercase tracking-tight leading-snug truncate whitespace-nowrap">
+                                  <span className="text-slate-700 font-extrabold">{eventName}</span>{" "}
+                                  <span className="text-blue-600 font-bold">({formatDate(log.date)})</span>
                                 </div>
-                                <div className="min-w-0">
-                                  <h4 className="text-xs md:text-[13px] font-black text-slate-800 uppercase tracking-tight truncate leading-tight mb-0.5" title={log.memberName}>
-                                    {log.memberName}
-                                  </h4>
-                                  <p className="text-[9px] md:text-[10px] font-bold text-slate-400 uppercase tracking-tight truncate" title={eventName}>
-                                    {eventName}
-                                  </p>
-                                  {log.note && (
-                                    <div className="mt-1 inline-block px-2 py-0.5 bg-slate-100 border border-slate-200/50 rounded text-[9px] font-bold text-slate-500 italic max-w-[240px] truncate" title={log.note}>
+
+                                {/* Baris 3: Keterangan */}
+                                {log.note && (
+                                  <div>
+                                    <span className="inline-block px-2 py-0.5 bg-slate-100 border border-slate-200/50 rounded text-[9px] md:text-[10px] font-medium text-slate-600 italic max-w-full truncate" title={log.note}>
                                       "{log.note}"
-                                    </div>
-                                  )}
-                                </div>
+                                    </span>
+                                  </div>
+                                )}
                               </div>
                             </td>
 
                             {/* Column 2: Status & Metode (Right Aligned) */}
-                            <td className="px-4 py-3 md:px-6 text-right">
+                            <td className="px-3 py-3 md:px-6 text-right whitespace-nowrap">
                               <div className="flex flex-col items-end gap-1">
-                                <span className={`px-2 py-0.5 rounded text-[8px] md:text-[9px] font-black uppercase inline-block text-center min-w-[50px] md:min-w-[65px] ${
+                                <span className={`px-2 py-0.5 rounded text-[8px] md:text-[9px] font-black uppercase inline-block text-center min-w-[48px] md:min-w-[65px] ${
                                   log.status === 'Hadir' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100/50' :
                                   log.status === 'Izin' ? 'bg-blue-50 text-blue-700 border border-blue-100/50' :
                                   log.status === 'Sakit' ? 'bg-amber-50 text-amber-700 border border-amber-100/50' :
@@ -464,10 +504,10 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                                 }`}>
                                   {log.status}
                                 </span>
-                                <span className="text-[7.5px] md:text-[8.5px] font-extrabold text-slate-400 uppercase tracking-wider block leading-none flex items-center gap-1">
-                                  {log.metode === 'rfid' ? 'RFID' : log.metode === 'scan' ? 'SCAN' : 'MANUAL'} {log.date ? `• ${formatTime(log.date)}` : ''}
+                                <span className="text-[7.5px] md:text-[8.5px] font-extrabold text-slate-400 uppercase tracking-wider leading-none flex items-center justify-end gap-1 whitespace-nowrap">
+                                  <span>{log.metode === 'rfid' ? 'RFID' : log.metode === 'scan' ? 'SCAN' : 'MANUAL'} {log.date ? `• ${formatTime(log.date)}` : ''}</span>
                                   {isLate && (
-                                    <span className="text-rose-500 font-black animate-pulse bg-rose-50 border border-rose-100 px-1 rounded text-[7px]">
+                                    <span className="text-rose-500 font-black animate-pulse bg-rose-50 border border-rose-100 px-1 rounded text-[7px] shrink-0">
                                       TELAT {lateMinutes}m
                                     </span>
                                   )}
@@ -487,37 +527,33 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
           <div className="px-6 py-3 bg-slate-50/50 border-t border-slate-100 flex flex-row items-center justify-between">
              <div className="flex items-center gap-1.5">
                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Tampilkan:</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={100}
+                <select
                   value={itemsPerPage}
-                  onChange={(e) => {
-                    let val = Number(e.target.value);
-                    if (val > 100) val = 100;
-                    if (val < 1) val = 1;
-                    setItemsPerPage(val);
-                    setCurrentPage(1);
-                  }}
-                  className="w-12 bg-white border border-slate-200 rounded-lg px-1.5 py-0.5 text-[10px] font-black text-slate-700 text-center focus:border-blue-500 outline-none transition-all"
-                />
+                  onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
+                  className="bg-white border border-slate-200 rounded-lg px-2 py-0.5 text-[10px] font-black text-slate-700 text-center focus:border-blue-500 outline-none transition-all cursor-pointer"
+                >
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Data</span>
              </div>
              
              <div className="flex items-center gap-1">
                 <button 
                   onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                  disabled={currentPage === 1}
+                  disabled={currentPage === 1 || isFetchingMore}
                   className="p-1 bg-white border border-slate-200 rounded text-slate-400 hover:text-blue-600 disabled:opacity-40 disabled:hover:text-slate-400 transition-all shadow-sm active:scale-90"
                 >
                    <ChevronLeft size={12}/>
                 </button>
-                <div className="text-[10px] font-black text-slate-600 bg-white border border-slate-100 px-2.5 py-0.5 rounded shadow-sm min-w-[24px] text-center">
-                   {currentPage}
+                <div className="text-[10px] font-black text-slate-600 bg-white border border-slate-100 px-2.5 py-0.5 rounded shadow-sm min-w-[24px] text-center flex items-center justify-center">
+                   {isFetchingMore ? <Loader2 size={10} className="animate-spin text-blue-600" /> : currentPage}
                 </div>
                 <button 
-                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, Math.ceil(filteredLogs.length / itemsPerPage)))}
-                  disabled={currentPage >= Math.ceil(filteredLogs.length / itemsPerPage)}
+                  onClick={handleNextPage}
+                  disabled={isFetchingMore || (currentPage >= Math.ceil(filteredLogs.length / itemsPerPage) && !onFetchMoreLogs)}
                   className="p-1 bg-white border border-slate-200 rounded text-slate-400 hover:text-blue-600 disabled:opacity-40 disabled:hover:text-slate-400 transition-all shadow-sm active:scale-90"
                 >
                    <ChevronRight size={12}/>
@@ -604,9 +640,15 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                   </div>
 
                   <div className="space-y-0.5">
-                    <p className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider">Waktu Absen</p>
+                    <p className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider">Tanggal Absen</p>
                     <p className="font-extrabold text-slate-700 uppercase tracking-tight leading-tight">{formatDate(selectedLog.date)}</p>
                     <p className="text-[9px] font-extrabold text-slate-500 leading-tight mt-0.5">{formatTime(selectedLog.date)} WIB</p>
+                  </div>
+
+                  <div className="space-y-0.5">
+                    <p className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider">Tanggal Input System</p>
+                    <p className="font-extrabold text-slate-700 uppercase tracking-tight leading-tight">{formatDate(selectedLog.dateInput || selectedLog.date)}</p>
+                    <p className="text-[9px] font-extrabold text-slate-500 leading-tight mt-0.5">{formatTime(selectedLog.dateInput || selectedLog.date)} WIB</p>
                   </div>
 
                   <div className="space-y-0.5">

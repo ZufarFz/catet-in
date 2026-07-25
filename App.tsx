@@ -157,7 +157,7 @@ const App: React.FC = () => {
         const cached = localStorage.getItem(`absensi_logs_${inst}`);
         if (cached) {
           const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed)) return parsed;
+          if (Array.isArray(parsed)) return parsed.slice(0, 30);
         }
       }
     } catch (_) {
@@ -1281,9 +1281,9 @@ const App: React.FC = () => {
     if (!isSilent) setIsAbsensiLoading(true);
     try {
       const instansi = localStorage.getItem('instansi') || 'default';
-      const membersCount = rawMembers.length || 100;
-      const fetchLimit = Math.min(2500, Math.max(1000, membersCount * 12));
-      const freshLogs = await dbGetAttendanceLogs(fetchLimit);
+      // Fetch only 30 most recent logs at startup for optimal fast load
+      const initialFetchLimit = 30;
+      const freshLogs = await dbGetAttendanceLogs(initialFetchLimit);
 
       setAbsensiLogs(freshLogs);
       localStorage.setItem(`absensi_logs_${instansi}`, JSON.stringify(freshLogs));
@@ -1292,7 +1292,21 @@ const App: React.FC = () => {
     } finally {
       if (!isSilent) setIsAbsensiLoading(false);
     }
-  }, [rawMembers]);
+  }, []);
+
+  const fetchMoreAbsensiLogs = useCallback(async (additionalBatchSize = 100) => {
+    try {
+      const currentCount = absensiLogs.length;
+      const newTargetLimit = Math.max(currentCount + additionalBatchSize, 30);
+      const freshLogs = await dbGetAttendanceLogs(newTargetLimit);
+
+      setAbsensiLogs(freshLogs);
+      const instansi = localStorage.getItem('instansi') || 'default';
+      localStorage.setItem(`absensi_logs_${instansi}`, JSON.stringify(freshLogs));
+    } catch (err) {
+      console.error("fetchMoreAbsensiLogs error:", err);
+    }
+  }, [absensiLogs.length]);
 
   const handleMergeLogs = useCallback((incomingLogs: AttendanceLog[]) => {
     setAbsensiLogs(prevLogs => {
@@ -1309,8 +1323,8 @@ const App: React.FC = () => {
       });
       
       const sorted = Array.from(logMap.values()).sort((a, b) => {
-        const timeA = a.date ? new Date(a.date.replace(' ', 'T')).getTime() : 0;
-        const timeB = b.date ? new Date(b.date.replace(' ', 'T')).getTime() : 0;
+        const timeA = a.dateInput ? new Date(a.dateInput).getTime() : (a.date ? new Date(a.date.replace(' ', 'T')).getTime() : 0);
+        const timeB = b.dateInput ? new Date(b.dateInput).getTime() : (b.date ? new Date(b.date.replace(' ', 'T')).getTime() : 0);
         return timeB - timeA;
       });
       
@@ -1577,43 +1591,28 @@ const App: React.FC = () => {
       console.error("Real-time Relationships Sync Error:", err);
     });
 
-    // 6. Subscribe attendance logs with a dynamic and smart safety limit
-    const membersCount = rawMembers.length || 100;
-    const fetchLimit = Math.min(2500, Math.max(1000, membersCount * 12));
-    const unsubLogs = dbSubscribeAttendanceLogs(fetchLimit, (freshLogs) => {
+    // 6. Subscribe attendance logs with an initial batch limit of 30
+    const unsubLogs = dbSubscribeAttendanceLogs(30, (freshLogs) => {
       const cacheKey = `absensi_logs_${instansi}`;
-      let cachedLogs: AttendanceLog[] = [];
-      try {
-        const raw = localStorage.getItem(cacheKey);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) {
-            cachedLogs = parsed;
-          }
-        }
-      } catch (cacheErr) {
-        console.error("Cache read error:", cacheErr);
-      }
+      setAbsensiLogs(prevLogs => {
+        const logMap = new Map<string, AttendanceLog>();
+        prevLogs.forEach(log => {
+          if (log && log.id) logMap.set(log.id, log);
+        });
+        freshLogs.forEach(log => {
+          if (log && log.id) logMap.set(log.id, log);
+        });
 
-      // Merge log records: prioritize fresh logs from real-time Firestore synchronization
-      const logMap = new Map<string, AttendanceLog>();
-      cachedLogs.forEach(log => {
-        if (log && log.id) logMap.set(log.id, log);
-      });
-      freshLogs.forEach(log => {
-        if (log && log.id) logMap.set(log.id, log);
-      });
+        const mergedLogs = Array.from(logMap.values());
+        mergedLogs.sort((a, b) => {
+          const timeA = a.dateInput ? new Date(a.dateInput).getTime() : (a.date ? new Date(a.date.replace(' ', 'T')).getTime() : 0);
+          const timeB = b.dateInput ? new Date(b.dateInput).getTime() : (b.date ? new Date(b.date.replace(' ', 'T')).getTime() : 0);
+          return timeB - timeA;
+        });
 
-      const mergedLogs = Array.from(logMap.values());
-      // Sort them descending by date
-      mergedLogs.sort((a, b) => {
-        const dateA = a.date || '';
-        const dateB = b.date || '';
-        return dateB.localeCompare(dateA);
+        localStorage.setItem(cacheKey, JSON.stringify(mergedLogs));
+        return mergedLogs;
       });
-
-      setAbsensiLogs(mergedLogs);
-      localStorage.setItem(cacheKey, JSON.stringify(mergedLogs));
     }, (err) => {
       console.error("Real-time Logs Sync Error:", err);
     });
@@ -2119,7 +2118,7 @@ const App: React.FC = () => {
               <TabView id="absensi_form" activeTab={activeTab}><AttendanceForm members={scopedMembers} logs={scopedLogs} logUrl={absensiLogUrl} username={fullName} notify={showToast} onSuccess={() => refreshAllAbsensi(true)} events={absensiEvents} ages={scopedAges} onLogsUpdated={handleMergeLogs} /></TabView>
               <TabView id="absensi_members" activeTab={activeTab}><MemberManagement daerahs={scopedDaerahs} desas={scopedDesas} kelompoks={scopedKelompoks} ages={scopedAges} members={scopedMembers} setMembers={setAbsensiMembers} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} families={absensiFamilies} relationships={absensiRelationships} /></TabView>
               <TabView id="absensi_groups" activeTab={activeTab}><GroupManagement daerahs={scopedDaerahs} setDaerahs={setAbsensiDaerahs} desas={scopedDesas} setDesas={setAbsensiDesas} kelompoks={scopedKelompoks} setKelompoks={setAbsensiKelompoks} ages={scopedAges} setAges={setAbsensiAges} events={absensiEvents} setEvents={setAbsensiEvents} families={absensiFamilies} setFamilies={setAbsensiFamilies} relationships={absensiRelationships} setRelationships={setAbsensiRelationships} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} /></TabView>
-              <TabView id="absensi_history" activeTab={activeTab}><AttendanceHistory logs={scopedLogs} isLoading={isAbsensiLoading} logUrl={absensiLogUrl} onRefresh={() => refreshAllAbsensi(true)} notify={showToast} events={absensiEvents} /></TabView>
+              <TabView id="absensi_history" activeTab={activeTab}><AttendanceHistory logs={scopedLogs} isLoading={isAbsensiLoading} logUrl={absensiLogUrl} onRefresh={() => refreshAllAbsensi(true)} onFetchMoreLogs={fetchMoreAbsensiLogs} notify={showToast} events={absensiEvents} /></TabView>
             </>
           )}
           {canChangePassword && (

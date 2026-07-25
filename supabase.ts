@@ -728,22 +728,179 @@ export async function dbGetEventDashboardSummary(eventId: string): Promise<Event
   const client = getActiveDb();
   const instansi = getInstansiContext();
 
-  // STRICTLY execute Supabase RPC function for server-side aggregation (No fallback queries)
-  const { data: rpcData, error: rpcError } = await client.rpc('get_event_dashboard_summary', {
-    p_event_id: eventId,
-    p_instansi: instansi || null
-  });
+  try {
+    // Attempt Supabase RPC function for server-side aggregation first
+    const { data: rpcData, error: rpcError } = await client.rpc('get_event_dashboard_summary', {
+      p_event_id: eventId,
+      p_instansi: instansi || null
+    });
 
-  if (rpcError) {
-    console.error("Error calling Supabase RPC function 'get_event_dashboard_summary':", rpcError);
-    throw new Error(`RPC function error: ${rpcError.message || JSON.stringify(rpcError)}`);
+    if (!rpcError && rpcData) {
+      return rpcData as EventDashboardSummary;
+    }
+
+    if (rpcError) {
+      console.warn("Supabase RPC 'get_event_dashboard_summary' failed or missing, using client-side fallback aggregation:", rpcError.message);
+    }
+  } catch (rpcErr) {
+    console.warn("RPC call threw exception, using client-side fallback aggregation:", rpcErr);
   }
 
-  if (!rpcData) {
+  // Graceful Fallback: Compute summary directly from attendance_logs
+  try {
+    let query = client.from('attendance_logs').select('*').eq('event_id', eventId);
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    const { data: logsData, error: logsError } = await query;
+    if (logsError || !logsData) {
+      console.error("Fallback query for attendance_logs failed:", logsError);
+      return null;
+    }
+
+    const logs: AttendanceLog[] = logsData;
+
+    // Group logs by date
+    const dateMap = new Map<string, AttendanceLog[]>();
+    logs.forEach(log => {
+      const d = log.date ? log.date.split('T')[0] : 'Unknown';
+      if (!dateMap.has(d)) {
+        dateMap.set(d, []);
+      }
+      dateMap.get(d)!.push(log);
+    });
+
+    // Sort dates ascending
+    const sortedDates = Array.from(dateMap.keys()).sort();
+
+    const meetingStats = sortedDates.map((dateStr, idx) => {
+      const meetingLogs = dateMap.get(dateStr) || [];
+      const total = meetingLogs.length;
+      const hadir = meetingLogs.filter(l => l.status === 'Hadir').length;
+      const izin = meetingLogs.filter(l => l.status === 'Izin').length;
+      const sakit = meetingLogs.filter(l => l.status === 'Sakit').length;
+      const alpa = meetingLogs.filter(l => l.status === 'Alpa').length;
+      const pct = total > 0 ? Math.round((hadir / total) * 100) : 0;
+
+      return {
+        meetingNumber: idx + 1,
+        dateStr,
+        dateFormatted: dateStr,
+        total,
+        hadir,
+        izin,
+        sakit,
+        alpa,
+        pct
+      };
+    });
+
+    const totalLogs = logs.length;
+    const totalHadir = logs.filter(l => l.status === 'Hadir').length;
+    const totalIzin = logs.filter(l => l.status === 'Izin').length;
+    const totalSakit = logs.filter(l => l.status === 'Sakit').length;
+    const totalAlpa = logs.filter(l => l.status === 'Alpa').length;
+    const presenceRate = totalLogs > 0 ? Math.round((totalHadir / totalLogs) * 100) : 0;
+
+    // Group by member for Top 5
+    const memberMap = new Map<string, {
+      memberId: string;
+      memberName: string;
+      kelompokName: string;
+      hadir: number;
+      izin: number;
+      sakit: number;
+      alpa: number;
+      totalMeetings: number;
+    }>();
+
+    logs.forEach(log => {
+      const key = log.memberId || log.memberName;
+      if (!key) return;
+      if (!memberMap.has(key)) {
+        memberMap.set(key, {
+          memberId: log.memberId || '',
+          memberName: log.memberName || 'Anggota',
+          kelompokName: log.kelompokName || '-',
+          hadir: 0,
+          izin: 0,
+          sakit: 0,
+          alpa: 0,
+          totalMeetings: 0
+        });
+      }
+      const item = memberMap.get(key)!;
+      item.totalMeetings += 1;
+      if (log.status === 'Hadir') item.hadir += 1;
+      else if (log.status === 'Izin') item.izin += 1;
+      else if (log.status === 'Sakit') item.sakit += 1;
+      else if (log.status === 'Alpa') item.alpa += 1;
+    });
+
+    const membersArr = Array.from(memberMap.values());
+    const meetingCount = sortedDates.length || 1;
+
+    const top5Hadir = [...membersArr]
+      .sort((a, b) => b.hadir - a.hadir)
+      .slice(0, 5)
+      .map(m => ({
+        memberId: m.memberId,
+        memberName: m.memberName,
+        kelompokName: m.kelompokName,
+        count: m.hadir,
+        totalMeetings: m.totalMeetings,
+        pct: m.totalMeetings > 0 ? Math.round((m.hadir / m.totalMeetings) * 100) : 0,
+        izinCount: m.izin
+      }));
+
+    const top5Izin = [...membersArr]
+      .filter(m => (m.izin + m.sakit) > 0)
+      .sort((a, b) => (b.izin + b.sakit) - (a.izin + a.sakit))
+      .slice(0, 5)
+      .map(m => ({
+        memberId: m.memberId,
+        memberName: m.memberName,
+        kelompokName: m.kelompokName,
+        count: m.izin + m.sakit,
+        totalMeetings: m.totalMeetings,
+        izinCount: m.izin,
+        sakitCount: m.sakit
+      }));
+
+    const top5Alpa = [...membersArr]
+      .filter(m => m.alpa > 0)
+      .sort((a, b) => b.alpa - a.alpa)
+      .slice(0, 5)
+      .map(m => ({
+        memberId: m.memberId,
+        memberName: m.memberName,
+        kelompokName: m.kelompokName,
+        count: m.alpa,
+        totalMeetings: m.totalMeetings,
+        pct: m.totalMeetings > 0 ? Math.round((m.alpa / m.totalMeetings) * 100) : 0
+      }));
+
+    return {
+      eventId,
+      meetingStats,
+      overall: {
+        totalLogs,
+        totalHadir,
+        totalIzin,
+        totalSakit,
+        totalAlpa,
+        presenceRate,
+        meetingCount
+      },
+      top5Hadir,
+      top5Izin,
+      top5Alpa,
+      top5Terlambat: []
+    };
+  } catch (err) {
+    console.error("Error in fallback event summary calculation:", err);
     return null;
   }
-
-  return rpcData as EventDashboardSummary;
 }
 
 export async function dbGetAttendanceLogs(limitCount?: number) {
@@ -754,7 +911,7 @@ export async function dbGetAttendanceLogs(limitCount?: number) {
     if (instansi) {
       query = query.eq('instansi', instansi);
     }
-    query = query.order('date', { ascending: false });
+    query = query.order('dateInput', { ascending: false, nullsFirst: false }).order('date', { ascending: false });
     if (limitCount && limitCount > 0) {
       query = query.limit(limitCount);
     }
@@ -785,7 +942,7 @@ export async function dbGetFilteredAttendanceLogs(dateStr: string, eventId: stri
       query = query.is('event_id', null);
     }
     
-    query = query.order('date', { ascending: false }).limit(limitCount);
+    query = query.order('dateInput', { ascending: false, nullsFirst: false }).order('date', { ascending: false }).limit(limitCount);
     
     const { data, error } = await query;
     if (error) return handleSupabaseError(error, OperationType.LIST, 'attendance_logs_filtered');
