@@ -12,6 +12,4 @@ dist/
 Thumbs.db
 
 # md
-AGENTS.md
-README.md
 security_spec.md

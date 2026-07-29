@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { AbsensiMember, AttendanceLog, EventData, AgeCategoryData } from '../../types';
 import ModernSelect from '../ui/ModernSelect';
-import { dbAddAttendanceLog, dbAddAttendanceLogs, dbAddEvent, dbGetFilteredAttendanceLogs } from '../../supabase';
+import { dbAddAttendanceLog, dbAddAttendanceLogs, dbAddEvent, dbGetFilteredAttendanceLogs, dbGetExistingAttendanceMemberIds } from '../../supabase';
 
 interface AttendanceFormProps {
   members: AbsensiMember[];
@@ -250,9 +250,44 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
     };
   }, [attendanceMode, showInitialFilterModal, isScanningActive]);
 
+  // Lightweight fetch state for existing attendance member IDs
+  const [fetchedMemberIdsSet, setFetchedMemberIdsSet] = useState<Set<string>>(new Set());
+
+  // Periodically fetch existing member IDs for current selected date & event (lightweight query)
+  useEffect(() => {
+    if (!selectedDate) {
+      setFetchedMemberIdsSet(new Set());
+      return;
+    }
+
+    let isMounted = true;
+    const fetchMemberIds = async () => {
+      try {
+        const idsSet = await dbGetExistingAttendanceMemberIds(selectedDate, selectedEventId || null);
+        if (isMounted) {
+          setFetchedMemberIdsSet(idsSet);
+        }
+      } catch (err) {
+        console.error("Error fetching existing member ids:", err);
+      }
+    };
+
+    fetchMemberIds();
+    const intervalId = setInterval(fetchMemberIds, 10000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+    };
+  }, [selectedDate, selectedEventId]);
+
   // Get members who are already recorded for the selected date & selected event
   const recordedMemberIds = useMemo(() => {
     const recordedSet = new Set<string>();
+
+    // Add all lightweight fetched IDs
+    fetchedMemberIdsSet.forEach(id => recordedSet.add(id));
+
     if (!selectedDate) return recordedSet;
     
     logs.forEach(log => {
@@ -286,7 +321,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
     });
 
     return recordedSet;
-  }, [logs, selectedDate, selectedEventId]);
+  }, [fetchedMemberIdsSet, logs, selectedDate, selectedEventId]);
 
   // Synchronize localScannedIds when recordedMemberIds updates
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -400,6 +435,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
         status: 'Hadir',
         note: '',
         createdBy: username,
+        created_by: localStorage.getItem('user_id') || username,
         event_id: currentEventId,
         metode: scanMethod,
         uniq_ref: uniqRefVal,
@@ -799,6 +835,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
           status: batchStatuses[m.id],
           note: batchNotes[m.id] || '',
           createdBy: username,
+          created_by: localStorage.getItem('user_id') || username,
           event_id: selectedEventId || null,
           metode: 'manual',
           uniq_ref: uniqRefVal,

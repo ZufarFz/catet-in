@@ -1,5 +1,5 @@
 {
-  "name": "bendahara-pintar-v5",
+  "name": "catet-in",
   "private": true,
   "version": "5.0.0",
   "type": "module",
@@ -12,6 +12,7 @@
   "dependencies": {
     "@netlify/functions": "^2.8.2",
     "@supabase/supabase-js": "^2.107.0",
+    "exceljs": "^4.4.0",
     "framer-motion": "^12.38.0",
     "jspdf": "^2.5.1",
     "jspdf-autotable": "^3.8.2",

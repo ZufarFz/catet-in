@@ -1,6 +1,6 @@
 {
-  "name": "Catet-In V5",
-  "description": "Manage family financial records and attendance using a Supabase database with integrated member and family tracking.",
+  "name": "Catet-In",
+  "description": "Aplikasi Catet-In untuk pencatatan Bendahara (Keuangan) dan Absensi.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

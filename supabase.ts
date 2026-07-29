@@ -903,6 +903,44 @@ export async function dbGetEventDashboardSummary(eventId: string): Promise<Event
   }
 }
 
+export async function enrichAttendanceLogsWithUserNames(logs: AttendanceLog[]): Promise<AttendanceLog[]> {
+  if (!logs || logs.length === 0) return logs;
+  try {
+    const client = centralClient || getActiveDb();
+    const { data: usersData } = await client.from('users').select('id, username, full_name');
+    if (!usersData || usersData.length === 0) return logs;
+
+    const userMap = new Map<string, string>();
+    usersData.forEach((u: any) => {
+      const displayName = (u.full_name && u.full_name.trim() !== '') ? u.full_name.trim() : (u.username?.trim() || u.id);
+      if (u.id) userMap.set(u.id, displayName);
+      if (u.username) {
+        userMap.set(u.username, displayName);
+        userMap.set(u.username.toLowerCase(), displayName);
+      }
+    });
+
+    return logs.map(l => {
+      const creatorKey = l.created_by || l.createdBy || l.user_id;
+      if (!creatorKey) return l;
+
+      const mappedName = userMap.get(creatorKey) || userMap.get(creatorKey.toLowerCase());
+      if (mappedName) {
+        return {
+          ...l,
+          created_by: mappedName,
+          createdBy: mappedName,
+          user_id: l.user_id || creatorKey
+        };
+      }
+      return l;
+    });
+  } catch (e) {
+    console.warn("Error enriching attendance logs with user names:", e);
+    return logs;
+  }
+}
+
 export async function dbGetAttendanceLogs(limitCount?: number) {
   try {
     const client = getActiveDb();
@@ -917,7 +955,8 @@ export async function dbGetAttendanceLogs(limitCount?: number) {
     }
     const { data, error } = await query;
     if (error) return handleSupabaseError(error, OperationType.LIST, 'attendance_logs');
-    return (data || []) as AttendanceLog[];
+    const logs = (data || []) as AttendanceLog[];
+    return await enrichAttendanceLogsWithUserNames(logs);
   } catch (err) {
     return [];
   }
@@ -946,15 +985,277 @@ export async function dbGetFilteredAttendanceLogs(dateStr: string, eventId: stri
     
     const { data, error } = await query;
     if (error) return handleSupabaseError(error, OperationType.LIST, 'attendance_logs_filtered');
-    return (data || []) as AttendanceLog[];
+    const logs = (data || []) as AttendanceLog[];
+    return await enrichAttendanceLogsWithUserNames(logs);
   } catch (err) {
     return [];
   }
 }
 
-export async function dbAddAttendanceLog(log: AttendanceLog) {
+export async function dbFetchExportDistinctDates(eventId?: string, startDate?: string, endDate?: string): Promise<string[]> {
+  try {
+    const client = getActiveDb();
+    const instansi = getInstansiContext();
+    let query = client.from('attendance_logs').select('date, dateInput');
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    if (eventId) {
+      query = query.eq('event_id', eventId);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.error("Error dbFetchExportDistinctDates:", error);
+      return [];
+    }
+
+    const dateSet = new Set<string>();
+    (data || []).forEach((row: any) => {
+      const rawDateStr = row.date || row.dateInput;
+      if (!rawDateStr) return;
+      try {
+        const dObj = new Date(rawDateStr.includes(' ') ? rawDateStr.replace(' ', 'T') : rawDateStr);
+        if (isNaN(dObj.getTime())) return;
+        const year = dObj.getFullYear();
+        const month = String(dObj.getMonth() + 1).padStart(2, '0');
+        const day = String(dObj.getDate()).padStart(2, '0');
+        const yyyymmdd = `${year}-${month}-${day}`;
+
+        if (startDate && yyyymmdd < startDate) return;
+        if (endDate && yyyymmdd > endDate) return;
+
+        dateSet.add(yyyymmdd);
+      } catch (e) {
+        // ignore invalid dates
+      }
+    });
+
+    return Array.from(dateSet).sort();
+  } catch (err) {
+    console.error("Error in dbFetchExportDistinctDates:", err);
+    return [];
+  }
+}
+
+export async function dbFetchExportAttendanceLogsForDates(eventId?: string, targetDates: string[] = []): Promise<AttendanceLog[]> {
+  try {
+    if (targetDates.length === 0) return [];
+    const client = getActiveDb();
+    let query = client.from('attendance_logs').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    if (eventId) {
+      query = query.eq('event_id', eventId);
+    }
+
+    query = query.order('dateInput', { ascending: false, nullsFirst: false }).order('date', { ascending: false }).limit(5000);
+
+    const { data, error } = await query;
+    if (error) return handleSupabaseError(error, OperationType.LIST, 'attendance_logs_export_dates');
+
+    const targetSet = new Set(targetDates);
+    let result = ((data || []) as AttendanceLog[]).filter(l => {
+      const rawDateStr = l.date || l.dateInput;
+      if (!rawDateStr) return false;
+      try {
+        const dObj = new Date(rawDateStr.includes(' ') ? rawDateStr.replace(' ', 'T') : rawDateStr);
+        if (isNaN(dObj.getTime())) return false;
+        const year = dObj.getFullYear();
+        const month = String(dObj.getMonth() + 1).padStart(2, '0');
+        const day = String(dObj.getDate()).padStart(2, '0');
+        const yyyymmdd = `${year}-${month}-${day}`;
+        return targetSet.has(yyyymmdd);
+      } catch (e) {
+        return false;
+      }
+    });
+
+    return await enrichAttendanceLogsWithUserNames(result);
+  } catch (err) {
+    console.error("Error in dbFetchExportAttendanceLogsForDates:", err);
+    return [];
+  }
+}
+
+export interface AttendanceAnalysisSummary {
+  overall: {
+    totalHadir: number;
+    totalIzin: number;
+    totalSakit: number;
+    totalAlpa: number;
+    totalRecord: number;
+    percentHadir: string;
+    perKelompok: Array<{
+      label: string;
+      h: number;
+      i: number;
+      s: number;
+      a: number;
+      tot: number;
+      pct: string;
+    }>;
+    perAgeCategory: Array<{
+      label: string;
+      h: number;
+      i: number;
+      s: number;
+      a: number;
+      tot: number;
+      pct: string;
+    }>;
+  };
+  perDate: Array<{
+    dateStr: string;
+    h: number;
+    i: number;
+    s: number;
+    a: number;
+    tot: number;
+    pct: string;
+    perKelompok: Array<{
+      label: string;
+      h: number;
+      i: number;
+      s: number;
+      a: number;
+      tot: number;
+      pct: string;
+    }>;
+    perAgeCategory: Array<{
+      label: string;
+      h: number;
+      i: number;
+      s: number;
+      a: number;
+      tot: number;
+      pct: string;
+    }>;
+  }>;
+}
+
+export async function dbGetAttendanceAnalysisSummary(
+  eventId?: string,
+  dates?: string[]
+): Promise<AttendanceAnalysisSummary> {
   const client = getActiveDb();
   const instansi = getInstansiContext();
+
+  const { data: rpcData, error: rpcError } = await client.rpc('get_attendance_analysis_summary', {
+    p_event_id: eventId || null,
+    p_dates: dates && dates.length > 0 ? dates : null,
+    p_instansi: instansi || null
+  });
+
+  if (rpcError) {
+    console.error("Supabase RPC 'get_attendance_analysis_summary' error:", rpcError);
+    throw new Error(
+      `Fungsi Stored Procedure 'get_attendance_analysis_summary' belum dipasang di Supabase.\n` +
+      `Detail: ${rpcError.message}\n` +
+      `Silakan buka menu Setup Guide dan salin script SQL 'get_attendance_analysis_summary' ke SQL Editor Supabase.`
+    );
+  }
+
+  if (!rpcData) {
+    throw new Error("RPC 'get_attendance_analysis_summary' mengembalikan data kosong.");
+  }
+
+  return rpcData as AttendanceAnalysisSummary;
+}
+
+export async function dbFetchExportAttendanceLogs(eventId?: string, startDate?: string, endDate?: string) {
+  try {
+    const client = getActiveDb();
+    let query = client.from('attendance_logs').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    
+    if (eventId) {
+      query = query.eq('event_id', eventId);
+    }
+
+    query = query.order('dateInput', { ascending: false, nullsFirst: false }).order('date', { ascending: false }).limit(5000);
+
+    const { data, error } = await query;
+    if (error) return handleSupabaseError(error, OperationType.LIST, 'attendance_logs_export');
+    
+    let result = (data || []) as AttendanceLog[];
+
+    if (startDate || endDate) {
+      result = result.filter(l => {
+        const rawDateStr = l.date || l.dateInput;
+        if (!rawDateStr) return false;
+        try {
+          const logDateObj = new Date(rawDateStr.includes(' ') ? rawDateStr.replace(' ', 'T') : rawDateStr);
+          if (isNaN(logDateObj.getTime())) return false;
+
+          const year = logDateObj.getFullYear();
+          const month = String(logDateObj.getMonth() + 1).padStart(2, '0');
+          const day = String(logDateObj.getDate()).padStart(2, '0');
+          const logYYYYMMDD = `${year}-${month}-${day}`;
+
+          if (startDate && logYYYYMMDD < startDate) return false;
+          if (endDate && logYYYYMMDD > endDate) return false;
+
+          return true;
+        } catch (e) {
+          return false;
+        }
+      });
+    }
+
+    return await enrichAttendanceLogsWithUserNames(result);
+  } catch (err) {
+    console.error("Error in dbFetchExportAttendanceLogs:", err);
+    return [];
+  }
+}
+
+export async function dbGetExistingAttendanceMemberIds(dateStr: string, eventId: string | null): Promise<Set<string>> {
+  try {
+    const client = getActiveDb();
+    const instansi = getInstansiContext();
+    let query = client.from('attendance_logs').select('memberId, date');
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    if (eventId) {
+      query = query.eq('event_id', eventId);
+    } else {
+      query = query.is('event_id', null);
+    }
+
+    if (dateStr) {
+      query = query.ilike('date', `${dateStr}%`);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.error("Error dbGetExistingAttendanceMemberIds:", error);
+      return new Set();
+    }
+
+    const set = new Set<string>();
+    (data || []).forEach((row: any) => {
+      if (row.memberId) {
+        set.add(String(row.memberId).trim().toUpperCase());
+      }
+    });
+    return set;
+  } catch (e) {
+    console.error("Error dbGetExistingAttendanceMemberIds:", e);
+    return new Set();
+  }
+}
+
+export async function dbAddAttendanceLog(log: AttendanceLog, isEdit: boolean = false) {
+  const client = getActiveDb();
+  const instansi = getInstansiContext();
+  const currentUserId = typeof window !== 'undefined' ? (localStorage.getItem('user_id') || localStorage.getItem('username')) : null;
   const cleanLog: any = {
     id: log.id,
     memberId: log.memberId,
@@ -970,14 +1271,26 @@ export async function dbAddAttendanceLog(log: AttendanceLog) {
     event_id: log.event_id || null,
     metode: log.metode || 'manual',
     uniq_ref: log.uniq_ref || null,
-    jam_mulai: log.jam_mulai || null
+    jam_mulai: log.jam_mulai || null,
+    created_by: log.created_by || log.user_id || (log as any).createdBy || currentUserId || null
   };
   if (instansi) {
     cleanLog.instansi = instansi;
   }
-  const { error } = await client.from('attendance_logs').upsert([cleanLog]);
-  if (error) {
-    handleSupabaseError(error, OperationType.WRITE, `attendance_logs/${log.id}`);
+
+  if (isEdit) {
+    const { error } = await client.from('attendance_logs').update({
+      status: cleanLog.status,
+      note: cleanLog.note
+    }).eq('id', cleanLog.id);
+    if (error) {
+      handleSupabaseError(error, OperationType.WRITE, `attendance_logs/${log.id}`);
+    }
+  } else {
+    const { error } = await client.from('attendance_logs').insert([cleanLog]);
+    if (error) {
+      handleSupabaseError(error, OperationType.WRITE, `attendance_logs/${log.id}`);
+    }
   }
 
   if (log.event_id) {
@@ -994,6 +1307,7 @@ export async function dbAddAttendanceLog(log: AttendanceLog) {
 export async function dbAddAttendanceLogs(logs: AttendanceLog[]) {
   const client = getActiveDb();
   const instansi = getInstansiContext();
+  const currentUserId = typeof window !== 'undefined' ? (localStorage.getItem('user_id') || localStorage.getItem('username')) : null;
   const cleanLogs = logs.map((log: any) => {
     const item: any = {
       id: log.id,
@@ -1010,14 +1324,15 @@ export async function dbAddAttendanceLogs(logs: AttendanceLog[]) {
       event_id: log.event_id || null,
       metode: log.metode || 'manual',
       uniq_ref: log.uniq_ref || null,
-      jam_mulai: log.jam_mulai || null
+      jam_mulai: log.jam_mulai || null,
+      created_by: log.created_by || log.user_id || log.createdBy || currentUserId || null
     };
     if (instansi) {
       item.instansi = instansi;
     }
     return item;
   });
-  const { error } = await client.from('attendance_logs').upsert(cleanLogs);
+  const { error } = await client.from('attendance_logs').insert(cleanLogs);
   if (error) {
     handleSupabaseError(error, OperationType.WRITE, `attendance_logs/batch`);
   }

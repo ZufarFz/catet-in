@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Copy, Globe, ShieldCheck, CheckCircle2, FileSpreadsheet, ChevronUp, ChevronDown, Check,
-  Database, Key, Save, AlertCircle, Sparkles, HeartPulse, RefreshCw, Layers
+  Database, Key, Save, AlertCircle, Sparkles, HeartPulse, RefreshCw, Layers, Code2
 } from 'lucide-react';
 import { saveCentralConfig, getActiveDb } from '../../supabase';
 
@@ -546,6 +546,8 @@ create table if not exists public.labels (
 );
 
 -- attendance_logs table
+-- MIGRATION NOTE UNTUK DATABASE DENGAN TABEL ATTENDANCE_LOGS LAMA:
+-- ALTER TABLE public.attendance_logs ADD COLUMN IF NOT EXISTS created_by text;
 create table if not exists public.attendance_logs (
   id text primary key,
   "memberId" text,
@@ -562,6 +564,7 @@ create table if not exists public.attendance_logs (
   metode text,
   uniq_ref text unique,
   jam_mulai text,
+  created_by text,
   instansi text not null default public.get_user_instansi()
 );
 
@@ -1021,11 +1024,184 @@ end;
 $$ language plpgsql security definer;
 `;
 
+export const GET_ATTENDANCE_ANALYSIS_SUMMARY_SQL = `-- =========================================================================
+-- STORED PROCEDURE: get_attendance_analysis_summary
+-- Agregasi Server-Side Presensi (Overall, Per Tanggal, Per Kelompok, Per Usia)
+-- =========================================================================
+create or replace function public.get_attendance_analysis_summary(
+  p_event_id text default null,
+  p_dates text[] default null,
+  p_instansi text default null
+)
+returns jsonb as $$
+declare
+  v_overall jsonb;
+  v_per_date jsonb;
+begin
+  -- 1. Overall Aggregation
+  with filtered_logs as (
+    select 
+      coalesce(nullif("kelompokName", ''), 'Tanpa Kelompok') as kelompok_name,
+      coalesce(nullif("ageName", ''), 'Umum') as age_name,
+      split_part(coalesce(nullif(date, ''), nullif("dateInput", '')), ' ', 1) as clean_date,
+      lower(coalesce(status, '')) as status_clean
+    from public.attendance_logs
+    where (p_event_id is null or event_id = p_event_id)
+      and (p_instansi is null or instansi = p_instansi)
+      and (
+        p_dates is null 
+        or array_length(p_dates, 1) is null 
+        or array_length(p_dates, 1) = 0
+        or split_part(coalesce(nullif(date, ''), nullif("dateInput", '')), ' ', 1) = any(p_dates)
+      )
+  ),
+  overall_counts as (
+    select
+      count(*) filter (where status_clean = 'hadir') as h,
+      count(*) filter (where status_clean = 'izin') as i,
+      count(*) filter (where status_clean = 'sakit') as s,
+      count(*) filter (where status_clean = 'alpa') as a,
+      count(*) as tot
+    from filtered_logs
+  ),
+  overall_kelompok as (
+    select
+      kelompok_name as label,
+      count(*) filter (where status_clean = 'hadir') as h,
+      count(*) filter (where status_clean = 'izin') as i,
+      count(*) filter (where status_clean = 'sakit') as s,
+      count(*) filter (where status_clean = 'alpa') as a,
+      count(*) as tot,
+      case when count(*) > 0 
+        then round((count(*) filter (where status_clean = 'hadir')::numeric / count(*)::numeric * 100), 1)::text || '%'
+        else '0%'
+      end as pct
+    from filtered_logs
+    group by kelompok_name
+    order by kelompok_name asc
+  ),
+  overall_age as (
+    select
+      age_name as label,
+      count(*) filter (where status_clean = 'hadir') as h,
+      count(*) filter (where status_clean = 'izin') as i,
+      count(*) filter (where status_clean = 'sakit') as s,
+      count(*) filter (where status_clean = 'alpa') as a,
+      count(*) as tot,
+      case when count(*) > 0 
+        then round((count(*) filter (where status_clean = 'hadir')::numeric / count(*)::numeric * 100), 1)::text || '%'
+        else '0%'
+      end as pct
+    from filtered_logs
+    group by age_name
+    order by age_name asc
+  )
+  select jsonb_build_object(
+    'totalHadir', c.h,
+    'totalIzin', c.i,
+    'totalSakit', c.s,
+    'totalAlpa', c.a,
+    'totalRecord', c.tot,
+    'percentHadir', case when c.tot > 0 then round((c.h::numeric / c.tot::numeric * 100), 1)::text || '%' else '0%' end,
+    'perKelompok', coalesce((select jsonb_agg(to_jsonb(k)) from overall_kelompok k), '[]'::jsonb),
+    'perAgeCategory', coalesce((select jsonb_agg(to_jsonb(ag)) from overall_age ag), '[]'::jsonb)
+  ) into v_overall
+  from overall_counts c;
+
+  -- 2. Per Date Aggregation
+  with filtered_logs as (
+    select 
+      coalesce(nullif("kelompokName", ''), 'Tanpa Kelompok') as kelompok_name,
+      coalesce(nullif("ageName", ''), 'Umum') as age_name,
+      split_part(coalesce(nullif(date, ''), nullif("dateInput", '')), ' ', 1) as clean_date,
+      lower(coalesce(status, '')) as status_clean
+    from public.attendance_logs
+    where (p_event_id is null or event_id = p_event_id)
+      and (p_instansi is null or instansi = p_instansi)
+      and (
+        p_dates is null 
+        or array_length(p_dates, 1) is null 
+        or array_length(p_dates, 1) = 0
+        or split_part(coalesce(nullif(date, ''), nullif("dateInput", '')), ' ', 1) = any(p_dates)
+      )
+  ),
+  distinct_dates as (
+    select distinct clean_date
+    from filtered_logs
+    where clean_date is not null and clean_date <> ''
+    order by clean_date asc
+  ),
+  date_summary as (
+    select
+      d.clean_date as "dateStr",
+      count(l.*) filter (where l.status_clean = 'hadir') as h,
+      count(l.*) filter (where l.status_clean = 'izin') as i,
+      count(l.*) filter (where l.status_clean = 'sakit') as s,
+      count(l.*) filter (where l.status_clean = 'alpa') as a,
+      count(l.*) as tot,
+      case when count(l.*) > 0 
+        then round((count(l.*) filter (where l.status_clean = 'hadir')::numeric / count(l.*)::numeric * 100), 1)::text || '%'
+        else '0%'
+      end as pct,
+      coalesce((
+        select jsonb_agg(to_jsonb(k)) from (
+          select
+            l_k.kelompok_name as label,
+            count(*) filter (where l_k.status_clean = 'hadir') as h,
+            count(*) filter (where l_k.status_clean = 'izin') as i,
+            count(*) filter (where l_k.status_clean = 'sakit') as s,
+            count(*) filter (where l_k.status_clean = 'alpa') as a,
+            count(*) as tot,
+            case when count(*) > 0 
+              then round((count(*) filter (where l_k.status_clean = 'hadir')::numeric / count(*)::numeric * 100), 1)::text || '%'
+              else '0%'
+            end as pct
+          from filtered_logs l_k
+          where l_k.clean_date = d.clean_date
+          group by l_k.kelompok_name
+          order by l_k.kelompok_name asc
+        ) k
+      ), '[]'::jsonb) as "perKelompok",
+      coalesce((
+        select jsonb_agg(to_jsonb(ag)) from (
+          select
+            l_a.age_name as label,
+            count(*) filter (where l_a.status_clean = 'hadir') as h,
+            count(*) filter (where l_a.status_clean = 'izin') as i,
+            count(*) filter (where l_a.status_clean = 'sakit') as s,
+            count(*) filter (where l_a.status_clean = 'alpa') as a,
+            count(*) as tot,
+            case when count(*) > 0 
+              then round((count(*) filter (where l_a.status_clean = 'hadir')::numeric / count(*)::numeric * 100), 1)::text || '%'
+              else '0%'
+            end as pct
+          from filtered_logs l_a
+          where l_a.clean_date = d.clean_date
+          group by l_a.age_name
+          order by l_a.age_name asc
+        ) ag
+      ), '[]'::jsonb) as "perAgeCategory"
+    from distinct_dates d
+    left join filtered_logs l on l.clean_date = d.clean_date
+    group by d.clean_date
+    order by d.clean_date asc
+  )
+  select coalesce(jsonb_agg(to_jsonb(ds)), '[]'::jsonb) into v_per_date
+  from date_summary ds;
+
+  return jsonb_build_object(
+    'overall', coalesce(v_overall, jsonb_build_object('totalHadir', 0, 'totalIzin', 0, 'totalSakit', 0, 'totalAlpa', 0, 'totalRecord', 0, 'percentHadir', '0%', 'perKelompok', '[]'::jsonb, 'perAgeCategory', '[]'::jsonb)),
+    'perDate', coalesce(v_per_date, '[]'::jsonb)
+  );
+end;
+$$ language plpgsql security definer;
+`;
+
 const SUPABASE_OPERATIONAL_SQL = `-- =========================================================================
 -- !!! CATATAN MIGRASI SINGLE DATABASE (UNIFIED DATABASE SETUP) !!!
 -- =========================================================================
 -- Seluruh tabel operasional dan fungsi keamanan (RLS) kini telah diintegrasikan
--- sepenuhnya ke dalam SATU database terpadu (Unified Database Setup).
+-- fully ke dalam SATU database terpadu (Unified Database Setup).
 -- Anda TIDAK PERLU LAGI menjalankan script SQL terpisah untuk masing-masing cabang.
 --
 -- Cukup jalankan script di bagian "2A. SQL SCHEMA DATABASE UNIFIED" sekali saja,
@@ -1052,6 +1228,7 @@ const SetupGuide: React.FC<SetupGuideProps> = ({ onLogout }) => {
   const [showScriptCode, setShowScriptCode] = useState(false);
   const [showCentralDdlCode, setShowCentralDdlCode] = useState(false);
   const [showOperationalDdlCode, setShowOperationalDdlCode] = useState(false);
+  const [showAnalysisRpcCode, setShowAnalysisRpcCode] = useState(false);
   const [copiedScript, setCopiedScript] = useState(false);
   const [copiedDdl, setCopiedDdl] = useState('');
 
@@ -1458,6 +1635,48 @@ const SetupGuide: React.FC<SetupGuideProps> = ({ onLogout }) => {
              {showOperationalDdlCode && (
                <div className="mt-4 bg-slate-950 p-4 rounded-xl border border-slate-800 shadow-inner max-h-80 overflow-y-auto no-scrollbar font-mono text-[9.5px] text-amber-300 text-left animate-in slide-in-from-top-1 duration-200">
                  <pre className="whitespace-pre-wrap">{SUPABASE_OPERATIONAL_SQL}</pre>
+               </div>
+             )}
+           </div>
+        </div>
+
+        {/* 2C. STORED PROCEDURE ANALISIS PRESENSI SERVER-SIDE (get_attendance_analysis_summary) */}
+        <div className="p-8 bg-slate-900 rounded-[2rem] border border-slate-800 space-y-6 text-white">
+           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center space-x-3 text-emerald-400">
+                 <Code2 size={28} />
+                 <div>
+                   <h4 className="text-sm md:text-md font-black uppercase tracking-tight leading-none text-white font-sans">2C. STORED PROCEDURE ANALISIS PRESENSI SERVER-SIDE</h4>
+                   <p className="text-[9px] text-slate-400 uppercase font-bold tracking-widest mt-1">Fungsi RPC get_attendance_analysis_summary untuk agregasi server (hemat egress)</p>
+                 </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleCopyText(GET_ATTENDANCE_ANALYSIS_SUMMARY_SQL, 'analysis_rpc_sql')}
+                className={`flex items-center space-x-1.5 px-4 py-2.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all cursor-pointer border ${copiedDdl === 'analysis_rpc_sql' ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
+              >
+                {copiedDdl === 'analysis_rpc_sql' ? <Check size={12} /> : <Copy size={12} />}
+                <span>{copiedDdl === 'analysis_rpc_sql' ? 'Tersalin' : 'Copy SQL RPC Analisis'}</span>
+              </button>
+           </div>
+           
+           <p className="text-[10px] font-medium text-slate-300 leading-relaxed font-sans">
+              Jalankan Stored Procedure <code className="bg-slate-800 px-1 py-0.5 rounded text-emerald-300">get_attendance_analysis_summary</code> ini di <b>SQL Editor</b> Supabase. Fungsi ini melakukan kalkulasi agregasi presensi (overall, per tanggal, per kelompok, dan per kategori usia) secara efisien langsung di dalam PostgreSQL engine tanpa perlu mengunduh seluruh baris log ke client (hemat egress).
+           </p>
+
+           <div className="border-t border-slate-800 pt-3">
+             <button
+               type="button"
+               onClick={() => setShowAnalysisRpcCode(!showAnalysisRpcCode)}
+               className="w-full flex items-center justify-between text-slate-400 hover:text-white transition-colors py-2 text-[10px] font-bold uppercase tracking-wider focus:outline-none"
+             >
+               <span>{showAnalysisRpcCode ? 'Sembunyikan SQL Code RPC Analisis' : 'Tampilkan Detail SQL RPC Analisis'}</span>
+               {showAnalysisRpcCode ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+             </button>
+
+             {showAnalysisRpcCode && (
+               <div className="mt-4 bg-slate-950 p-4 rounded-xl border border-slate-800 shadow-inner max-h-80 overflow-y-auto no-scrollbar font-mono text-[9.5px] text-emerald-300 text-left animate-in slide-in-from-top-1 duration-200">
+                 <pre className="whitespace-pre-wrap">{GET_ATTENDANCE_ANALYSIS_SUMMARY_SQL}</pre>
                </div>
              )}
            </div>

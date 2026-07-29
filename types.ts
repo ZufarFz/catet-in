@@ -127,6 +127,9 @@ export interface AttendanceLog {
   metode?: 'manual' | 'scan' | 'rfid';
   uniq_ref?: string;
   jam_mulai?: string;
+  created_by?: string;
+  createdBy?: string;
+  user_id?: string;
 }
 
 export interface DaerahData {
