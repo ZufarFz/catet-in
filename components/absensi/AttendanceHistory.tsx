@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import { AttendanceLog, EventData } from '../../types';
 import ModernSelect from '../ui/ModernSelect';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, Variants } from 'motion/react';
 import { dbAddAttendanceLog, dbDeleteAttendanceLog, dbFetchExportDistinctDates, dbFetchExportAttendanceLogsForDates, dbGetAttendanceAnalysisSummary } from '../../supabase';
 
 interface AttendanceHistoryProps {
@@ -42,8 +42,38 @@ interface AttendanceHistoryProps {
 }
 
 const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, logUrl, onRefresh, onFetchMoreLogs, notify, events = [] }) => {
-  // Sub-tab state
+  // Sub-tab state & slide animation
   const [activeSubTab, setActiveSubTab] = useState<'latest' | 'export'>('latest');
+  const [subTabDirection, setSubTabDirection] = useState<number>(0);
+
+  const handleSubTabChange = (target: 'latest' | 'export') => {
+    if (target === activeSubTab) return;
+    setSubTabDirection(target === 'export' ? 1 : -1);
+    setActiveSubTab(target);
+  };
+
+  const tabSlideVariants: Variants = {
+    enter: (direction: number) => ({
+      x: direction > 0 ? 36 : direction < 0 ? -36 : 0,
+      opacity: 0,
+    }),
+    center: {
+      x: 0,
+      opacity: 1,
+      transition: {
+        x: { type: 'spring' as const, stiffness: 350, damping: 30 },
+        opacity: { duration: 0.2 },
+      },
+    },
+    exit: (direction: number) => ({
+      x: direction > 0 ? -36 : 36,
+      opacity: 0,
+      transition: {
+        x: { type: 'spring' as const, stiffness: 350, damping: 30 },
+        opacity: { duration: 0.15 },
+      },
+    }),
+  };
 
   // Existing History States
   const [searchTerm, setSearchTerm] = useState('');
@@ -237,6 +267,14 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
     const today = now.toISOString().slice(0, 10);
     setExportStartDate(firstDay);
     setExportEndDate(today);
+  };
+
+  const setPresetLast30Days = () => {
+    const now = new Date();
+    const past30 = new Date(now);
+    past30.setDate(now.getDate() - 29); // 30 days total including today
+    setExportStartDate(past30.toISOString().slice(0, 10));
+    setExportEndDate(now.toISOString().slice(0, 10));
   };
 
   const handleResetExportFilters = () => {
@@ -1179,7 +1217,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
 
   return (
     <div className="h-full w-full overflow-y-auto no-scrollbar bg-[#F8FAFC]">
-      <div className="max-w-4xl mx-auto px-4 py-8 md:p-10 pb-32 space-y-8">
+      <div className="max-w-4xl mx-auto px-4 py-6 md:p-8 pb-32 space-y-5">
         
         {/* Header with Sub-tab Toggle */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -1194,43 +1232,67 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
           </div>
           
           {/* Sub Tab Toggle Switch */}
-          <div className="flex p-1 bg-slate-200/80 rounded-2xl border border-slate-300/60 w-full sm:w-auto shadow-inner shrink-0">
+          <div className="relative flex p-1 bg-slate-200/70 rounded-xl border border-slate-300/60 w-full sm:w-auto shadow-inner shrink-0">
             <button
               type="button"
-              onClick={() => setActiveSubTab('latest')}
-              className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-black text-[11px] uppercase tracking-wider transition-all select-none active:scale-95 ${
+              onClick={() => handleSubTabChange('latest')}
+              className={`relative flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 sm:px-3.5 sm:py-1.5 rounded-lg font-bold text-[10px] sm:text-[11px] uppercase tracking-wider transition-colors select-none active:scale-95 cursor-pointer z-10 ${
                 activeSubTab === 'latest'
-                  ? 'bg-slate-900 text-white shadow-md'
+                  ? 'text-white'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <Clock size={15} />
+              {activeSubTab === 'latest' && (
+                <motion.div
+                  layoutId="activeSubTabBg"
+                  className="absolute inset-0 bg-slate-900 rounded-lg shadow-sm -z-10"
+                  transition={{ type: 'spring', stiffness: 450, damping: 35 }}
+                />
+              )}
+              <Clock size={13} className="shrink-0" />
               <span>Riwayat Terbaru</span>
             </button>
             <button
               type="button"
-              onClick={() => setActiveSubTab('export')}
-              className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-black text-[11px] uppercase tracking-wider transition-all select-none active:scale-95 ${
+              onClick={() => handleSubTabChange('export')}
+              className={`relative flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 sm:px-3.5 sm:py-1.5 rounded-lg font-bold text-[10px] sm:text-[11px] uppercase tracking-wider transition-colors select-none active:scale-95 cursor-pointer z-10 ${
                 activeSubTab === 'export'
-                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-200'
+                  ? 'text-white'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <FileSpreadsheet size={15} />
+              {activeSubTab === 'export' && (
+                <motion.div
+                  layoutId="activeSubTabBg"
+                  className="absolute inset-0 bg-emerald-600 rounded-lg shadow-sm -z-10"
+                  transition={{ type: 'spring', stiffness: 450, damping: 35 }}
+                />
+              )}
+              <FileSpreadsheet size={13} className="shrink-0" />
               <span>Export Data</span>
             </button>
           </div>
         </div>
 
-        {/* SUB TAB 1: RIWAYAT ABSEN TERBARU */}
-        {activeSubTab === 'latest' && (
-          <>
+        {/* Tab Contents with Directional Slide Animation */}
+        <AnimatePresence mode="wait" custom={subTabDirection}>
+          {/* SUB TAB 1: RIWAYAT ABSEN TERBARU */}
+          {activeSubTab === 'latest' && (
+            <motion.div
+              key="latest"
+              custom={subTabDirection}
+              variants={tabSlideVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              className="space-y-3.5"
+            >
             {/* Filters */}
-            <div className="bg-white p-4 md:p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+            <div className="bg-white p-3 md:p-3.5 rounded-xl border border-slate-200/80 shadow-xs space-y-2.5">
           {/* Main search and toggle row */}
-          <div className="flex gap-3">
+          <div className="flex gap-2">
             <div className="flex-1 relative">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 size-5" />
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 size-4" />
               <input 
                 type="text" 
                 placeholder="Cari nama anggota..." 
@@ -1239,7 +1301,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                   setSearchTerm(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-[13px] font-bold text-slate-700 focus:bg-white focus:border-blue-500 outline-none transition-all"
+                className="w-full pl-10 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 focus:bg-white focus:border-sky-500 focus:ring-1 focus:ring-sky-500 outline-none transition-all placeholder:text-slate-400 placeholder:font-normal"
               />
             </div>
             
@@ -1249,29 +1311,29 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                 setFilterMyLogsOnly(!filterMyLogsOnly);
                 setCurrentPage(1);
               }}
-              className={`px-3.5 py-3 rounded-xl border font-black text-[11px] uppercase tracking-wider transition-all flex items-center gap-2 select-none active:scale-95 shrink-0 ${
+              className={`px-3 py-2 rounded-lg border font-bold text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 select-none active:scale-95 shrink-0 ${
                 filterMyLogsOnly 
-                  ? 'bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-200' 
+                  ? 'bg-sky-600 border-sky-600 text-white shadow-xs' 
                   : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
               }`}
               title="Filter hanya catatan absensi yang saya buat"
             >
-              <User size={14} />
+              <User size={13} />
               <span className="hidden sm:inline">Hanya Saya</span>
             </button>
 
             <button
               type="button"
               onClick={() => setShowFilters(!showFilters)}
-              className={`px-4 py-3 rounded-xl border font-black text-[11px] uppercase tracking-widest transition-all flex items-center gap-2 select-none active:scale-95 ${
+              className={`px-3 py-2 rounded-lg border font-bold text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 select-none active:scale-95 shrink-0 ${
                 showFilters 
-                  ? 'bg-slate-950 border-slate-950 text-white shadow-md' 
+                  ? 'bg-slate-900 border-slate-900 text-white shadow-xs' 
                   : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
               }`}
             >
-              <Filter size={14} />
+              <Filter size={13} />
               <span className="hidden sm:inline">{showFilters ? 'Sembunyikan' : 'Filter'}</span>
-              {showFilters ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              {showFilters ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
             </button>
           </div>
 
@@ -1285,11 +1347,12 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                 transition={{ duration: 0.2, ease: 'easeInOut' }}
                 className="overflow-visible"
               >
-                <div className="grid grid-cols-2 gap-3 pt-2">
+                <div className="grid grid-cols-2 gap-2.5 pt-1.5 border-t border-slate-100">
                   {/* Row 1, Filter 1: Nama Kegiatan */}
                   <div>
                     <span className="block text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1">Kegiatan</span>
                     <ModernSelect 
+                      size="sm"
                       value={filterEvent}
                       onChange={(val) => {
                         setFilterEvent(val);
@@ -1308,6 +1371,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                   <div>
                     <span className="block text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1">Status</span>
                     <ModernSelect 
+                      size="sm"
                       value={filterStatus}
                       onChange={(val) => {
                         setFilterStatus(val);
@@ -1329,6 +1393,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                   <div>
                     <span className="block text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1">Kategori Usia</span>
                     <ModernSelect 
+                      size="sm"
                       value={filterAgeCategory}
                       onChange={(val) => {
                         setFilterAgeCategory(val);
@@ -1347,6 +1412,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                   <div>
                     <span className="block text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1">Unit / Kelompok</span>
                     <ModernSelect 
+                      size="sm"
                       value={filterKelompok}
                       onChange={(val) => {
                         setFilterKelompok(val);
@@ -1365,6 +1431,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                   <div>
                     <span className="block text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1">Desa</span>
                     <ModernSelect 
+                      size="sm"
                       value={filterDesa}
                       onChange={(val) => {
                         setFilterDesa(val);
@@ -1383,6 +1450,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                   <div>
                     <span className="block text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1">Daerah</span>
                     <ModernSelect 
+                      size="sm"
                       value={filterDaerah}
                       onChange={(val) => {
                         setFilterDaerah(val);
@@ -1401,6 +1469,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                   <div className="col-span-2 sm:col-span-1">
                     <span className="block text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1">Pencatat Absensi</span>
                     <ModernSelect 
+                      size="sm"
                       value={filterMyLogsOnly ? 'my_logs' : ''}
                       onChange={(val) => {
                         setFilterMyLogsOnly(val === 'my_logs');
@@ -1421,7 +1490,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
         </div>
 
         {/* Data Container */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
+        <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden flex flex-col">
           <div className="overflow-x-auto no-scrollbar">
             {isLoading ? (
                <div className="flex flex-col items-center py-40 space-y-4">
@@ -1573,39 +1642,43 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
              </div>
           </div>
         </div>
-        </>
+        </motion.div>
         )}
 
         {/* SUB TAB 2: MENU EXPORT DATA */}
         {activeSubTab === 'export' && (
-          <div className="space-y-6">
+          <motion.div
+            key="export"
+            custom={subTabDirection}
+            variants={tabSlideVariants}
+            initial="enter"
+            animate="center"
+            exit="exit"
+            className="space-y-4 md:space-y-6"
+          >
             {/* Step 1: Filter Parameter Card */}
-            <div className="bg-white p-5 md:p-6 rounded-2xl border border-slate-100 shadow-sm space-y-5">
-              <h3 className="text-xs font-black text-slate-800 uppercase tracking-widest flex items-center justify-between pb-2 border-b border-slate-100">
-                <span className="flex items-center gap-2">
-                  <Filter size={14} className="text-emerald-600" />
+            <div className="bg-white p-4 sm:p-5 md:p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4 sm:space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+                <h3 className="text-[11px] sm:text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                  <Filter size={14} className="text-emerald-600 shrink-0" />
                   <span>Langkah 1: Filter Kegiatan & Rentang Tanggal</span>
-                </span>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200">
-                    Maks. Rentang 1 Bulan
-                  </span>
+                </h3>
+                <div className="flex items-center gap-1.5 self-start sm:self-auto shrink-0">
                   <button
                     type="button"
                     onClick={handleResetExportFilters}
-                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold uppercase transition-all flex items-center gap-1 shrink-0"
+                    className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[9px] sm:text-[10px] font-bold uppercase transition-all flex items-center gap-1 shrink-0 cursor-pointer"
                   >
-                    <RotateCcw size={12} />
+                    <RotateCcw size={11} />
                     <span>Reset</span>
                   </button>
                 </div>
-              </h3>
+              </div>
 
               {/* Filter Nama Event (Kegiatan) */}
               <div>
-                <span className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5 ml-1 flex items-center gap-1">
-                  <span>Nama Kegiatan / Event</span>
-                  <span className="text-rose-500 font-extrabold">(WAJIB)</span>
+                <span className="block text-[9.5px] sm:text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1.5 ml-0.5">
+                  Nama Kegiatan / Event
                 </span>
                 <ModernSelect
                   value={exportEvent}
@@ -1623,15 +1696,15 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
 
               {/* Rentang Tanggal Absensi */}
               <div className="space-y-2">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-2">
+                  <label className="block text-[9.5px] sm:text-[10px] font-black text-slate-500 uppercase tracking-wider ml-0.5">
                     Rentang Tanggal Absensi (Max 31 Hari)
                   </label>
-                  <div className="flex gap-1.5 flex-wrap">
+                  <div className="flex gap-1 sm:gap-1.5 flex-wrap">
                     <button
                       type="button"
                       onClick={() => { setPresetToday(); setIsDatesFetched(false); }}
-                      className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase transition-all ${
+                      className={`px-2.5 py-0.5 sm:px-3 sm:py-1 rounded-lg text-[9px] sm:text-[10px] font-bold uppercase transition-all cursor-pointer ${
                         exportStartDate === new Date().toISOString().slice(0, 10) && exportEndDate === new Date().toISOString().slice(0, 10)
                           ? 'bg-slate-900 text-white shadow-sm'
                           : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -1642,7 +1715,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                     <button
                       type="button"
                       onClick={() => { setPresetThisWeek(); setIsDatesFetched(false); }}
-                      className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase transition-all ${
+                      className={`px-2.5 py-0.5 sm:px-3 sm:py-1 rounded-lg text-[9px] sm:text-[10px] font-bold uppercase transition-all cursor-pointer ${
                         exportStartDate !== '' && exportStartDate === (() => {
                           const now = new Date();
                           const day = now.getDay();
@@ -1660,7 +1733,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                     <button
                       type="button"
                       onClick={() => { setPresetThisMonth(); setIsDatesFetched(false); }}
-                      className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase transition-all ${
+                      className={`px-2.5 py-0.5 sm:px-3 sm:py-1 rounded-lg text-[9px] sm:text-[10px] font-bold uppercase transition-all cursor-pointer ${
                         exportStartDate === `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-01` && exportEndDate === new Date().toISOString().slice(0, 10)
                           ? 'bg-slate-900 text-white shadow-sm'
                           : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -1668,38 +1741,55 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                     >
                       Bulan Ini
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => { setPresetLast30Days(); setIsDatesFetched(false); }}
+                      className={`px-2.5 py-0.5 sm:px-3 sm:py-1 rounded-lg text-[9px] sm:text-[10px] font-bold uppercase transition-all cursor-pointer ${
+                        exportStartDate !== '' && exportStartDate === (() => {
+                          const now = new Date();
+                          const past30 = new Date(now);
+                          past30.setDate(now.getDate() - 29);
+                          return past30.toISOString().slice(0, 10);
+                        })() && exportEndDate === new Date().toISOString().slice(0, 10)
+                          ? 'bg-slate-900 text-white shadow-sm'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      30 Hari Terakhir
+                    </button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* 1 Baris Rentang Tanggal (Side-by-side even on mobile) */}
+                <div className="grid grid-cols-2 gap-2 sm:gap-3">
                   <div>
-                    <span className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 ml-1">Dari Tanggal</span>
+                    <span className="block text-[8.5px] sm:text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 ml-0.5 truncate">Dari Tanggal</span>
                     <input
                       type="date"
                       value={exportStartDate}
                       onChange={(e) => { setExportStartDate(e.target.value); setIsDatesFetched(false); }}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:border-emerald-500 outline-none transition-all"
+                      className="w-full px-2 py-1.5 sm:px-3 sm:py-2 bg-slate-50 border border-slate-200 rounded-xl text-[11px] sm:text-xs font-bold text-slate-800 focus:bg-white focus:border-emerald-500 outline-none transition-all"
                     />
                   </div>
                   <div>
-                    <span className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 ml-1">Sampai Tanggal</span>
+                    <span className="block text-[8.5px] sm:text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 ml-0.5 truncate">Sampai Tanggal</span>
                     <input
                       type="date"
                       value={exportEndDate}
                       onChange={(e) => { setExportEndDate(e.target.value); setIsDatesFetched(false); }}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:border-emerald-500 outline-none transition-all"
+                      className="w-full px-2 py-1.5 sm:px-3 sm:py-2 bg-slate-50 border border-slate-200 rounded-xl text-[11px] sm:text-xs font-bold text-slate-800 focus:bg-white focus:border-emerald-500 outline-none transition-all"
                     />
                   </div>
                 </div>
               </div>
 
               {/* Tombol GO */}
-              <div className="pt-2">
+              <div className="pt-1 sm:pt-2">
                 <button
                   type="button"
                   onClick={handleGoFetchDates}
                   disabled={!isGoSearchEnabled || isFetchingExport}
-                  className={`w-full py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-3 active:scale-98 ${
+                  className={`w-full py-3 sm:py-3.5 px-3 rounded-2xl font-black text-[10px] sm:text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 sm:gap-3 active:scale-98 ${
                     isGoSearchEnabled && !isFetchingExport
                       ? 'bg-slate-900 hover:bg-slate-800 text-white shadow-md hover:shadow-lg cursor-pointer'
                       : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed shadow-none'
@@ -1707,22 +1797,22 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                 >
                   {isFetchingExport ? (
                     <>
-                      <Loader2 size={18} className="animate-spin text-emerald-400" />
-                      <span>Mencari Pertemuan Dari Database...</span>
+                      <Loader2 size={16} className="animate-spin text-emerald-400 shrink-0" />
+                      <span className="truncate">Mencari Pertemuan Dari Database...</span>
                     </>
                   ) : (
                     <>
-                      <Search size={18} className={isGoSearchEnabled ? "text-emerald-400" : "text-slate-400"} />
-                      <span>
+                      <Search size={16} className={`shrink-0 ${isGoSearchEnabled ? "text-emerald-400" : "text-slate-400"}`} />
+                      <span className="truncate">
                         {isGoSearchEnabled
                           ? "CARI PERTEMUAN (GO)"
                           : !exportEvent
-                          ? "PILIH KEGIATAN DULU (CARI PERTEMUAN BELUM AKTIF)"
+                          ? "PILIH KEGIATAN DULU (BELUM AKTIF)"
                           : !exportStartDate || !exportEndDate
-                          ? "PILIH RENTANG TANGGAL MAX 1 BULAN (BELUM AKTIF)"
+                          ? "PILIH RENTANG TANGGAL (BELUM AKTIF)"
                           : new Date(exportEndDate) < new Date(exportStartDate)
-                          ? "TANGGAL AKHIR LEBIH KECIL DARI TANGGAL AWAL"
-                          : "RENTANG TANGGAL LEBIH DARI 1 BULAN (BELUM AKTIF)"}
+                          ? "TANGGAL AKHIR LEBIH KECIL DARI AWAL"
+                          : "RENTANG TANGGAL LEBIH DARI 1 BULAN"}
                       </span>
                     </>
                   )}
@@ -1735,21 +1825,21 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
               <motion.div
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-white p-5 md:p-6 rounded-2xl border border-emerald-200/80 shadow-md space-y-5"
+                className="bg-white p-4 sm:p-5 md:p-6 rounded-2xl border border-emerald-200/80 shadow-md space-y-4 sm:space-y-5"
               >
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-slate-100">
                   <div>
-                    <h3 className="text-xs font-black text-slate-900 uppercase tracking-widest flex items-center gap-2">
-                      <CheckCircle2 size={16} className="text-emerald-600" />
+                    <h3 className="text-[11px] sm:text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                      <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
                       <span>Langkah 2: Pilih Hari Pertemuan yang Ingin Di-Export</span>
                     </h3>
-                    <p className="text-[11px] font-semibold text-slate-500 mt-0.5">
+                    <p className="text-[10px] sm:text-[11px] font-semibold text-slate-500 mt-0.5">
                       Ditemukan {distinctDates.length} tanggal pertemuan. Silakan pilih hingga maksimal 7 tanggal.
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-2 self-start sm:self-auto">
-                    <span className={`px-3 py-1 rounded-full text-[10.5px] font-black uppercase tracking-wider ${
+                  <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+                    <span className={`px-2.5 py-0.5 rounded-full text-[9.5px] sm:text-[10.5px] font-black uppercase tracking-wider ${
                       selectedDates.size > 0 && selectedDates.size <= 7
                         ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                         : 'bg-rose-100 text-rose-800 border border-rose-300'
@@ -1760,7 +1850,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                     <button
                       type="button"
                       onClick={handleSelectTop7}
-                      className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold uppercase transition-all"
+                      className="px-2.5 py-0.5 sm:px-3 sm:py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[9px] sm:text-[10px] font-bold uppercase transition-all"
                     >
                       {selectedDates.size === Math.min(distinctDates.length, 7) ? 'Kosongkan' : 'Pilih 7 Pertama'}
                     </button>
@@ -1769,64 +1859,64 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
 
                 {/* List of Checkboxes */}
                 {distinctDates.length > 0 ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 max-h-72 overflow-y-auto no-scrollbar p-1">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 sm:gap-3 max-h-72 overflow-y-auto no-scrollbar p-0.5">
                     {distinctDates.map((dateStr) => {
                       const isChecked = selectedDates.has(dateStr);
                       return (
                         <label
                           key={dateStr}
                           onClick={() => handleToggleDateSelection(dateStr)}
-                          className={`flex items-center justify-between p-3 rounded-xl border cursor-pointer select-none transition-all ${
+                          className={`flex items-center justify-between p-2.5 sm:p-3 rounded-xl border cursor-pointer select-none transition-all ${
                             isChecked
                               ? 'bg-emerald-50/80 border-emerald-500 shadow-sm text-emerald-950 font-black'
                               : 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-700 font-bold'
                           }`}
                         >
-                          <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-2.5 min-w-0">
                             <input
                               type="checkbox"
                               checked={isChecked}
                               onChange={() => {}} // handled by parent onClick
-                              className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 accent-emerald-600 cursor-pointer"
+                              className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 accent-emerald-600 cursor-pointer shrink-0"
                             />
-                            <div className="space-y-0.5">
-                              <span className="text-xs block">
+                            <div className="space-y-0.5 min-w-0">
+                              <span className="text-[11px] sm:text-xs block truncate">
                                 {formatDateDisplay(dateStr)}
                               </span>
-                              <span className="text-[9.5px] text-slate-400 font-medium block">
+                              <span className="text-[8.5px] sm:text-[9.5px] text-slate-400 font-medium block">
                                 {dateStr}
                               </span>
                             </div>
                           </div>
 
                           {isChecked && (
-                            <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                            <CheckCircle2 size={15} className="text-emerald-600 shrink-0 ml-1" />
                           )}
                         </label>
                       );
                     })}
                   </div>
                 ) : (
-                  <div className="p-6 text-center bg-slate-50 border border-dashed border-slate-200 rounded-2xl">
-                    <p className="text-xs font-bold text-slate-500">Tidak ada tanggal pertemuan untuk filter ini.</p>
+                  <div className="p-5 text-center bg-slate-50 border border-dashed border-slate-200 rounded-2xl">
+                    <p className="text-[11px] sm:text-xs font-bold text-slate-500">Tidak ada tanggal pertemuan untuk filter ini.</p>
                   </div>
                 )}
 
                 {/* Info Note on Multi-Sheet Structure */}
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-start gap-3 text-slate-600 text-[11px] font-medium">
-                  <Info size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 sm:p-3 flex items-start gap-2.5 text-slate-600 text-[10px] sm:text-[11px] font-medium">
+                  <Info size={15} className="text-emerald-600 shrink-0 mt-0.5" />
                   <div>
                     Setiap tanggal yang dicentang akan menjadi <span className="font-extrabold text-slate-900">Sheet terpisah</span> di file Excel, plus <span className="font-extrabold text-emerald-700">1 Sheet Analisis & Rekap</span> (hitung persentase kehadiran, rekap per tanggal, rekap kelompok, & rekap usia).
                   </div>
                 </div>
 
                 {/* Final Export Excel Buttons */}
-                <div className="pt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="pt-1 sm:pt-2 grid grid-cols-1 md:grid-cols-2 gap-2.5 sm:gap-3">
                   <button
                     type="button"
                     onClick={() => handleExecuteExportMultiSheetExcel(true)}
                     disabled={selectedDates.size === 0 || isExportingExcel}
-                    className={`py-4 px-4 rounded-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-lg active:scale-98 ${
+                    className={`py-3.5 sm:py-4 px-3 sm:px-4 rounded-2xl font-black text-[10.5px] sm:text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-lg active:scale-98 ${
                       selectedDates.size > 0 && !isExportingExcel
                         ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-200 hover:shadow-blue-300 cursor-pointer'
                         : 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
@@ -1834,13 +1924,13 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                   >
                     {isExportingExcel ? (
                       <>
-                        <Loader2 size={18} className="animate-spin" />
+                        <Loader2 size={16} className="animate-spin" />
                         <span>MEMPROSES EXCEL...</span>
                       </>
                     ) : (
                       <>
-                        <FileSpreadsheet size={18} />
-                        <span>EXPORT ANALISIS ONLY (RPC - HEMAT EGRESS)</span>
+                        <FileSpreadsheet size={16} className="shrink-0" />
+                        <span className="truncate">EXPORT ANALISIS ONLY (RPC - HEMAT EGRESS)</span>
                       </>
                     )}
                   </button>
@@ -1849,7 +1939,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                     type="button"
                     onClick={() => handleExecuteExportMultiSheetExcel(false)}
                     disabled={selectedDates.size === 0 || isExportingExcel}
-                    className={`py-4 px-4 rounded-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-lg active:scale-98 ${
+                    className={`py-3.5 sm:py-4 px-3 sm:px-4 rounded-2xl font-black text-[10.5px] sm:text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-lg active:scale-98 ${
                       selectedDates.size > 0 && !isExportingExcel
                         ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-200 hover:shadow-emerald-300 cursor-pointer'
                         : 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
@@ -1857,21 +1947,22 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                   >
                     {isExportingExcel ? (
                       <>
-                        <Loader2 size={18} className="animate-spin" />
+                        <Loader2 size={16} className="animate-spin" />
                         <span>MEMPROSES EXCEL...</span>
                       </>
                     ) : (
                       <>
-                        <Download size={18} />
-                        <span>EXPORT LENGKAP ({selectedDates.size} PERTEMUAN)</span>
+                        <Download size={16} className="shrink-0" />
+                        <span className="truncate">EXPORT LENGKAP ({selectedDates.size} PERTEMUAN)</span>
                       </>
                     )}
                   </button>
                 </div>
               </motion.div>
             )}
-          </div>
+          </motion.div>
         )}
+        </AnimatePresence>
 
       {/* Detail Modal */}
       <AnimatePresence>

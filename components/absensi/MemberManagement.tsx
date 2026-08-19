@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   UserPlus,
   Search,
@@ -26,6 +26,7 @@ import {
   CreditCard,
   Minimize2,
   ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
@@ -115,8 +116,39 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
   const [filterDesa, setFilterDesa] = useState("All");
   const [filterKelompok, setFilterKelompok] = useState("All");
   const [filterAge, setFilterAge] = useState("All");
-  const [showFilterModal, setShowFilterModal] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
   const [viewMode, setViewMode] = useState<"anggota" | "kk">("anggota");
+
+  // Sticky header height sync
+  const searchBarRef = useRef<HTMLDivElement>(null);
+  const [searchBarHeight, setSearchBarHeight] = useState<number>(54);
+  const [daerahHeight, setDaerahHeight] = useState<number>(48);
+
+  useEffect(() => {
+    if (!searchBarRef.current) return;
+    const updateHeight = () => {
+      if (searchBarRef.current) {
+        setSearchBarHeight(searchBarRef.current.offsetHeight);
+      }
+    };
+    updateHeight();
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(searchBarRef.current);
+    window.addEventListener("resize", updateHeight);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateHeight);
+    };
+  }, [showFilters]);
+
+  const setDaerahHeaderRef = (el: HTMLDivElement | null) => {
+    if (el) {
+      const h = el.offsetHeight;
+      if (h > 0 && Math.abs(h - daerahHeight) > 1) {
+        setDaerahHeight(h);
+      }
+    }
+  };
 
   const isFilterActive = useMemo(() => {
     return (
@@ -1616,114 +1648,239 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
       </div>
 
       {/* Search & Filters */}
-      <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b border-slate-100 px-4 md:px-6 h-[56px] md:h-[72px] flex items-center cursor-default">
-        <div className="w-full max-w-7xl mx-auto flex items-center justify-between gap-2.5 md:gap-4">
-          {/* Search Bar */}
-          <div className="flex-1 relative group">
-            <Search className="absolute left-3.5 md:left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-600 transition-colors w-3.5 h-3.5 md:w-4 md:h-4" />
-            <input
-              id="member-search-input"
-              type="text"
-              placeholder="CARI NAMA ATAU ID..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-9 md:pl-11 pr-3 md:pr-4 py-2 md:py-2.5 bg-slate-50 border-2 border-slate-100 rounded-xl md:rounded-2xl text-[9px] md:text-[10px] font-black uppercase text-slate-700 focus:border-blue-600 focus:bg-white outline-none transition-all shadow-xs"
-            />
-          </div>
-
-          {/* Action Buttons: Filter Trigger + Reset */}
-          <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
-            {/* View Mode Selector Dropdown */}
-            <div className="relative shrink-0 select-none">
-              <select
-                id="view-mode-select"
-                value={viewMode}
-                onChange={(e) => setViewMode(e.target.value as "anggota" | "kk")}
-                className="appearance-none bg-slate-50 border-2 border-slate-100 text-slate-500 hover:text-blue-600 hover:border-blue-100 focus:border-blue-500 focus:bg-white rounded-xl md:rounded-2xl pl-3 pr-8 py-2 md:py-3 text-[9px] md:text-[10px] font-black uppercase tracking-wider outline-none transition-all cursor-pointer shadow-xs"
-              >
-                <option value="anggota">👤 PER ANGGOTA</option>
-                <option value="kk">🏠 PER KK</option>
-              </select>
-              <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+      <div
+        ref={searchBarRef}
+        className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b border-slate-100 px-4 md:px-6 py-2 md:py-2.5 cursor-default"
+      >
+        <div className="w-full max-w-7xl mx-auto space-y-2.5">
+          <div className="flex items-center justify-between gap-2 md:gap-3">
+            {/* Search Bar */}
+            <div className="flex-1 relative group">
+              <Search className="absolute left-3.5 md:left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-600 transition-colors w-3.5 h-3.5 md:w-4 md:h-4" />
+              <input
+                id="member-search-input"
+                type="text"
+                placeholder="CARI NAMA ATAU ID..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-9 md:pl-11 pr-3 md:pr-4 py-2 md:py-2.5 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl text-[9px] md:text-[10px] font-black uppercase text-slate-700 focus:border-blue-600 focus:bg-white outline-none transition-all shadow-xs"
+              />
             </div>
 
-            {/* Filter Toggle Button */}
-            <button
-              id="filter-trigger-btn"
-              onClick={() => setShowFilterModal(true)}
-              className={`
-                relative p-2 md:p-3 rounded-xl md:rounded-2xl border-2 transition-all active:scale-95 flex items-center gap-1.5 md:gap-2 font-black text-[9px] md:text-[10px] uppercase tracking-wider
-                ${
-                  isFilterActive
-                    ? "bg-blue-50 border-blue-200 text-blue-600 shadow-xs"
-                    : "bg-slate-50 border-slate-100 text-slate-500 hover:text-blue-600 hover:border-blue-100"
-                }
-              `}
-              title="Filter Anggota"
-            >
-              <SlidersHorizontal
-                size={14}
-                className={isFilterActive ? "animate-pulse" : ""}
-              />
-              <span className="hidden sm:inline">Filter</span>
-              {isFilterActive && (
-                <span className="absolute -top-1 -right-1 w-2 h-2 bg-rose-500 rounded-full" />
-              )}
-            </button>
+            {/* Action Buttons: View Mode + Filter Toggle + Reset */}
+            <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
+              {/* View Mode Selector Dropdown */}
+              <div className="w-[125px] sm:w-[155px] md:w-[170px] shrink-0 select-none">
+                <ModernSelect
+                  value={viewMode}
+                  onChange={(val) => setViewMode(val as "anggota" | "kk")}
+                  options={[
+                    { value: "anggota", label: "PER ANGGOTA", icon: User },
+                    { value: "kk", label: "PER KK", icon: Home },
+                  ]}
+                  placeholder="PILIH TAMPILAN"
+                  size="sm"
+                />
+              </div>
 
-            {/* Reset Filter Button (Only show if filter is active) */}
-            {isFilterActive && (
+              {/* Filter Toggle Button (Hide / Unhide like History Tab) */}
               <button
-                id="filter-reset-btn"
-                onClick={() => {
-                  setSearchTerm("");
-                  setFilterDaerah("All");
-                  setFilterDesa("All");
-                  setFilterKelompok("All");
-                  setFilterAge("All");
-                }}
-                title="Reset All Filters"
-                className="p-2 md:p-3 bg-rose-50 border-2 border-rose-100 text-rose-500 hover:bg-rose-100 hover:border-rose-200 rounded-xl md:rounded-2xl transition-all active:scale-95 shrink-0"
+                id="filter-trigger-btn"
+                type="button"
+                onClick={() => setShowFilters(!showFilters)}
+                className={`px-3 py-2 md:py-2.5 rounded-xl md:rounded-2xl border font-black text-[9px] md:text-[10px] uppercase tracking-wider transition-all flex items-center gap-1.5 select-none active:scale-95 shrink-0 ${
+                  showFilters
+                    ? "bg-slate-900 border-slate-900 text-white shadow-xs"
+                    : isFilterActive
+                    ? "bg-blue-50 border-blue-200 text-blue-600 shadow-xs"
+                    : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                }`}
+                title="Filter Anggota"
               >
-                <RotateCcw size={14} />
+                <SlidersHorizontal
+                  size={13}
+                  className={isFilterActive && !showFilters ? "text-blue-500" : ""}
+                />
+                <span className="hidden sm:inline">
+                  {showFilters ? "Sembunyikan" : "Filter"}
+                </span>
+                {isFilterActive && !showFilters && (
+                  <span className="w-1.5 h-1.5 bg-rose-500 rounded-full" />
+                )}
+                {showFilters ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
               </button>
-            )}
+
+              {/* Reset Filter Button (Only show if filter is active) */}
+              {isFilterActive && (
+                <button
+                  id="filter-reset-btn"
+                  onClick={() => {
+                    setSearchTerm("");
+                    setFilterDaerah("All");
+                    setFilterDesa("All");
+                    setFilterKelompok("All");
+                    setFilterAge("All");
+                  }}
+                  title="Reset All Filters"
+                  className="p-2 md:p-2.5 bg-rose-50 border border-rose-100 text-rose-500 hover:bg-rose-100 hover:border-rose-200 rounded-xl md:rounded-2xl transition-all active:scale-95 shrink-0"
+                >
+                  <RotateCcw size={14} />
+                </button>
+              )}
+            </div>
           </div>
+
+          {/* Compact 4-column filter grid with animation (Hide/Unhide) */}
+          <AnimatePresence initial={false}>
+            {showFilters && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2, ease: "easeInOut" }}
+                className="overflow-visible"
+              >
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 pt-2 border-t border-slate-100">
+                  {/* Filter 1: Daerah */}
+                  <div>
+                    <span className="block text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1">
+                      Daerah
+                    </span>
+                    <ModernSelect
+                      size="sm"
+                      value={filterDaerah}
+                      onChange={(val) => {
+                        setFilterDaerah(val);
+                        if (val !== "All") {
+                          const dDoc = desas.find(
+                            (d) => String(d.id) === String(filterDesa),
+                          );
+                          if (dDoc && String(dDoc.daerah_id) !== String(val)) {
+                            setFilterDesa("All");
+                            setFilterKelompok("All");
+                          }
+                        }
+                      }}
+                      options={[
+                        { value: "All", label: "SEMUA DAERAH" },
+                        ...(daerahs || []).map((da) => ({
+                          value: String(da.id),
+                          label: da.nama_daerah.toUpperCase(),
+                        })),
+                      ]}
+                      icon={Users}
+                      placeholder="SEMUA DAERAH"
+                    />
+                  </div>
+
+                  {/* Filter 2: Desa */}
+                  <div>
+                    <span className="block text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1">
+                      Desa
+                    </span>
+                    <ModernSelect
+                      size="sm"
+                      value={filterDesa}
+                      onChange={(val) => {
+                        setFilterDesa(val);
+                        if (val !== "All") {
+                          const matched = kelompoks.find(
+                            (k) => String(k.id) === String(filterKelompok),
+                          );
+                          if (
+                            matched &&
+                            matched.desa_id &&
+                            String(matched.desa_id) !== String(val)
+                          ) {
+                            setFilterKelompok("All");
+                          }
+                        }
+                      }}
+                      options={[
+                        { value: "All", label: "SEMUA DESA" },
+                        ...desas
+                          .filter(
+                            (d) =>
+                              filterDaerah === "All" ||
+                              String(d.daerah_id) === String(filterDaerah),
+                          )
+                          .map((d) => ({
+                            value: String(d.id),
+                            label: d.nama_desa.toUpperCase(),
+                          })),
+                      ]}
+                      icon={MapPin}
+                      placeholder="SEMUA DESA"
+                    />
+                  </div>
+
+                  {/* Filter 3: Kelompok */}
+                  <div>
+                    <span className="block text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1">
+                      Kelompok
+                    </span>
+                    <ModernSelect
+                      size="sm"
+                      value={filterKelompok}
+                      onChange={setFilterKelompok}
+                      options={[
+                        { value: "All", label: "SEMUA KELOMPOK" },
+                        ...kelompoks
+                          .filter((k) => {
+                            const matchedDesa = desas.find(
+                              (d) => String(d.id) === String(k.desa_id),
+                            );
+                            const isDesaMatch =
+                              filterDesa === "All" ||
+                              !k.desa_id ||
+                              String(k.desa_id) === String(filterDesa);
+                            const isDaerahMatch =
+                              filterDaerah === "All" ||
+                              !matchedDesa ||
+                              String(matchedDesa.daerah_id) ===
+                                String(filterDaerah);
+                            return isDesaMatch && isDaerahMatch;
+                          })
+                          .map((k) => ({
+                            value: String(k.id),
+                            label: k.nama_kelompok.toUpperCase(),
+                          })),
+                      ]}
+                      icon={Users}
+                      placeholder="SEMUA KELOMPOK"
+                    />
+                  </div>
+
+                  {/* Filter 4: Kategori Usia */}
+                  <div>
+                    <span className="block text-[8px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1">
+                      Kategori Usia
+                    </span>
+                    <ModernSelect
+                      size="sm"
+                      value={filterAge}
+                      onChange={setFilterAge}
+                      options={[
+                        { value: "All", label: "SEMUA KATEGORI USIA" },
+                        ...ages.map((a) => ({
+                          value: String(a.id),
+                          label: a.name.toUpperCase(),
+                        })),
+                      ]}
+                      icon={Calendar}
+                      placeholder="SEMUA KATEGORI USIA"
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
 
       {/* Content Area */}
       <div className="p-2 md:p-4">
         <div className="max-w-7xl mx-auto">
-          {/* Desktop Table Header */}
-          {!isLoading && filteredMembers.length > 0 && (
-            <div className="hidden md:flex items-center gap-6 px-5 py-2.5 bg-slate-50/70 rounded-xl border border-slate-100/50 md:ml-10 mb-3 select-none">
-              <div className="w-11 shrink-0"></div> {/* Space for icon */}
-              <div className="flex-1 grid grid-cols-12 gap-4">
-                <div className="col-span-4">
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
-                    Informasi Anggota
-                  </span>
-                </div>
-                <div className="col-span-2 text-center">
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
-                    Jenis Kelamin
-                  </span>
-                </div>
-                <div className="col-span-3">
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
-                    Tanggal Lahir
-                  </span>
-                </div>
-                <div className="col-span-3">
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
-                    Tempat Lahir
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
-
           {isLoading ? (
             <div className="flex flex-col items-center justify-center py-12 space-y-3">
               <div className="relative">
@@ -1764,7 +1921,11 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                       className="space-y-3 bg-white p-3 md:p-6 rounded-2xl md:rounded-3xl border border-slate-100 shadow-sm relative group-section"
                     >
                       {/* DAERAH HEADER - Sticky */}
-                      <div className="sticky top-[56px] md:top-[72px] z-20 py-1.5 -mx-3 px-3 bg-white/95 backdrop-blur-sm rounded-t-xl transition-all duration-200">
+                      <div
+                        ref={setDaerahHeaderRef}
+                        className="sticky z-20 py-1 -mx-3 px-3 bg-white/95 backdrop-blur-sm rounded-t-xl transition-all duration-200"
+                        style={{ top: `${searchBarHeight}px` }}
+                      >
                         <div className="flex flex-row items-center justify-between gap-1.5 md:gap-2 px-3 md:px-4 py-1.5 md:py-2.5 bg-purple-50 text-purple-700 rounded-xl border border-purple-100 shadow-xs w-full">
                           <div className="flex items-center gap-1.5 md:gap-2.5 min-w-0">
                             <LayoutGrid
@@ -1845,7 +2006,10 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                       className="space-y-2 relative group-section-kelompok"
                                     >
                                       {/* KELOMPOK HEADER - Sticky right below the Daerah/Desa sticky zone */}
-                                      <div className="sticky top-[100px] md:top-[124px] z-10 py-1 bg-white/95 backdrop-blur-sm rounded-lg -mx-2 px-2">
+                                      <div
+                                        className="sticky z-10 py-1 bg-white/95 backdrop-blur-sm rounded-lg -mx-2 px-2"
+                                        style={{ top: `${searchBarHeight + daerahHeight}px` }}
+                                      >
                                         <div className="flex items-center gap-2 pl-3 border-l-2 border-emerald-400 py-1 bg-emerald-50/20 rounded-r-lg">
                                           <Users
                                             size={11}
@@ -3888,219 +4052,6 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                   className="w-full py-4 text-slate-400 font-bold"
                 >
                   Batalkan
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* FILTER MODAL */}
-      <AnimatePresence>
-        {showFilterModal && (
-          <div className="fixed inset-0 z-[100] flex items-start md:items-center justify-center p-3 pt-2 pb-[88px] md:p-4 overflow-y-auto no-scrollbar">
-            {/* Backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowFilterModal(false)}
-              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
-            />
-
-            {/* Modal Body */}
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 30 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 30 }}
-              transition={{ type: "spring", duration: 0.4 }}
-              className="relative bg-white w-full max-w-md rounded-3xl border border-slate-100 shadow-2xl flex flex-col my-auto z-10 overflow-visible"
-            >
-              {/* Header */}
-              <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between shrink-0">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
-                    <SlidersHorizontal size={16} />
-                  </div>
-                  <div>
-                    <h3 className="text-xs md:text-sm font-black uppercase tracking-wider text-slate-800">
-                      Filter Anggota
-                    </h3>
-                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tight">
-                      Persempit pencarian data
-                    </p>
-                  </div>
-                </div>
-                <button
-                  id="close-filter-modal-btn"
-                  onClick={() => setShowFilterModal(false)}
-                  className="p-1.5 hover:bg-slate-200 text-slate-400 hover:text-slate-700 rounded-lg transition-colors"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-
-              {/* Scrollable Filters List */}
-              <div className="p-5 overflow-visible space-y-4">
-                {/* Daerah Selector */}
-                <div className="space-y-1.5 relative z-40">
-                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">
-                    Pilih Daerah
-                  </label>
-                  <ModernSelect
-                    value={filterDaerah}
-                    onChange={(val) => {
-                      setFilterDaerah(val);
-                      if (val !== "All") {
-                        // Check if current filterDesa matches this daerah
-                        const dDoc = desas.find(
-                          (d) => String(d.id) === String(filterDesa),
-                        );
-                        if (dDoc && String(dDoc.daerah_id) !== String(val)) {
-                          setFilterDesa("All");
-                          setFilterKelompok("All");
-                        }
-                      }
-                    }}
-                    options={[
-                      { value: "All", label: "SEMUA DAERAH" },
-                      ...(daerahs || []).map((da) => ({
-                        value: String(da.id),
-                        label: da.nama_daerah.toUpperCase(),
-                      })),
-                    ]}
-                    noAnimation
-                    icon={Users}
-                    placeholder="SEMUA DAERAH"
-                    className="w-full"
-                  />
-                </div>
-
-                {/* Desa Selector */}
-                <div className="space-y-1.5 relative z-30">
-                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">
-                    Pilih Desa
-                  </label>
-                  <ModernSelect
-                    value={filterDesa}
-                    onChange={(val) => {
-                      setFilterDesa(val);
-                      if (val !== "All") {
-                        const matched = kelompoks.find(
-                          (k) => String(k.id) === String(filterKelompok),
-                        );
-                        if (
-                          matched &&
-                          matched.desa_id &&
-                          String(matched.desa_id) !== String(val)
-                        ) {
-                          setFilterKelompok("All");
-                        }
-                      }
-                    }}
-                    options={[
-                      { value: "All", label: "SEMUA DESA" },
-                      ...desas
-                        .filter(
-                          (d) =>
-                            filterDaerah === "All" ||
-                            String(d.daerah_id) === String(filterDaerah),
-                        )
-                        .map((d) => ({
-                          value: String(d.id),
-                          label: d.nama_desa.toUpperCase(),
-                        })),
-                    ]}
-                    noAnimation
-                    icon={MapPin}
-                    placeholder="SEMUA DESA"
-                    className="w-full"
-                  />
-                </div>
-
-                {/* Kelompok Selector */}
-                <div className="space-y-1.5 relative z-20">
-                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">
-                    Pilih Kelompok
-                  </label>
-                  <ModernSelect
-                    value={filterKelompok}
-                    onChange={setFilterKelompok}
-                    options={[
-                      { value: "All", label: "SEMUA KELOMPOK" },
-                      ...kelompoks
-                        .filter((k) => {
-                          const matchedDesa = desas.find(
-                            (d) => String(d.id) === String(k.desa_id),
-                          );
-                          const isDesaMatch =
-                            filterDesa === "All" ||
-                            !k.desa_id ||
-                            String(k.desa_id) === String(filterDesa);
-                          const isDaerahMatch =
-                            filterDaerah === "All" ||
-                            !matchedDesa ||
-                            String(matchedDesa.daerah_id) ===
-                              String(filterDaerah);
-                          return isDesaMatch && isDaerahMatch;
-                        })
-                        .map((k) => ({
-                          value: String(k.id),
-                          label: k.nama_kelompok.toUpperCase(),
-                        })),
-                    ]}
-                    noAnimation
-                    icon={Users}
-                    placeholder="SEMUA KELOMPOK"
-                    className="w-full"
-                  />
-                </div>
-
-                {/* Usia Selector */}
-                <div className="space-y-1.5 relative z-10">
-                  <label className="text-[9px] font-black uppercase text-slate-400 tracking-wider">
-                    Kategori Usia
-                  </label>
-                  <ModernSelect
-                    value={filterAge}
-                    onChange={setFilterAge}
-                    options={[
-                      { value: "All", label: "SEMUA KATEGORI USIA" },
-                      ...ages.map((a) => ({
-                        value: String(a.id),
-                        label: a.name.toUpperCase(),
-                      })),
-                    ]}
-                    noAnimation
-                    icon={Calendar}
-                    placeholder="SEMUA KATEGORI USIA"
-                    className="w-full"
-                  />
-                </div>
-              </div>
-
-              {/* Footer */}
-              <div className="px-5 py-4 bg-slate-50 border-t border-slate-100 flex gap-2 shrink-0">
-                <button
-                  id="reset-filter-modal-btn"
-                  onClick={() => {
-                    setFilterDaerah("All");
-                    setFilterDesa("All");
-                    setFilterKelompok("All");
-                    setFilterAge("All");
-                  }}
-                  disabled={!isFilterActive}
-                  className="flex-1 py-3 border border-slate-200 text-slate-500 disabled:opacity-50 hover:bg-slate-100 rounded-xl font-bold text-[10px] uppercase tracking-wider transition-colors active:scale-95 flex items-center justify-center gap-2"
-                >
-                  <RotateCcw size={12} />
-                  Reset
-                </button>
-                <button
-                  id="submit-filter-modal-btn"
-                  onClick={() => setShowFilterModal(false)}
-                  className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-[10px] uppercase tracking-wider transition-all active:scale-95 shadow-md shadow-blue-100"
-                >
-                  Terapkan ({filteredMembers.length})
                 </button>
               </div>
             </motion.div>

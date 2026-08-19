@@ -19,6 +19,7 @@ interface ModernSelectProps {
   disabled?: boolean;
   noAnimation?: boolean;
   onAddNew?: (newValue: string) => void | Promise<void>;
+  size?: 'sm' | 'md';
 }
 
 const ModernSelect: React.FC<ModernSelectProps> = ({
@@ -30,7 +31,8 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
   className = '',
   disabled = false,
   noAnimation = false,
-  onAddNew
+  onAddNew,
+  size = 'md'
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -38,6 +40,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
 
   // Normalize value to string for comparison
   const selectedOption = options.find(opt => String(opt.value) === String(value));
+  const DisplayIcon = selectedOption?.icon || TriggerIcon;
 
   const filteredOptions = options.filter(opt =>
     opt.label.toLowerCase().includes(searchTerm.toLowerCase())
@@ -65,20 +68,21 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
           setIsOpen(!isOpen);
         }}
         className={`
-          w-full flex items-center justify-between px-2 py-2.5 md:px-4 md:py-3.5 
-          bg-white border-2 transition-all outline-none shadow-sm rounded-xl md:rounded-2xl
-          ${isOpen ? 'border-emerald-500 bg-white ring-4 ring-emerald-500/5' : 'border-slate-100 hover:border-slate-200'}
+          w-full flex items-center justify-between 
+          ${size === 'sm' ? 'px-2.5 py-2 rounded-lg border text-xs font-semibold' : 'px-2 py-2.5 md:px-4 md:py-3.5 rounded-xl md:rounded-2xl border-2'}
+          bg-white transition-all outline-none shadow-xs
+          ${isOpen ? 'border-sky-500 bg-white ring-2 ring-sky-500/20' : size === 'sm' ? 'border-slate-200 hover:border-slate-300' : 'border-slate-100 hover:border-slate-200'}
           ${disabled ? 'opacity-50 cursor-not-allowed bg-slate-50' : 'cursor-pointer'}
         `}
       >
-        <div className="flex items-center gap-1.5 md:gap-3 overflow-hidden">
-          {TriggerIcon && <TriggerIcon className={`shrink-0 w-3 h-3 md:w-4 md:h-4 ${isOpen ? 'text-emerald-500' : 'text-slate-400'}`} />}
-          <span className={`text-[7px] md:text-[11px] font-black uppercase tracking-widest truncate ${selectedOption && selectedOption.label !== 'PILIH' ? 'text-slate-700' : 'text-slate-400'}`}>
+        <div className={`flex items-center ${size === 'sm' ? 'gap-1.5' : 'gap-1.5 md:gap-3'} overflow-hidden`}>
+          {DisplayIcon && <DisplayIcon className={`shrink-0 ${size === 'sm' ? 'w-3.5 h-3.5' : 'w-3 h-3 md:w-4 md:h-4'} ${isOpen ? 'text-sky-600' : 'text-slate-400'}`} />}
+          <span className={`${size === 'sm' ? 'text-[10px] md:text-[11px] font-bold' : 'text-[7px] md:text-[11px] font-black'} uppercase tracking-wider truncate ${selectedOption && selectedOption.label !== 'PILIH' ? 'text-slate-700' : 'text-slate-400'}`}>
             {selectedOption && selectedOption.label !== 'PILIH' ? selectedOption.label : placeholder}
           </span>
         </div>
         <ChevronDown 
-          className={`text-slate-400 transition-transform duration-500 w-3 h-3 md:w-4 md:h-4 ${isOpen ? 'rotate-180 text-emerald-500' : ''}`} 
+          className={`text-slate-400 transition-transform duration-300 ${size === 'sm' ? 'w-3.5 h-3.5' : 'w-3 h-3 md:w-4 md:h-4'} ${isOpen ? 'rotate-180 text-sky-600' : ''}`} 
         />
       </button>
 
@@ -87,27 +91,27 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
         <div className={noAnimation ? '' : 'contents'}>
           {noAnimation ? (
             <div
-              className="absolute z-[600] top-full right-0 md:right-auto md:left-0 min-w-full w-max max-w-[calc(100vw-32px)] md:max-w-md bg-white border-2 border-slate-100 rounded-2xl shadow-2xl shadow-slate-900/10 overflow-hidden flex flex-col max-h-[320px] mt-2"
+              className="absolute z-[600] top-full right-0 md:right-auto md:left-0 min-w-full w-max max-w-[calc(100vw-32px)] md:max-w-md bg-white/75 backdrop-blur-xl border border-white/90 ring-1 ring-slate-900/15 shadow-[0_20px_50px_rgba(15,23,42,0.25)] rounded-2xl overflow-hidden flex flex-col max-h-[320px] mt-2"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Search Input inside dropdown if options are many or adding is enabled */}
               {(options.length > 5 || onAddNew) && (
-                <div className="p-3 border-b border-slate-100 sticky top-0 bg-white">
+                <div className="p-3 border-b border-slate-200/50 sticky top-0 bg-white/50 backdrop-blur-sm z-10">
                   <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={14} />
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                     <input
                       autoFocus
                       type="text"
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
                       placeholder={onAddNew ? "Cari atau tambah baru..." : "Pencarian..."}
-                      className="w-full pl-9 pr-8 py-2 bg-slate-50 border border-slate-100 rounded-xl text-[10px] font-bold text-slate-700 focus:bg-white focus:border-emerald-500 transition-all outline-none"
+                      className="w-full pl-9 pr-8 py-2 bg-white/60 border border-slate-200/70 rounded-xl text-[10px] font-bold text-slate-800 placeholder:text-slate-400 focus:bg-white/95 focus:border-emerald-500 transition-all outline-none"
                     />
                     {searchTerm && (
                       <button 
                         type="button"
                         onClick={() => setSearchTerm('')}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-300 hover:text-slate-500"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600"
                       >
                         <X size={12} />
                       </button>
@@ -116,7 +120,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                 </div>
               )}
 
-              <div className="overflow-y-auto no-scrollbar py-2 flex-1">
+              <div className="overflow-y-auto no-scrollbar p-1.5 md:p-2 space-y-1 flex-1">
                 {filteredOptions.length > 0 ? (
                   filteredOptions.map((option) => {
                     const isSelected = String(option.value) === String(value);
@@ -132,17 +136,19 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                           setSearchTerm('');
                         }}
                         className={`
-                          w-full flex items-center justify-between px-4 py-3 text-left transition-all group relative
-                          ${isSelected ? 'bg-emerald-600 text-white shadow-lg z-10' : 'text-slate-500 hover:bg-emerald-50 hover:text-emerald-700'}
+                          w-full flex items-center justify-between px-3 py-2 md:px-3.5 md:py-2.5 text-left transition-all group relative rounded-xl border
+                          ${isSelected 
+                            ? 'bg-emerald-600/80 hover:bg-emerald-600/90 text-white border-emerald-500/40 font-black shadow-xs' 
+                            : 'text-slate-700 hover:bg-white/80 hover:text-slate-900 border-transparent'}
                         `}
                       >
-                        <div className="flex items-center gap-3">
-                          {Icon && <Icon size={14} className={isSelected ? 'text-white' : 'text-slate-400 group-hover:text-emerald-500'} />}
-                          <span className={`text-[8px] md:text-[10px] font-black uppercase tracking-widest whitespace-nowrap`}>
+                        <div className="flex items-center gap-2.5">
+                          {Icon && <Icon size={14} className={isSelected ? 'text-white' : 'text-slate-400 group-hover:text-slate-600'} />}
+                          <span className={`text-[8px] md:text-[10px] font-black uppercase tracking-wider whitespace-nowrap`}>
                             {option.label}
                           </span>
                         </div>
-                        {isSelected && <Check size={14} className="text-white" />}
+                        {isSelected && <Check size={14} className="text-white shrink-0 stroke-[2.5]" />}
                       </button>
                     );
                   })
@@ -164,7 +170,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                       setSearchTerm('');
                       setIsOpen(false);
                     }}
-                    className="w-full flex items-center gap-2 px-4 py-3 text-left transition-all text-emerald-600 hover:bg-emerald-50 text-[8px] md:text-[10px] font-black uppercase tracking-widest border-t border-slate-100"
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left transition-all text-emerald-600 hover:bg-white/80 rounded-xl text-[8px] md:text-[10px] font-black uppercase tracking-widest border border-dashed border-emerald-200 mt-1"
                   >
                     <Plus size={14} className="shrink-0" />
                     <span>Tambah "{searchTerm}"</span>
@@ -179,27 +185,27 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                 animate={{ opacity: 1, y: 8, scale: 1 }}
                 exit={{ opacity: 0, y: 12, scale: 0.95 }}
                 transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
-                className="absolute z-[600] top-full right-0 md:right-auto md:left-0 min-w-full w-max max-w-[calc(100vw-32px)] md:max-w-md bg-white border border-slate-200 rounded-2xl shadow-2xl shadow-slate-900/10 overflow-hidden flex flex-col max-h-[320px]"
+                className="absolute z-[600] top-full right-0 md:right-auto md:left-0 min-w-full w-max max-w-[calc(100vw-32px)] md:max-w-md bg-white/75 backdrop-blur-xl border border-white/90 ring-1 ring-slate-900/15 shadow-[0_20px_50px_rgba(15,23,42,0.25)] rounded-2xl overflow-hidden flex flex-col max-h-[320px] mt-2"
                 onClick={(e) => e.stopPropagation()}
               >
                 {/* Search Input inside dropdown if options are many or adding is enabled */}
                 {(options.length > 5 || onAddNew) && (
-                  <div className="p-3 border-b border-slate-100 sticky top-0 bg-white">
+                  <div className="p-3 border-b border-slate-200/50 sticky top-0 bg-white/50 backdrop-blur-sm z-10">
                     <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={14} />
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                       <input
                         autoFocus
                         type="text"
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         placeholder={onAddNew ? "Cari atau tambah baru..." : "Pencarian..."}
-                        className="w-full pl-9 pr-8 py-2 bg-slate-50 border border-slate-100 rounded-xl text-[10px] font-bold text-slate-700 focus:bg-white focus:border-emerald-500 transition-all outline-none"
+                        className="w-full pl-9 pr-8 py-2 bg-white/60 border border-slate-200/70 rounded-xl text-[10px] font-bold text-slate-800 placeholder:text-slate-400 focus:bg-white/95 focus:border-emerald-500 transition-all outline-none"
                       />
                       {searchTerm && (
                         <button 
                           type="button"
                           onClick={() => setSearchTerm('')}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-300 hover:text-slate-500"
+                          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600"
                         >
                           <X size={12} />
                         </button>
@@ -208,7 +214,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                   </div>
                 )}
 
-                <div className="overflow-y-auto no-scrollbar py-2 flex-1">
+                <div className="overflow-y-auto no-scrollbar p-1.5 md:p-2 space-y-1 flex-1">
                   {filteredOptions.length > 0 ? (
                     filteredOptions.map((option) => {
                       const isSelected = String(option.value) === String(value);
@@ -224,17 +230,19 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                             setSearchTerm('');
                           }}
                           className={`
-                            w-full flex items-center justify-between px-4 py-3 text-left transition-all group relative
-                            ${isSelected ? 'bg-emerald-600 text-white shadow-lg z-10' : 'text-slate-500 hover:bg-emerald-50 hover:text-emerald-700'}
+                            w-full flex items-center justify-between px-3 py-2 md:px-3.5 md:py-2.5 text-left transition-all group relative rounded-xl border
+                            ${isSelected 
+                              ? 'bg-emerald-600/80 hover:bg-emerald-600/90 text-white border-emerald-500/40 font-black shadow-xs' 
+                              : 'text-slate-600 hover:bg-slate-100/70 hover:text-slate-900 border-transparent'}
                           `}
                         >
-                          <div className="flex items-center gap-3">
-                            {Icon && <Icon size={14} className={isSelected ? 'text-white' : 'text-slate-400 group-hover:text-emerald-500'} />}
-                            <span className={`text-[8px] md:text-[10px] font-black uppercase tracking-widest whitespace-nowrap`}>
+                          <div className="flex items-center gap-2.5">
+                            {Icon && <Icon size={14} className={isSelected ? 'text-white' : 'text-slate-400 group-hover:text-slate-600'} />}
+                            <span className={`text-[8px] md:text-[10px] font-black uppercase tracking-wider whitespace-nowrap`}>
                               {option.label}
                             </span>
                           </div>
-                          {isSelected && <Check size={14} className="text-white" />}
+                          {isSelected && <Check size={14} className="text-white shrink-0 stroke-[2.5]" />}
                         </button>
                       );
                     })
@@ -256,7 +264,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                         setSearchTerm('');
                         setIsOpen(false);
                       }}
-                      className="w-full flex items-center gap-2 px-4 py-3 text-left transition-all text-emerald-600 hover:bg-emerald-50 text-[8px] md:text-[10px] font-black uppercase tracking-widest border-t border-slate-100"
+                      className="w-full flex items-center gap-2 px-3 py-2.5 text-left transition-all text-emerald-600 hover:bg-emerald-50 rounded-xl text-[8px] md:text-[10px] font-black uppercase tracking-widest border border-dashed border-emerald-200 mt-1"
                     >
                       <Plus size={14} className="shrink-0" />
                       <span>Tambah "{searchTerm}"</span>

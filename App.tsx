@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { LayoutDashboard, ReceiptText, Receipt, History, Wallet, RefreshCw, AlertCircle, FileText, Settings, Loader2, LogOut, ChevronsLeft, ChevronsRight, UserCircle, ShieldAlert, FileEdit, CheckCircle2, AlertTriangle, HelpCircle, User, Users, Fingerprint, Trash2, Layers, Filter, Info, X, Clock, ShieldCheck, Copy, Check, CalendarDays } from 'lucide-react';
+import { LayoutDashboard, ReceiptText, Receipt, History, Wallet, RefreshCw, AlertCircle, FileText, Settings, Loader2, LogOut, ChevronsLeft, ChevronsRight, UserCircle, ShieldAlert, FileEdit, CheckCircle2, AlertTriangle, HelpCircle, User, Users, Fingerprint, Trash2, Layers, Filter, Info, X, Clock, ShieldCheck, Copy, Check, CalendarDays, Lock, KeyRound, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import { Transaction, DeletedTransaction, EditHistory, AppTab, GlobalStats, ProjectMetadata, AppType, AbsensiMember, AttendanceLog, DesaData, KelompokData, AgeCategoryData, DaerahData, EventData, Family, FamilyRelationship } from './types';
 import Dashboard from './components/bendahara/DashboardBendahara';
 import TransactionForm from './components/bendahara/TransactionForm';
@@ -1376,7 +1376,7 @@ const App: React.FC = () => {
     } catch (err) { showToast("Gagal memperbarui data", "error"); } finally { setIsLoading(false); }
   }, [isLoggedIn, currentApp, canSeeAudit, fetchTransactions, fetchAuditLogs, fetchMetadata, fetchAbsensiMaster, fetchAbsensiLogs]);
 
-  const handleLoginSuccess = (data: any) => {
+  const handleLoginSuccess = (data: any, selectedApp?: 'bendahara' | 'absensi') => {
     if (data.firebase_config) {
       localStorage.setItem('instansi_db_config', JSON.stringify(data.firebase_config));
       initializeDynamicDb(data.firebase_config);
@@ -1388,8 +1388,15 @@ const App: React.FC = () => {
     const webAccess = String(data.web_access || 'bendahara').toLowerCase();
     const accessList = webAccess.split(',').map(s => s.trim());
     
-    // Choose default app
-    const defaultApp: AppType = accessList.includes('bendahara') ? 'bendahara' : 'absensi';
+    // Choose target app (from selectedApp if chosen, or deduce default)
+    let targetApp: AppType;
+    if (selectedApp) {
+      targetApp = selectedApp;
+    } else if (accessList.includes('bendahara')) {
+      targetApp = 'bendahara';
+    } else {
+      targetApp = 'absensi';
+    }
 
     setCurrentUsername(data.username); 
     setFullName(data.full_name || data.username); 
@@ -1408,18 +1415,106 @@ const App: React.FC = () => {
     setRestrictedAgeCategoryId(data.restricted_age_category_id || '');
     localStorage.setItem('grouping_write_permissions', JSON.stringify(data.grouping_write_permissions || {}));
 
-    setCurrentApp(defaultApp);
-    localStorage.setItem('currentApp', defaultApp);
-    window.location.replace(defaultApp === 'bendahara' ? '#/treasurer' : '#/attendance');
+    setCurrentApp(targetApp);
+    localStorage.setItem('currentApp', targetApp);
+    window.location.replace(targetApp === 'bendahara' ? '#/treasurer' : '#/attendance');
     setIsLoggedIn(true);
   };
 
-  const switchApp = (app: AppType) => {
+  const [switchTargetApp, setSwitchTargetApp] = useState<AppType | null>(null);
+  const [showSwitchConfirm, setShowSwitchConfirm] = useState(false);
+  const [showSwitchPasswordPrompt, setShowSwitchPasswordPrompt] = useState(false);
+  const [switchPasswordInput, setSwitchPasswordInput] = useState('');
+  const [switchPasswordError, setSwitchPasswordError] = useState('');
+  const [isSwitchingVerifying, setIsSwitchingVerifying] = useState(false);
+  const [showSwitchPasswordEye, setShowSwitchPasswordEye] = useState(false);
+
+  const requestSwitchApp = (app: AppType) => {
+    if (app === currentApp) return;
+    setSwitchTargetApp(app);
+    setShowSwitchConfirm(true);
+  };
+
+  const handleConfirmSwitch = () => {
+    setShowSwitchConfirm(false);
+    setSwitchPasswordInput('');
+    setSwitchPasswordError('');
+    setShowSwitchPasswordPrompt(true);
+  };
+
+  const handleCancelSwitch = () => {
+    setShowSwitchConfirm(false);
+    setShowSwitchPasswordPrompt(false);
+    setSwitchTargetApp(null);
+    setSwitchPasswordInput('');
+    setSwitchPasswordError('');
+  };
+
+  const handleVerifySwitchPassword = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!switchPasswordInput) {
+      setSwitchPasswordError('Silakan masukkan password akun Anda');
+      return;
+    }
+    if (!switchTargetApp) return;
+
+    setIsSwitchingVerifying(true);
+    setSwitchPasswordError('');
+
+    try {
+      const activeClient = db;
+      if (!activeClient) {
+        throw new Error('Koneksi database belum tersedia.');
+      }
+
+      // Check current user identifier (email or username)
+      const cleanUser = (currentUsername || '').trim().toLowerCase();
+      let resolvedEmail = cleanUser;
+
+      if (!cleanUser.includes('@')) {
+        const { data: resolved, error: rpcErr } = await activeClient.rpc('resolve_username_to_email', {
+          p_username: cleanUser
+        });
+        if (rpcErr) {
+          console.error("RPC resolve error during switch verification:", rpcErr);
+        }
+        if (resolved) {
+          resolvedEmail = resolved;
+        }
+      }
+
+      // Verify credentials with Supabase Auth
+      const { error: signInErr } = await activeClient.auth.signInWithPassword({
+        email: resolvedEmail,
+        password: switchPasswordInput,
+      });
+
+      if (signInErr) {
+        throw new Error('Password salah. Verifikasi gagal.');
+      }
+
+      // If password is correct, execute the switch!
+      const target = switchTargetApp;
+      handleCancelSwitch();
+      executeSwitchApp(target);
+    } catch (err: any) {
+      console.error("Password switch validation error:", err);
+      setSwitchPasswordError(err.message || 'Password yang Anda masukkan salah.');
+    } finally {
+      setIsSwitchingVerifying(false);
+    }
+  };
+
+  const executeSwitchApp = (app: AppType) => {
     setCurrentApp(app);
     localStorage.setItem('currentApp', app);
     window.location.replace(app === 'bendahara' ? '#/treasurer' : '#/attendance');
     setActiveTab('dashboard'); // Always go to dashboard when switching app
-    showToast(`Berpindah ke Aplikasi ${app.toUpperCase()}`, "success");
+    showToast(`Berhasil berpindah ke ${app === 'bendahara' ? 'Sistem Keuangan (Bendahara)' : 'Sistem Presensi (Absensi)'}`, "success");
+  };
+
+  const switchApp = (app: AppType) => {
+    requestSwitchApp(app);
   };
 
   // Synchronize hash routing with current app state
@@ -1747,6 +1842,186 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* MODAL 1: KONFIRMASI PINDAH APLIKASI (YAKIN MAU PINDAH?) */}
+      {showSwitchConfirm && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-950/65 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-sm rounded-xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-sky-600 to-sky-700 px-5 py-4 text-white flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="w-9 h-9 rounded-lg bg-white/15 flex items-center justify-center border border-white/20">
+                  <ShieldCheck className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold tracking-tight text-white uppercase">
+                    Konfirmasi Pindah Aplikasi
+                  </h3>
+                  <p className="text-[11px] text-sky-100 font-medium">
+                    Keamanan Akses Sistem Catet-In
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCancelSwitch}
+                className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
+                title="Batal"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Content Body */}
+            <div className="p-5 space-y-4 bg-slate-50/50">
+              <div className="bg-white border border-slate-200/80 rounded-lg p-4 text-center space-y-2 shadow-xs">
+                <div className="w-12 h-12 rounded-full bg-sky-50 text-sky-600 border border-sky-200 flex items-center justify-center mx-auto mb-1">
+                  {switchTargetApp === 'bendahara' ? <ReceiptText size={24} /> : <Fingerprint size={24} />}
+                </div>
+                <h4 className="text-sm font-bold text-slate-800">
+                  Yakin ingin berpindah ke {switchTargetApp === 'bendahara' ? 'Sistem Keuangan (Bendahara)' : 'Sistem Presensi (Absensi)'}?
+                </h4>
+                <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                  Untuk menjaga keamanan dan integritas data, Anda akan diminta memasukkan ulang password akun untuk verifikasi.
+                </p>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="p-4 bg-white border-t border-slate-200 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={handleCancelSwitch}
+                className="px-4 py-2.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-100 hover:text-slate-900 text-xs font-bold transition-all cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmSwitch}
+                className="px-5 py-2.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-sm hover:shadow transition-all flex items-center space-x-1.5 cursor-pointer active:scale-98"
+              >
+                <span>Ya, Lanjutkan</span>
+                <ArrowRight size={14} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: VERIFIKASI PASSWORD PINDAH APLIKASI */}
+      {showSwitchPasswordPrompt && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-950/65 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-sm rounded-xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-sky-600 to-sky-700 px-5 py-4 text-white flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="w-9 h-9 rounded-lg bg-white/15 flex items-center justify-center border border-white/20">
+                  <KeyRound className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold tracking-tight text-white uppercase">
+                    Verifikasi Password
+                  </h3>
+                  <p className="text-[11px] text-sky-100 font-medium">
+                    Masukkan password akun Anda
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCancelSwitch}
+                disabled={isSwitchingVerifying}
+                className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
+                title="Batal"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={handleVerifySwitchPassword} className="flex flex-col">
+              <div className="p-5 space-y-4 bg-slate-50/50">
+                <div className="bg-white border border-slate-200/80 rounded-lg p-3 flex items-center space-x-2.5 shadow-xs">
+                  <div className="w-7 h-7 rounded-lg bg-sky-50 text-sky-700 font-bold text-xs flex items-center justify-center shrink-0 border border-sky-200">
+                    <User size={14} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Akun Pengguna</p>
+                    <p className="text-xs font-bold text-slate-800 truncate">{fullName} ({currentUsername})</p>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-700">
+                    Password Akun <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                      <Lock size={15} />
+                    </div>
+                    <input
+                      type={showSwitchPasswordEye ? 'text' : 'password'}
+                      value={switchPasswordInput}
+                      onChange={(e) => {
+                        setSwitchPasswordInput(e.target.value);
+                        if (switchPasswordError) setSwitchPasswordError('');
+                      }}
+                      placeholder="Ketik password untuk verifikasi..."
+                      autoFocus
+                      disabled={isSwitchingVerifying}
+                      className="w-full pl-9 pr-10 py-2.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 font-medium text-slate-800"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowSwitchPasswordEye(!showSwitchPasswordEye)}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 transition-colors"
+                      tabIndex={-1}
+                    >
+                      {showSwitchPasswordEye ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                  </div>
+                  {switchPasswordError && (
+                    <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 flex items-center space-x-2 text-rose-600 text-[11px] font-semibold animate-in fade-in">
+                      <AlertTriangle size={14} className="shrink-0" />
+                      <span>{switchPasswordError}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 bg-white border-t border-slate-200 flex items-center justify-between gap-2.5">
+                <button
+                  type="button"
+                  onClick={handleCancelSwitch}
+                  disabled={isSwitchingVerifying}
+                  className="px-4 py-2.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-100 hover:text-slate-900 text-xs font-bold transition-all cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSwitchingVerifying || !switchPasswordInput}
+                  className="flex-1 px-5 py-2.5 rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm hover:shadow transition-all flex items-center justify-center space-x-2 cursor-pointer active:scale-98"
+                >
+                  {isSwitchingVerifying ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" />
+                      <span>Memverifikasi...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Verifikasi & Masuk</span>
+                      <ArrowRight size={14} />
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {selectedDeleteAudit && (
         <div className="fixed inset-0 z-[25] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4 animate-backdrop">
            <div className="bg-white w-full max-w-[310px] max-h-[75vh] rounded-[2rem] shadow-2xl overflow-hidden animate-dialog-bounce border border-white mx-auto flex flex-col">
@@ -1959,7 +2234,7 @@ const App: React.FC = () => {
         </button>
         <div className="flex flex-col transition-all duration-500 ease-in-out px-4 items-center py-8 relative z-10">
           <div className={`bg-transparent flex items-center justify-center transition-all duration-500 overflow-hidden ${sidebarCollapsed ? 'w-11 h-11' : 'w-16 h-16'}`}>
-            <img src="/icon-192.png" alt="Logo" className="w-full h-full object-contain" />
+            <img src="/catet-in-light.svg" alt="Catet-In Logo" className="w-full h-full object-contain drop-shadow-md hover:scale-105 transition-transform" />
           </div>
           <div 
             style={{
@@ -2062,7 +2337,7 @@ const App: React.FC = () => {
         <div className="md:hidden flex items-center justify-between px-4 py-2 bg-white border-b border-slate-100 z-30 shadow-sm h-[50px]">
           <div className="flex items-center space-x-2.5 min-w-0">
             <div className="w-8 h-8 bg-transparent flex items-center justify-center overflow-hidden shrink-0">
-              <img src="/icon-192.png" alt="Logo" className="w-full h-full object-contain" />
+              <img src="/catet-in-dark.svg" alt="Catet-In Logo" className="w-full h-full object-contain" />
             </div>
             <div className="flex flex-col min-w-0">
               <span className="font-black text-[11px] uppercase text-slate-800 truncate max-w-[150px] leading-tight">{instansi}</span>
@@ -2115,7 +2390,7 @@ const App: React.FC = () => {
           ) : (
             <>
               <TabView id="dashboard" activeTab={activeTab}><DashboardAbsensi logs={scopedLogs} isLoading={isAbsensiLoading} username={fullName} summaries={absensiSummaries} ages={scopedAges} daerahs={scopedDaerahs} desas={scopedDesas} kelompoks={scopedKelompoks} events={absensiEvents} /></TabView>
-              <TabView id="absensi_form" activeTab={activeTab}><AttendanceForm members={scopedMembers} logs={scopedLogs} logUrl={absensiLogUrl} username={fullName} notify={showToast} onSuccess={() => refreshAllAbsensi(true)} events={absensiEvents} ages={scopedAges} onLogsUpdated={handleMergeLogs} /></TabView>
+              <TabView id="absensi_form" activeTab={activeTab}><AttendanceForm members={scopedMembers} logs={scopedLogs} logUrl={absensiLogUrl} username={fullName} notify={showToast} onSuccess={() => refreshAllAbsensi(true)} events={absensiEvents} ages={scopedAges} onLogsUpdated={handleMergeLogs} isActive={activeTab === 'absensi_form'} /></TabView>
               <TabView id="absensi_members" activeTab={activeTab}><MemberManagement daerahs={scopedDaerahs} desas={scopedDesas} kelompoks={scopedKelompoks} ages={scopedAges} members={scopedMembers} setMembers={setAbsensiMembers} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} families={absensiFamilies} relationships={absensiRelationships} /></TabView>
               <TabView id="absensi_groups" activeTab={activeTab}><GroupManagement daerahs={scopedDaerahs} setDaerahs={setAbsensiDaerahs} desas={scopedDesas} setDesas={setAbsensiDesas} kelompoks={scopedKelompoks} setKelompoks={setAbsensiKelompoks} ages={scopedAges} setAges={setAbsensiAges} events={absensiEvents} setEvents={setAbsensiEvents} families={absensiFamilies} setFamilies={setAbsensiFamilies} relationships={absensiRelationships} setRelationships={setAbsensiRelationships} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} /></TabView>
               <TabView id="absensi_history" activeTab={activeTab}><AttendanceHistory logs={scopedLogs} isLoading={isAbsensiLoading} logUrl={absensiLogUrl} onRefresh={() => refreshAllAbsensi(true)} onFetchMoreLogs={fetchMoreAbsensiLogs} notify={showToast} events={absensiEvents} /></TabView>

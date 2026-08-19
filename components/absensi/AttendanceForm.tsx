@@ -35,6 +35,7 @@ interface AttendanceFormProps {
   events?: EventData[];
   ages?: AgeCategoryData[];
   onLogsUpdated?: (newLogs: AttendanceLog[]) => void;
+  isActive?: boolean;
 }
 
 const getDdmmyy = (dateStr: string): string => {
@@ -57,7 +58,8 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
   onSuccess,
   events = [],
   ages = [],
-  onLogsUpdated
+  onLogsUpdated,
+  isActive = true
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterKelompok, setFilterKelompok] = useState('ALL');
@@ -151,16 +153,33 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
     setIsScanningActive(false);
   };
 
-  // Handle browser tab switching (stop scanning if tab is hidden to prevent focus issues)
+  // Stop standby scanning if in-app tab changes or component becomes inactive
   useEffect(() => {
+    if (!isActive) {
+      setIsScanningActive(false);
+    }
+  }, [isActive]);
+
+  // Handle browser tab switching, window blur, and page visibility changes (stop standby scanning automatically)
+  useEffect(() => {
+    const handleStopScanning = () => {
+      setIsScanningActive(false);
+    };
+
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        setIsScanningActive(false);
+      if (document.hidden || document.visibilityState !== 'visible') {
+        handleStopScanning();
       }
     };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleStopScanning);
+    window.addEventListener('pagehide', handleStopScanning);
+
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleStopScanning);
+      window.removeEventListener('pagehide', handleStopScanning);
     };
   }, []);
 
@@ -381,6 +400,29 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
     }
 
     const memberId = String(member.id).trim().toUpperCase();
+
+    // Check if the current event has target labels and whether this member is targeted
+    const currentEvent = (events || []).find(e => e.id === currentEventId);
+    if (currentEvent && currentEvent.target_labels && currentEvent.target_labels.length > 0) {
+      const isTargetMember = (member.labels || []).some(lbl => currentEvent.target_labels?.includes(lbl));
+      if (!isTargetMember) {
+        const notTargetMsg = `Absensi Ditolak: ${member.nama_lengkap} bukan peserta wajib kegiatan "${currentEvent.nama_kegiatan}"!`;
+        notify(notTargetMsg, "error");
+        setRecentScans(prev => [
+          {
+            id: memberId,
+            memberName: member.nama_lengkap,
+            timestamp: new Date().toLocaleTimeString('id-ID'),
+            status: 'error',
+            message: `Ditolak: Bukan peserta wajib kegiatan "${currentEvent.nama_kegiatan}"`,
+            memberDetails: `${member.desa_name} / ${member.kelompok_name}`
+          },
+          ...prev
+        ]);
+        return;
+      }
+    }
+
     const isDuplicateInDB = recordedMemberIds.has(memberId);
     const isDuplicateLocally = localScannedIds.has(memberId);
 
@@ -743,7 +785,14 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
     return events.map(evt => ({ value: evt.id, label: evt.nama_kegiatan.toUpperCase() }));
   }, [events]);
 
+  const isEventHasTargetLabels = useMemo(() => {
+    return Boolean(selectedEvent && selectedEvent.target_labels && selectedEvent.target_labels.length > 0);
+  }, [selectedEvent]);
+
+  const isNonTargetViewOnly = isEventHasTargetLabels && !onlyShowTargetLabels;
+
   const setStatus = (memberId: string, status: 'Hadir' | 'Izin' | 'Sakit' | 'Alpa') => {
+    if (isNonTargetViewOnly) return;
     setBatchStatuses(prev => ({
       ...prev,
       [memberId]: prev[memberId] === status ? '' : status
@@ -759,6 +808,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
   };
 
   const setAllStatus = (status: 'Hadir' | 'Alpa') => {
+    if (isNonTargetViewOnly) return;
     const newStatuses = { ...batchStatuses };
     notRecordedMembers.forEach(m => {
       newStatuses[m.id] = status;
@@ -772,6 +822,10 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
   };
 
   const submitBatchAttendance = async () => {
+    if (isNonTargetViewOnly) {
+      notify("Anggota tidak wajib hadir tidak dapat diabsenkan untuk kegiatan ini", "error");
+      return;
+    }
     const selectedMembers = notRecordedMembers.filter(m => batchStatuses[m.id]);
     
     if (selectedMembers.length === 0) {
@@ -1098,7 +1152,12 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
+              onClick={() => {
+                if (selectedDate && selectedEventId) {
+                  setShowInitialFilterModal(false);
+                }
+              }}
+              className={`absolute inset-0 bg-slate-900/60 backdrop-blur-md ${selectedDate && selectedEventId ? 'cursor-pointer' : ''}`}
             />
             
             {/* Modal Body */}
@@ -1116,10 +1175,20 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                     <SlidersHorizontal size={16} />
                   </div>
                   <div>
-                    <h3 className="text-sm font-black text-slate-805 uppercase tracking-wider leading-none">Filter Absensi</h3>
-                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tight mt-1">Konfigurasi Parameter & Mode</p>
+                    <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider leading-none">Filter & Mode Absensi</h3>
+                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tight mt-1">Konfigurasi Parameter Sesi & Mode</p>
                   </div>
                 </div>
+                {selectedDate && selectedEventId && (
+                  <button
+                    type="button"
+                    onClick={() => setShowInitialFilterModal(false)}
+                    className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors cursor-pointer"
+                    title="Tutup Modal"
+                  >
+                    <X size={16} />
+                  </button>
+                )}
               </div>
 
               {/* Form Content */}
@@ -1263,17 +1332,14 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
         {/* TOP SECTION: Ultra Compact Header with Live Date selection */}
         <div className="sticky top-0 z-30 bg-[#F8FAFC] pb-1.5 md:pb-3">
           <div className="flex flex-row items-center justify-between bg-white p-2 md:p-4 rounded-xl md:rounded-2xl border border-slate-100 shadow-sm gap-2">
-            <div className="flex items-center gap-1.5 md:gap-2.5">
+            <div className="flex items-center gap-1.5 md:gap-2.5 min-w-0">
               <div className="bg-blue-600 p-1 md:p-1.5 rounded-lg text-white shadow-md shadow-blue-200 shrink-0">
                 <UserCheck size={14} className="md:w-[18px] md:h-[18px]" />
               </div>
-              <div>
-                <h1 className="text-xs md:text-base font-black text-slate-900 uppercase tracking-tight leading-none">Absensi Kelas</h1>
-                <span className="text-[7px] md:text-[9px] font-bold text-slate-400 uppercase tracking-widest block mt-0.5 md:mt-1">Sesi Kehadiran</span>
-              </div>
+              <h1 className="text-xs md:text-base font-black text-slate-900 uppercase tracking-tight leading-none truncate">Absensi</h1>
             </div>
 
-            <div className="flex items-center gap-1.5 md:gap-2">
+            <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
               <div className="relative">
                 <Calendar className={`absolute left-2.5 top-1/2 -translate-y-1/2 size-2.5 md:size-3 ${!selectedDate ? 'text-amber-500 animate-pulse' : 'text-blue-600'}`} />
                 <input 
@@ -1288,8 +1354,8 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
               </div>
               <button 
                 onClick={() => setShowInitialFilterModal(true)}
-                className="p-1 md:p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-500 hover:text-blue-600 hover:border-blue-200 transition-all active:scale-95 text-[10px] font-black flex items-center gap-1 shrink-0"
-                title="Sesuaikan Filter"
+                className="p-1 md:p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-600 hover:text-blue-600 hover:border-blue-200 transition-all active:scale-95 text-[10px] font-black flex items-center gap-1 shrink-0 cursor-pointer"
+                title="Buka Filter & Ganti Mode"
               >
                 <SlidersHorizontal className="size-3 text-slate-500" />
                 <span className="hidden sm:inline uppercase tracking-wider text-[8px]">Filter</span>
@@ -1297,56 +1363,13 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
               <button 
                 onClick={() => onSuccess()}
                 disabled={isSubmitting}
-                className="p-1 md:p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-400 hover:text-blue-600 hover:border-blue-200 transition-all active:scale-95 disabled:opacity-50"
+                className="p-1 md:p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-400 hover:text-blue-600 hover:border-blue-200 transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
                 title="Refresh Data"
               >
                 <RefreshCw className={`${isSubmitting ? "animate-spin" : ""} md:w-[14px] md:h-[14px]`} size={11} />
               </button>
             </div>
           </div>
-        </div>
-        {/* Toggle Mode Tab */}
-        <div className="grid grid-cols-2 bg-slate-100 p-1 md:p-1.5 rounded-xl md:rounded-2xl border border-slate-200/55 shadow-xs shrink-0 select-none">
-          <button
-            type="button"
-            onClick={() => changeAttendanceMode('manual')}
-            className="relative py-2 px-4 rounded-lg md:rounded-xl text-[10px] md:text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer text-slate-500 hover:text-slate-800 transition-colors duration-200"
-          >
-            {attendanceMode === 'manual' && (
-              <motion.div
-                layoutId="mainAttendanceModePill"
-                className="absolute inset-0 bg-white rounded-lg md:rounded-xl shadow-xs"
-                transition={{ type: "spring", stiffness: 380, damping: 30 }}
-              />
-            )}
-            <span className={`relative z-10 flex items-center justify-center gap-2 ${attendanceMode === 'manual' ? 'text-blue-600' : 'text-slate-500'}`}>
-              <UserCheck size={14} />
-              <span>MANUAL</span>
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => changeAttendanceMode('scan')}
-            className="relative py-2 px-4 rounded-lg md:rounded-xl text-[10px] md:text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer text-slate-500 hover:text-slate-800 transition-colors duration-200"
-          >
-            {attendanceMode === 'scan' && (
-              <motion.div
-                layoutId="mainAttendanceModePill"
-                className="absolute inset-0 bg-white rounded-lg md:rounded-xl shadow-xs"
-                transition={{ type: "spring", stiffness: 380, damping: 30 }}
-              />
-            )}
-            <span className={`relative z-10 flex items-center justify-center gap-2 ${attendanceMode === 'scan' ? 'text-blue-600' : 'text-slate-500'}`}>
-              <svg className="size-3.5 md:size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 5H5V19H3V5Z" fill="currentColor"/>
-                <path d="M7 5H8V19H7V5Z" fill="currentColor"/>
-                <path d="M11 5H13V19H11V5Z" fill="currentColor"/>
-                <path d="M16 5H17V19H16V5Z" fill="currentColor"/>
-                <path d="M20 5H21V19H20V5Z" fill="currentColor"/>
-              </svg>
-              <span>SCAN</span>
-            </span>
-          </button>
         </div>
 
         {attendanceMode === 'manual' ? (
@@ -1438,57 +1461,121 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                         />
                       </div>
 
-                      <div className="col-span-2 md:col-span-1 space-y-1 min-w-0">
-                        <span className="text-[7px] md:text-[8px] font-black uppercase text-slate-400 block tracking-wider leading-none">Gender</span>
-                        <div className="grid grid-cols-3 bg-slate-100 p-0.5 rounded-lg border border-slate-200/50 shadow-xs select-none">
-                          <button
-                            type="button"
-                            onClick={() => { setFilterGender('ALL'); clearBatch(); }}
-                            className="relative py-1.5 px-2 rounded-md text-[8px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-500 hover:text-slate-850 transition-colors duration-200"
-                          >
-                            {filterGender === 'ALL' && (
-                              <motion.div
-                                layoutId="inlineGenderFilterPill"
-                                className="absolute inset-0 bg-white rounded-md shadow-xs"
-                                transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                              />
-                            )}
-                            <span className={`relative z-10 ${filterGender === 'ALL' ? 'text-blue-600' : 'text-slate-500'}`}>
-                              Semua
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => { setFilterGender('Laki-laki'); clearBatch(); }}
-                            className="relative py-1.5 px-2 rounded-md text-[8px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-500 hover:text-slate-850 transition-colors duration-200"
-                          >
-                            {filterGender === 'Laki-laki' && (
-                              <motion.div
-                                layoutId="inlineGenderFilterPill"
-                                className="absolute inset-0 bg-white rounded-md shadow-xs"
-                                transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                              />
-                            )}
-                            <span className={`relative z-10 ${filterGender === 'Laki-laki' ? 'text-blue-600' : 'text-slate-500'}`}>
-                              Laki-laki
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => { setFilterGender('Perempuan'); clearBatch(); }}
-                            className="relative py-1.5 px-2 rounded-md text-[8px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-500 hover:text-slate-850 transition-colors duration-200"
-                          >
-                            {filterGender === 'Perempuan' && (
-                              <motion.div
-                                layoutId="inlineGenderFilterPill"
-                                className="absolute inset-0 bg-white rounded-md shadow-xs"
-                                transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                              />
-                            )}
-                            <span className={`relative z-10 ${filterGender === 'Perempuan' ? 'text-blue-600' : 'text-slate-500'}`}>
-                              Perempuan
-                            </span>
-                          </button>
+                      {/* 5. GENDER & WAJIB TOGGLES (Side-by-side on mobile, stacked vertically on desktop) */}
+                      <div className="col-span-2 md:col-span-1 grid grid-cols-2 md:grid-cols-1 gap-1.5 md:gap-1.5 min-w-0">
+                        {/* Gender Toggle */}
+                        <div className="space-y-0.5 md:space-y-1 min-w-0">
+                          <span className="text-[7px] md:text-[7.5px] font-black uppercase text-slate-400 block tracking-wider leading-none truncate">Gender</span>
+                          <div className="grid grid-cols-3 bg-slate-100 p-0.5 rounded-lg border border-slate-200/50 shadow-2xs select-none h-[26px] md:h-[22px] items-center">
+                            <button
+                              type="button"
+                              onClick={() => { setFilterGender('ALL'); clearBatch(); }}
+                              className="relative h-full px-0.5 rounded-md text-[7px] md:text-[7.5px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-500 hover:text-slate-800 transition-colors duration-200"
+                              title="Semua Gender"
+                            >
+                              {filterGender === 'ALL' && (
+                                <motion.div
+                                  layoutId="inlineGenderFilterPill"
+                                  className="absolute inset-0 bg-white rounded-md shadow-2xs"
+                                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                                />
+                              )}
+                              <span className={`relative z-10 font-black ${filterGender === 'ALL' ? 'text-blue-600' : 'text-slate-600'}`}>
+                                <span className="md:hidden text-[7px]">SEMUA</span>
+                                <span className="hidden md:inline text-[7.5px]">Semua</span>
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { setFilterGender('Laki-laki'); clearBatch(); }}
+                              className="relative h-full px-0.5 rounded-md text-[7px] md:text-[7.5px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-500 hover:text-slate-800 transition-colors duration-200"
+                              title="Laki-laki"
+                            >
+                              {filterGender === 'Laki-laki' && (
+                                <motion.div
+                                  layoutId="inlineGenderFilterPill"
+                                  className="absolute inset-0 bg-white rounded-md shadow-2xs"
+                                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                                />
+                              )}
+                              <span className={`relative z-10 font-black flex items-center justify-center ${filterGender === 'Laki-laki' ? 'text-blue-600' : 'text-slate-600'}`}>
+                                <span className="md:hidden text-[9px] leading-none font-bold">♂</span>
+                                <span className="hidden md:inline text-[7.5px]">Laki-laki</span>
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { setFilterGender('Perempuan'); clearBatch(); }}
+                              className="relative h-full px-0.5 rounded-md text-[7px] md:text-[7.5px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-500 hover:text-slate-800 transition-colors duration-200"
+                              title="Perempuan"
+                            >
+                              {filterGender === 'Perempuan' && (
+                                <motion.div
+                                  layoutId="inlineGenderFilterPill"
+                                  className="absolute inset-0 bg-white rounded-md shadow-2xs"
+                                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                                />
+                              )}
+                              <span className={`relative z-10 font-black flex items-center justify-center ${filterGender === 'Perempuan' ? 'text-blue-600' : 'text-slate-600'}`}>
+                                <span className="md:hidden text-[9px] leading-none font-bold">♀</span>
+                                <span className="hidden md:inline text-[7.5px]">Perempuan</span>
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Wajib / Tidak Wajib Toggle */}
+                        <div className="space-y-0.5 md:space-y-1 min-w-0">
+                          <span className="text-[7px] md:text-[7.5px] font-black uppercase text-slate-400 block tracking-wider leading-none truncate">Target Peserta</span>
+                          {selectedEvent && selectedEvent.target_labels && selectedEvent.target_labels.length > 0 ? (
+                            <div className="grid grid-cols-2 bg-slate-100 p-0.5 rounded-lg border border-slate-200/50 shadow-2xs select-none h-[26px] md:h-[22px] items-center">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOnlyShowTargetLabels(true);
+                                  clearBatch();
+                                }}
+                                className="relative h-full px-1 rounded-md text-[7px] md:text-[7.5px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-500 hover:text-slate-800 transition-colors duration-200"
+                                title="Hanya Anggota Wajib Hadir"
+                              >
+                                {onlyShowTargetLabels && (
+                                  <motion.div
+                                    layoutId="inlineWajibFilterPill"
+                                    className="absolute inset-0 bg-white rounded-md shadow-2xs"
+                                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                                  />
+                                )}
+                                <span className={`relative z-10 font-black truncate ${onlyShowTargetLabels ? 'text-blue-600' : 'text-slate-600'}`}>
+                                  Wajib
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOnlyShowTargetLabels(false);
+                                  clearBatch();
+                                }}
+                                className="relative h-full px-1 rounded-md text-[7px] md:text-[7.5px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-500 hover:text-slate-800 transition-colors duration-200"
+                                title="Anggota Tidak Wajib / Tambahan"
+                              >
+                                {!onlyShowTargetLabels && (
+                                  <motion.div
+                                    layoutId="inlineWajibFilterPill"
+                                    className="absolute inset-0 bg-white rounded-md shadow-2xs"
+                                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                                  />
+                                )}
+                                <span className={`relative z-10 font-black truncate ${!onlyShowTargetLabels ? 'text-blue-600' : 'text-slate-600'}`}>
+                                  <span className="md:hidden text-[7px]">T.WAJIB</span>
+                                  <span className="hidden md:inline text-[7.5px]">T. Wajib</span>
+                                </span>
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="h-[26px] md:h-[22px] bg-slate-50 border border-slate-200/60 rounded-lg px-2 flex items-center justify-center text-center">
+                              <span className="text-[7px] md:text-[7.5px] font-black text-slate-400 uppercase tracking-wider truncate">Umum / Semua</span>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1501,105 +1588,72 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
             {notRecordedMembers.length > 0 && (
               <div className="sticky top-[48px] md:top-[76px] z-20 bg-[#F8FAFC] py-1 md:py-2 select-none">
                 <div className="bg-slate-900 px-3 py-2 md:px-4 md:py-3 rounded-xl md:rounded-2xl shadow-sm text-white border border-slate-800">
-                  <div className="flex flex-row items-center justify-between gap-2 md:gap-4">
-                    
-                    {/* Left Side: Stats and Small progress line */}
-                    <div className="flex items-center gap-2 md:gap-4 flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5 bg-white/5 border border-white/10 px-1.5 py-0.5 rounded-lg shrink-0">
-                        <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-[#94A3B8]">Antrean:</span>
-                        <span className="text-[10px] md:text-[11px] font-black text-blue-400">{notRecordedMembers.length}</span>
+                  {isNonTargetViewOnly ? (
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-2 h-2 rounded-full bg-amber-400 shrink-0"></div>
+                        <span className="text-[8px] md:text-[9.5px] font-black uppercase tracking-wider text-amber-300 truncate">
+                          Mode Lihat Saja (Daftar Anggota Tidak Wajib)
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1 bg-white/5 border border-white/10 px-2 py-0.5 rounded-lg shrink-0">
+                        <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-[#94A3B8]">Total:</span>
+                        <span className="text-[9px] md:text-[10px] font-black text-amber-300">{notRecordedMembers.length}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-row items-center justify-between gap-2 md:gap-4">
+                      
+                      {/* Left Side: Stats and Small progress line */}
+                      <div className="flex items-center gap-2 md:gap-4 flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 bg-white/5 border border-white/10 px-1.5 py-0.5 rounded-lg shrink-0">
+                          <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-[#94A3B8]">Antrean:</span>
+                          <span className="text-[10px] md:text-[11px] font-black text-blue-400">{notRecordedMembers.length}</span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
+                          <div className="flex items-center gap-1">
+                            <div className="w-1 md:w-1.5 h-1 md:h-1.5 rounded-full bg-emerald-500"></div>
+                            <span className="text-[8px] md:text-[9px] font-bold text-slate-400">H: {stats.Hadir}</span>
+                          </div>
+                          <div className="flex items-center gap-1 pl-1.5 border-l border-white/10">
+                            <div className="w-1 md:w-1.5 h-1 md:h-1.5 rounded-full bg-blue-400"></div>
+                            <span className="text-[8px] md:text-[9px] font-bold text-slate-400">I+S: {stats.Izin + stats.Sakit}</span>
+                          </div>
+                          <div className="flex items-center gap-1 pl-1.5 border-l border-white/10">
+                            <div className="w-1 md:w-1.5 h-1 md:h-1.5 rounded-full bg-rose-500"></div>
+                            <span className="text-[8px] md:text-[9px] font-bold text-slate-400">A: {stats.Alpa}</span>
+                          </div>
+                        </div>
+
+                        {/* Progress Mini Line */}
+                        <div className="flex-1 min-w-[80px] hidden sm:flex items-center gap-2">
+                          <div className="h-1 bg-slate-800 rounded-full flex-1 overflow-hidden">
+                            <motion.div 
+                              initial={{ width: 0 }}
+                              animate={{ width: `${progressPercentage}%` }}
+                              className="h-full bg-blue-500 shadow-sm"
+                            />
+                          </div>
+                          <span className="text-[8px] md:text-[9px] font-black text-slate-500">{stats.Total}/{notRecordedMembers.length}</span>
+                        </div>
                       </div>
 
+                      {/* Right Side: Tombol Hadir Semua */}
                       <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
-                        <div className="flex items-center gap-1">
-                          <div className="w-1 md:w-1.5 h-1 md:h-1.5 rounded-full bg-emerald-500"></div>
-                          <span className="text-[8px] md:text-[9px] font-bold text-slate-400">H: {stats.Hadir}</span>
-                        </div>
-                        <div className="flex items-center gap-1 pl-1.5 border-l border-white/10">
-                          <div className="w-1 md:w-1.5 h-1 md:h-1.5 rounded-full bg-blue-400"></div>
-                          <span className="text-[8px] md:text-[9px] font-bold text-slate-400">I+S: {stats.Izin + stats.Sakit}</span>
-                        </div>
-                        <div className="flex items-center gap-1 pl-1.5 border-l border-white/10">
-                          <div className="w-1 md:w-1.5 h-1 md:h-1.5 rounded-full bg-rose-500"></div>
-                          <span className="text-[8px] md:text-[9px] font-bold text-slate-400">A: {stats.Alpa}</span>
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setAllStatus('Hadir')}
+                          className="py-1 px-2.5 md:py-1.5 md:px-3.5 rounded-lg text-[8px] md:text-[9px] font-black uppercase tracking-wider bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white shadow-xs transition-all flex items-center gap-1.5 cursor-pointer shrink-0 border border-emerald-500/50"
+                          title="Tandai Hadir Semua Anggota Dalam Daftar"
+                        >
+                          <UserCheck size={12} className="shrink-0" />
+                          <span>Hadir Semua</span>
+                        </button>
                       </div>
 
-                      {/* Progress Mini Line */}
-                      <div className="flex-1 min-w-[80px] hidden sm:flex items-center gap-2">
-                        <div className="h-1 bg-slate-800 rounded-full flex-1 overflow-hidden">
-                          <motion.div 
-                            initial={{ width: 0 }}
-                            animate={{ width: `${progressPercentage}%` }}
-                            className="h-full bg-blue-500 shadow-sm"
-                          />
-                        </div>
-                        <span className="text-[8px] md:text-[9px] font-black text-slate-500">{stats.Total}/{notRecordedMembers.length}</span>
-                      </div>
                     </div>
-
-                    {/* Right Side: Wajib / Tidak Wajib Toggle Switch & Hadir Semua Button */}
-                    <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
-                      {selectedEvent && selectedEvent.target_labels && selectedEvent.target_labels.length > 0 ? (
-                        <div className="flex items-center bg-slate-800 p-0.5 rounded-lg border border-slate-700/80 select-none shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setOnlyShowTargetLabels(true);
-                              clearBatch();
-                            }}
-                            className="relative py-1 px-2.5 rounded-md text-[8px] md:text-[9px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-400 hover:text-slate-200 transition-colors duration-200"
-                          >
-                            {onlyShowTargetLabels && (
-                              <motion.div
-                                layoutId="wajibTogglePill"
-                                className="absolute inset-0 bg-blue-600 rounded-md shadow-xs"
-                                transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                              />
-                            )}
-                            <span className={`relative z-10 ${onlyShowTargetLabels ? 'text-white' : 'text-slate-400'}`}>
-                              Wajib
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setOnlyShowTargetLabels(false);
-                              clearBatch();
-                            }}
-                            className="relative py-1 px-2.5 rounded-md text-[8px] md:text-[9px] font-black uppercase tracking-wider flex items-center justify-center cursor-pointer text-slate-400 hover:text-slate-200 transition-colors duration-200"
-                          >
-                            {!onlyShowTargetLabels && (
-                              <motion.div
-                                layoutId="wajibTogglePill"
-                                className="absolute inset-0 bg-blue-600 rounded-md shadow-xs"
-                                transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                              />
-                            )}
-                            <span className={`relative z-10 ${!onlyShowTargetLabels ? 'text-white' : 'text-slate-400'}`}>
-                              Tidak Wajib
-                            </span>
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="text-[8px] md:text-[9px] font-extrabold text-slate-500 uppercase tracking-widest px-2.5 py-1 bg-slate-800/50 rounded-lg">
-                          Umum / Semua
-                        </div>
-                      )}
-
-                      {/* Tombol Hadir Semua */}
-                      <button
-                        type="button"
-                        onClick={() => setAllStatus('Hadir')}
-                        className="py-1 px-2.5 rounded-lg text-[8px] md:text-[9px] font-black uppercase tracking-wider bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white shadow-xs transition-all flex items-center gap-1 cursor-pointer shrink-0 border border-emerald-500/50"
-                        title="Tandai Hadir Semua Anggota Dalam Daftar"
-                      >
-                        <UserCheck size={12} className="shrink-0" />
-                        <span>Hadir Semua</span>
-                      </button>
-                    </div>
-
-                  </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1646,64 +1700,72 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
 
                           {/* Name & Quick Metadata Badges */}
                           <div className="min-w-0 pr-1 flex-1">
-                            <div className="flex flex-wrap items-center gap-x-1.5 sm:gap-x-2 gap-y-0.5">
-                              <h4 className={`text-[10px] sm:text-xs font-black uppercase tracking-tight truncate leading-none max-w-[110px] xs:max-w-[140px] sm:max-w-none transition-all duration-300
+                            <div className="flex flex-wrap items-center gap-x-1.5 sm:gap-x-2 gap-y-0.5 min-w-0">
+                              <h4 className={`text-[10px] sm:text-xs font-black uppercase tracking-tight truncate leading-tight w-full sm:w-auto transition-all duration-300
                                 ${shakingMemberId === member.id ? 'animate-custom-shake text-rose-500 scale-102 font-black' : 'text-slate-800'}`}>
                                 {member.nama_lengkap}
                               </h4>
                               
                               {/* Unit / Group badges inline for absolute maximum high-density space saving */}
-                              <span className="hidden sm:inline-block text-[8px] font-extrabold px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded uppercase">
+                              <span className="hidden sm:inline-block text-[8px] font-extrabold px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded uppercase shrink-0">
                                 {member.kelompok_name}
                               </span>
-                              <span className="hidden sm:inline-block text-[8px] font-extrabold px-1.5 py-0.5 bg-blue-50 text-blue-500 rounded uppercase">
+                              <span className="hidden sm:inline-block text-[8px] font-extrabold px-1.5 py-0.5 bg-blue-50 text-blue-500 rounded uppercase shrink-0">
                                 {member.age_category_name || 'UMUM'}
                               </span>
                             </div>
 
                             {/* Mobile Metadata representation under name */}
-                            <div className="flex sm:hidden items-center gap-1 mt-0.5 text-[7.5px] leading-none">
-                              <span className="font-bold text-slate-400 uppercase truncate max-w-[45px]">
+                            <div className="flex sm:hidden items-center gap-1 mt-0.5 text-[7.5px] leading-none min-w-0">
+                              <span className="font-bold text-slate-400 uppercase truncate">
                                 {member.kelompok_name}
                               </span>
-                              <span className="text-slate-300">•</span>
-                              <span className="font-bold text-slate-400 uppercase truncate max-w-[45px]">
+                              <span className="text-slate-300 shrink-0">•</span>
+                              <span className="font-bold text-slate-400 uppercase truncate">
                                 {member.age_category_name || 'UMUM'}
                               </span>
                             </div>
                           </div>
                         </div>
 
-                        {/* Right side: High Tac-tile compact Button Group beside the name */}
-                        <div className="grid grid-cols-4 gap-0.5 w-[92px] sm:flex sm:items-center sm:gap-1.5 sm:w-auto shrink-0">
-                          {[
-                            { key: 'Hadir', disp: 'H', label: 'Hadir', col: 'emerald' },
-                            { key: 'Izin', disp: 'I', label: 'Izin', col: 'blue' },
-                            { key: 'Sakit', disp: 'S', label: 'Sakit', col: 'amber' },
-                            { key: 'Alpa', disp: 'A', label: 'Alpa', col: 'rose' }
-                          ].map((item) => {
-                            const isBtnActive = currentStatus === item.key;
-                            
-                            return (
-                              <button
-                                type="button"
-                                key={item.key}
-                                onClick={() => setStatus(member.id, item.key as any)}
-                                className={`h-[25px] sm:w-11 sm:h-7 rounded-md sm:rounded-lg text-[8px] sm:text-[9px] font-black uppercase transition-all duration-150 relative border flex items-center justify-center
-                                  ${isBtnActive 
-                                    ? (item.key === 'Hadir' ? 'bg-emerald-500 border-emerald-500 text-white shadow-xs' :
-                                       item.key === 'Izin' ? 'bg-blue-600 border-blue-600 text-white shadow-xs' :
-                                       item.key === 'Sakit' ? 'bg-amber-500 border-amber-500 text-white shadow-xs' :
-                                       'bg-rose-500 border-rose-500 text-white shadow-xs') 
-                                    : 'bg-slate-50 border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 hover:bg-slate-100/60'}`}
-                                title={item.label}
-                              >
-                                <span className="hidden sm:inline">{item.label}</span>
-                                <span className="inline sm:hidden">{item.disp}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
+                        {/* Right side: High Tac-tile compact Button Group beside the name or Non-target view badge */}
+                        {isNonTargetViewOnly ? (
+                          <div className="shrink-0">
+                            <span className="px-2 py-1 bg-slate-100 border border-slate-200/80 rounded-lg text-[7.5px] sm:text-[8px] font-black uppercase tracking-wider text-slate-400 select-none">
+                              Bukan Target
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-4 gap-0.5 w-[92px] sm:flex sm:items-center sm:gap-1.5 sm:w-auto shrink-0">
+                            {[
+                              { key: 'Hadir', disp: 'H', label: 'Hadir', col: 'emerald' },
+                              { key: 'Izin', disp: 'I', label: 'Izin', col: 'blue' },
+                              { key: 'Sakit', disp: 'S', label: 'Sakit', col: 'amber' },
+                              { key: 'Alpa', disp: 'A', label: 'Alpa', col: 'rose' }
+                            ].map((item) => {
+                              const isBtnActive = currentStatus === item.key;
+                              
+                              return (
+                                <button
+                                  type="button"
+                                  key={item.key}
+                                  onClick={() => setStatus(member.id, item.key as any)}
+                                  className={`h-[25px] sm:w-11 sm:h-7 rounded-md sm:rounded-lg text-[8px] sm:text-[9px] font-black uppercase transition-all duration-150 relative border flex items-center justify-center
+                                    ${isBtnActive 
+                                      ? (item.key === 'Hadir' ? 'bg-emerald-500 border-emerald-500 text-white shadow-xs' :
+                                         item.key === 'Izin' ? 'bg-blue-600 border-blue-600 text-white shadow-xs' :
+                                         item.key === 'Sakit' ? 'bg-amber-500 border-amber-500 text-white shadow-xs' :
+                                         'bg-rose-500 border-rose-500 text-white shadow-xs') 
+                                      : 'bg-slate-50 border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 hover:bg-slate-100/60'}`}
+                                  title={item.label}
+                                >
+                                  <span className="hidden sm:inline">{item.label}</span>
+                                  <span className="inline sm:hidden">{item.disp}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
 
                       {/* Inline Reason Input for Izin/Sakit (unfolds gracefully right beneath the row) */}
@@ -1769,7 +1831,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
             </div>
 
             {/* SUBMIT BUTTON BETWEEN QUEUE LIST AND HISTORIC LIST */}
-            {notRecordedMembers.length > 0 && (
+            {notRecordedMembers.length > 0 && !isNonTargetViewOnly && (
               <div className="flex justify-end pt-1 md:pt-2">
                 <button 
                   type="button"
@@ -1794,7 +1856,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
               <div className="space-y-3 pt-2">
                 <div className="flex items-center gap-3">
                   <div className="h-px flex-1 bg-slate-200/50"></div>
-                  <span className="text-[8px] font-black text-slate-400 uppercase tracking-[0.3em] whitespace-nowrap">Anggota Sudah Diabsen ({recordedMembers.length})</span>
+                  <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Anggota Sudah Diabsen ({recordedMembers.length})</span>
                   <div className="h-px flex-1 bg-slate-200/50"></div>
                 </div>
 
@@ -1817,7 +1879,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
             )}
 
             {/* Selesai Absen Button at the very bottom (Desktop & Mobile) */}
-            {notRecordedMembers.length > 0 && selectedEvent && selectedEvent.target_labels && selectedEvent.target_labels.length > 0 && (
+            {notRecordedMembers.length > 0 && selectedEvent && selectedEvent.target_labels && selectedEvent.target_labels.length > 0 && !isNonTargetViewOnly && (
               <div className="flex justify-end pt-3 pb-1">
                 <button 
                   type="button"
@@ -1926,7 +1988,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                     </svg>
                   </div>
 
-                  <div className="space-y-1 z-20">
+                  <div className="space-y-1.5 z-20">
                     <h3 className="text-xs font-black uppercase tracking-wider text-emerald-400">Sensor Standby Aktif</h3>
                     <p className="text-[9px] font-bold text-slate-300 uppercase tracking-tight max-w-[280px] leading-relaxed">
                       Sandingkan barcode atau tempelkan kartu RFID/NFC kapan saja. Nama anggota dan kehadiran akan otomatis langsung terdata.
@@ -1938,6 +2000,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                     <input
                       ref={barcodeInputRef}
                       type="text"
+                      inputMode="none"
                       value={barcodeInput}
                       onChange={(e) => handleBarcodeInputChange(e.target.value)}
                       autoComplete="off"
@@ -1945,7 +2008,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
                     <button type="submit" className="hidden">Submit</button>
                   </form>
 
-                  <div className="pt-2 z-20">
+                  <div className="pt-2 z-20 flex flex-wrap items-center justify-center gap-2">
                     <button 
                       type="button"
                       onClick={(e) => {

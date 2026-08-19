@@ -1,15 +1,27 @@
 import React, { useState, useEffect } from 'react';
-import { motion, useMotionValue, useTransform } from 'motion/react';
+import { motion, useMotionValue, useTransform, AnimatePresence } from 'motion/react';
 import { 
   Lock, User, Eye, EyeOff, Loader2, ArrowRight, XCircle, 
   RefreshCw, CheckCircle, Mail, Database, CheckSquare, Square,
-  Briefcase, X, Sparkles, AlertTriangle, ChevronDown
+  Briefcase, X, Sparkles, AlertTriangle, ChevronDown,
+  ReceiptText, Fingerprint
 } from 'lucide-react';
 import { db, centralClient } from '../../supabase';
 
 interface LoginProps {
-  onLoginSuccess: (data: any) => void;
+  onLoginSuccess: (data: any, selectedApp?: 'bendahara' | 'absensi') => void;
   onOpenSetup?: () => void;
+}
+
+interface AccessibleAppOption {
+  id: 'bendahara' | 'absensi';
+  title: string;
+  subtitle: string;
+  description: string;
+  badge: string;
+  icon: any;
+  gradient: string;
+  borderActive: string;
 }
 
 const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
@@ -32,6 +44,12 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
   // Social login coming soon states
   const [showSocialModal, setShowSocialModal] = useState(false);
   const [selectedSocialProvider, setSelectedSocialProvider] = useState('');
+
+  // App Selection Modal States
+  const [showAppChooser, setShowAppChooser] = useState(false);
+  const [resolvedUserData, setResolvedUserData] = useState<any>(null);
+  const [accessibleApps, setAccessibleApps] = useState<AccessibleAppOption[]>([]);
+  const [selectedAppId, setSelectedAppId] = useState<'bendahara' | 'absensi'>('bendahara');
 
   // Smooth mode switching helper to preserve visual layout stability
   const handleToggleMode = (isReg: boolean) => {
@@ -370,7 +388,55 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
         localStorage.removeItem('instansi_db_config');
       }
 
-      onLoginSuccess(resolvedUserDoc);
+      // Check if user is PortalMaster / Superadmin (direct to Portal Panel)
+      if (serverRole === 'PortalMaster' || serverRole === 'Superadmin' || serverRole === 'Super Admin') {
+        onLoginSuccess(resolvedUserDoc);
+        return;
+      }
+
+      // 6. Calculate accessible apps list based on user privileges
+      const appOptions: AccessibleAppOption[] = [];
+      const hasBendahara = webAccess.includes('bendahara') || webAccess.includes('keuangan');
+      const hasAbsensi = webAccess.includes('absensi') || webAccess.includes('presensi');
+
+      if (hasBendahara) {
+        appOptions.push({
+          id: 'bendahara',
+          title: 'Sistem Keuangan',
+          subtitle: 'Catet-In Treasurer',
+          description: 'Pencatatan kas, transaksi pemasukan & pengeluaran, audit log, dan laporan keuangan instansi.',
+          badge: 'Modul Kas & Laporan',
+          icon: ReceiptText,
+          gradient: 'from-sky-600 to-blue-700',
+          borderActive: 'border-sky-500 ring-2 ring-sky-400/30'
+        });
+      }
+
+      if (hasAbsensi) {
+        appOptions.push({
+          id: 'absensi',
+          title: 'Sistem Presensi',
+          subtitle: 'Catet-In Attendance',
+          description: 'Pencatatan kehadiran jamaah, manajemen data anggota, rekapitulasi presensi harian, dan scan NFC/RFID.',
+          badge: 'Modul Presensi & Anggota',
+          icon: Fingerprint,
+          gradient: 'from-emerald-600 to-teal-700',
+          borderActive: 'border-emerald-500 ring-2 ring-emerald-400/30'
+        });
+      }
+
+      // If user only has 1 app (or none specified): Direct Login instantly without popup!
+      if (appOptions.length <= 1) {
+        const targetApp = appOptions[0]?.id || 'bendahara';
+        onLoginSuccess(resolvedUserDoc, targetApp);
+      } else {
+        // If user has 2 or more apps: Show the modern Selection Modal
+        setResolvedUserData(resolvedUserDoc);
+        setAccessibleApps(appOptions);
+        setSelectedAppId(appOptions[0].id);
+        setShowAppChooser(true);
+        setIsLoading(false);
+      }
     } catch (err: any) {
       console.error("Login Error:", err);
       setLoginError(err.message || 'Gagal masuk ke sistem.');
@@ -378,10 +444,18 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
     }
   };
 
+  const handleSelectAndProceed = (appId: 'bendahara' | 'absensi') => {
+    if (!resolvedUserData) return;
+    setShowAppChooser(false);
+    onLoginSuccess(resolvedUserData, appId);
+  };
+
   const resetAllFlows = () => {
     setIsSelfReg(false);
     setIsPendingUser(false);
     setIsRegisteredCompleted(false);
+    setShowAppChooser(false);
+    setResolvedUserData(null);
     setLoginError('');
     setRegisterError('');
   };
@@ -905,7 +979,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
             <div className="w-1/2 h-full text-white flex flex-col justify-center items-center p-12 text-center relative select-none bg-transparent">
               <div className="relative z-10 space-y-5 flex flex-col items-center">
                 <div className="w-20 h-20 md:w-24 md:h-24 flex items-center justify-center">
-                  <img src="/icon-512.png" alt="Logo" className="w-full h-full object-contain" />
+                  <img src="/catet-in-light.svg" alt="Catet-In Logo" className="w-full h-full object-contain drop-shadow-md" />
                 </div>
                 <h1 className="text-3xl font-black tracking-tight leading-none uppercase">Sudah Ada Akun?</h1>
                 <p className="text-xs text-blue-100/80 tracking-wide leading-relaxed max-w-sm mt-2 font-medium">
@@ -926,7 +1000,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
             <div className="w-1/2 h-full text-white flex flex-col justify-center items-center p-12 text-center relative select-none bg-transparent">
               <div className="relative z-10 space-y-5 flex flex-col items-center">
                 <div className="w-20 h-20 md:w-24 md:h-24 flex items-center justify-center">
-                  <img src="/icon-512.png" alt="Logo" className="w-full h-full object-contain" />
+                  <img src="/catet-in-light.svg" alt="Catet-In Logo" className="w-full h-full object-contain drop-shadow-md" />
                 </div>
                 <h1 className="text-3xl font-black tracking-tight leading-none uppercase">Belum Terdaftar?</h1>
                 <p className="text-xs text-blue-100/80 tracking-wide leading-relaxed max-w-sm mt-2 font-medium">
@@ -1447,6 +1521,149 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
 
       </div>
 
+      {/* MODERN APP SELECTION MODAL (POP-UP PILIH APLIKASI) */}
+      <AnimatePresence>
+        {showAppChooser && (
+          <div className="fixed inset-0 z-[600] flex items-center justify-center p-3 sm:p-5 bg-slate-950/65 backdrop-blur-sm animate-in fade-in duration-200">
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0, y: 8 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.96, opacity: 0, y: 8 }}
+              transition={{ type: "spring", damping: 26, stiffness: 280 }}
+              className="w-full max-w-lg bg-white rounded-xl border border-slate-200 shadow-2xl overflow-hidden flex flex-col relative"
+            >
+              {/* Header Banner - Subtle Sky/Slate with minimal rounded corners */}
+              <div className="bg-gradient-to-r from-sky-600 to-sky-700 px-5 py-4 text-white flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <div className="w-9 h-9 rounded-lg bg-white/15 flex items-center justify-center border border-white/20">
+                    <Briefcase className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold tracking-tight text-white uppercase">
+                      Pilih Aplikasi
+                    </h3>
+                    <p className="text-[11px] text-sky-100 font-medium">
+                      Silakan tentukan modul kerja yang ingin Anda buka
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={resetAllFlows}
+                  className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
+                  title="Batalkan & Kembali"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              {/* Body Content */}
+              <div className="p-4 sm:p-6 space-y-4 bg-slate-50/50">
+                {/* User Info Capsule */}
+                <div className="bg-white border border-slate-200/80 rounded-lg p-3 flex items-center justify-between shadow-xs">
+                  <div className="flex items-center space-x-2.5 overflow-hidden">
+                    <div className="w-8 h-8 rounded-lg bg-sky-50 text-sky-700 font-black text-xs flex items-center justify-center shrink-0 border border-sky-200">
+                      {resolvedUserData?.full_name ? resolvedUserData.full_name.charAt(0).toUpperCase() : 'U'}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-slate-800 truncate">
+                        {resolvedUserData?.full_name || resolvedUserData?.username || 'Pengguna'}
+                      </p>
+                      <p className="text-[10px] text-slate-500 truncate font-medium">
+                        {resolvedUserData?.instansi || 'Instansi Terdaftar'} • <span className="font-semibold text-sky-700">{resolvedUserData?.role || 'Staff'}</span>
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded border border-emerald-200 shrink-0">
+                    Login Terverifikasi
+                  </span>
+                </div>
+
+                {/* List of Applications to Select */}
+                <div className="grid grid-cols-1 gap-3">
+                  {accessibleApps.map((app) => {
+                    const isSelected = selectedAppId === app.id;
+                    const IconComponent = app.icon;
+
+                    return (
+                      <div
+                        key={app.id}
+                        onClick={() => setSelectedAppId(app.id)}
+                        className={`group relative p-4 rounded-lg bg-white border transition-all cursor-pointer select-none text-left shadow-xs ${
+                          isSelected
+                            ? `${app.borderActive} bg-sky-50/20`
+                            : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/60'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start space-x-3.5">
+                            <div
+                              className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 text-white bg-gradient-to-br ${app.gradient} shadow-sm`}
+                            >
+                              <IconComponent className="w-5 h-5" />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="flex items-center space-x-2 flex-wrap">
+                                <h4 className="text-sm font-bold text-slate-900 tracking-tight">
+                                  {app.title}
+                                </h4>
+                                <span className={`text-[9px] font-bold px-2 py-0.5 rounded border ${
+                                  app.id === 'bendahara' 
+                                    ? 'bg-sky-50 text-sky-700 border-sky-200' 
+                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                }`}>
+                                  {app.badge}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-500 font-medium leading-relaxed">
+                                {app.description}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="pt-0.5 shrink-0">
+                            <div
+                              className={`w-5 h-5 rounded-full border flex items-center justify-center transition-all ${
+                                isSelected
+                                  ? 'border-sky-600 bg-sky-600 text-white ring-2 ring-sky-100'
+                                  : 'border-slate-300 bg-white'
+                              }`}
+                            >
+                              {isSelected && <div className="w-2 h-2 rounded-full bg-white" />}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Modal Footer Actions */}
+              <div className="p-4 sm:px-6 bg-white border-t border-slate-200 flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={resetAllFlows}
+                  className="px-4 py-2.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-100 hover:text-slate-900 text-xs font-bold transition-all cursor-pointer"
+                >
+                  Batal
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSelectAndProceed(selectedAppId)}
+                  className="flex-1 sm:flex-none sm:min-w-[190px] px-5 py-2.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-sm hover:shadow transition-all flex items-center justify-center space-x-2 cursor-pointer active:scale-98"
+                >
+                  <span>Masuk ke {accessibleApps.find(a => a.id === selectedAppId)?.title || 'Aplikasi'}</span>
+                  <ArrowRight size={14} />
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* COMING SOON SOCIAL LOGIN MODAL */}
       {showSocialModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md">
@@ -1455,20 +1672,20 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.9, opacity: 0 }}
             transition={{ type: "spring", duration: 0.4 }}
-            className="w-full max-w-sm bg-white rounded-3xl border border-slate-100 shadow-2xl p-6 relative overflow-hidden text-center"
+            className="w-full max-w-sm bg-white rounded-xl border border-slate-100 shadow-2xl p-6 relative overflow-hidden text-center"
           >
             <div className="absolute top-0 left-0 w-full h-1.5 bg-indigo-600"></div>
             
             <button 
               onClick={() => setShowSocialModal(false)}
-              className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+              className="absolute top-4 right-4 p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
               title="Tutup"
             >
               <X size={16} />
             </button>
 
             <div className="flex flex-col items-center mt-3">
-              <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-4">
+              <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center mb-4">
                 <Sparkles size={24} />
               </div>
               
@@ -1482,7 +1699,7 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess, onOpenSetup }) => {
 
               <button
                 onClick={() => setShowSocialModal(false)}
-                className="w-full bg-slate-950 hover:bg-slate-900 text-white py-3 rounded-full font-black text-[9px] uppercase tracking-[0.15em] transition-all cursor-pointer shadow-lg shadow-slate-900/15 active:scale-95"
+                className="w-full bg-slate-950 hover:bg-slate-900 text-white py-3 rounded-lg font-black text-[9px] uppercase tracking-[0.15em] transition-all cursor-pointer shadow-lg shadow-slate-900/15 active:scale-95"
               >
                 Dimengerti
               </button>
