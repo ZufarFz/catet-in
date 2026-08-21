@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   UserPlus,
   Search,
@@ -197,45 +197,43 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const daerahHeaderRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!searchBarRef.current || !containerRef.current) return;
-    
-    let rafId: number | null = null;
-    const updateDimensions = () => {
-      if (searchBarRef.current && containerRef.current) {
-        const sbHeight = searchBarRef.current.offsetHeight;
-        containerRef.current.style.setProperty('--search-bar-h', `${sbHeight}px`);
-        if (batchBannerRef.current) {
-          containerRef.current.style.setProperty('--batch-banner-h', `${batchBannerRef.current.offsetHeight}px`);
-        } else {
-          containerRef.current.style.setProperty('--batch-banner-h', '0px');
-        }
-        if (daerahHeaderRef.current) {
-          containerRef.current.style.setProperty('--daerah-h', `${daerahHeaderRef.current.offsetHeight}px`);
-        }
-      }
-    };
+  const updateDimensions = useCallback(() => {
+    if (!containerRef.current || !searchBarRef.current) return;
+    const sbHeight = searchBarRef.current.offsetHeight;
+    containerRef.current.style.setProperty('--search-bar-h', `${sbHeight}px`);
+    if (batchBannerRef.current) {
+      containerRef.current.style.setProperty('--batch-banner-h', `${batchBannerRef.current.offsetHeight}px`);
+    } else {
+      containerRef.current.style.setProperty('--batch-banner-h', '0px');
+    }
+    if (daerahHeaderRef.current) {
+      containerRef.current.style.setProperty('--daerah-h', `${daerahHeaderRef.current.offsetHeight}px`);
+    }
+  }, []);
 
+  useEffect(() => {
     updateDimensions();
 
+    // Gunakan ResizeObserver pada searchBarRef agar tinggi sticky langsung terupdate presisi tanpa jeda / gap
+    let observer: ResizeObserver | null = null;
+    if (searchBarRef.current) {
+      observer = new ResizeObserver(() => {
+        updateDimensions();
+      });
+      observer.observe(searchBarRef.current);
+    }
+
     const handleResize = () => {
-      if (rafId) cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(updateDimensions);
+      updateDimensions();
     };
 
-    const observer = new ResizeObserver(handleResize);
-    observer.observe(searchBarRef.current);
-    if (batchBannerRef.current) {
-      observer.observe(batchBannerRef.current);
-    }
     window.addEventListener("resize", handleResize);
 
     return () => {
-      if (rafId) cancelAnimationFrame(rafId);
-      observer.disconnect();
+      if (observer) observer.disconnect();
       window.removeEventListener("resize", handleResize);
     };
-  }, [batchManageLabel, showFilters]);
+  }, [batchManageLabel, updateDimensions]);
 
   const setDaerahHeaderRef = (el: HTMLDivElement | null) => {
     daerahHeaderRef.current = el;
@@ -514,10 +512,13 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
           const daerah = target.getAttribute("data-daerah");
           const desa = target.getAttribute("data-desa");
           if (daerah && desa) {
-            setActiveDesas((prev) => ({
-              ...prev,
-              [daerah]: desa,
-            }));
+            setActiveDesas((prev) => {
+              if (prev[daerah] === desa) return prev;
+              return {
+                ...prev,
+                [daerah]: desa,
+              };
+            });
           }
         }
       });
@@ -1765,69 +1766,79 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
       {batchManageLabel && (
         <div
           ref={batchBannerRef}
-          className="sticky top-0 z-[35] bg-sky-700 text-white px-3 md:px-6 py-2.5 shadow-lg border-b border-sky-800 transition-all"
+          className="sticky top-0 z-[35] bg-sky-700 text-white px-3 md:px-6 py-2 md:py-2.5 shadow-lg border-b border-sky-800 transition-all"
         >
-          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2 md:gap-2.5">
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="p-2 bg-white/20 rounded-xl shrink-0">
-                <Tag className="w-4 h-4 text-white" />
+              <div className="p-1.5 md:p-2 bg-white/20 rounded-xl shrink-0">
+                <Tag className="w-3.5 h-3.5 md:w-4 md:h-4 text-white" />
               </div>
               <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[9px] font-black uppercase tracking-wider text-sky-100">
-                    Mode Penugasan Massal:
+                <div className="flex items-center gap-1.5 md:gap-2 flex-wrap">
+                  <span className="text-[9px] md:text-[10px] font-black uppercase tracking-wider text-sky-100">
+                    Pilih Anggota Label:
                   </span>
                   <span className="px-2 py-0.5 bg-white text-sky-700 rounded-md font-black text-[10px] md:text-xs uppercase shadow-xs">
                     {batchManageLabel.name}
                   </span>
                 </div>
-                <p className="text-[9px] md:text-[10px] text-white/90 font-medium truncate mt-0.5">
-                  Centang anggota yang ingin dimasukkan ke label ini ({batchSelectedIds.size} dipilih dari {filteredMembers.length} tampil)
+                <p className="hidden sm:block text-[9px] md:text-[10px] text-white/90 font-medium truncate mt-0.5">
+                  Centang anggota yang ingin dimasukkan ke dalam label ini ({batchSelectedIds.size} dipilih dari {filteredMembers.length} tampil)
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-1.5 md:gap-2 shrink-0 flex-wrap justify-end">
-              <button
-                type="button"
-                onClick={handleSelectAllFiltered}
-                className="px-2 py-1 md:px-2.5 md:py-1.5 bg-white/15 hover:bg-white/25 text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-white/20 active:scale-95 cursor-pointer"
-              >
-                Pilih Semua ({filteredMembers.length})
-              </button>
-              <button
-                type="button"
-                onClick={handleClearAllSelected}
-                className="px-2 py-1 md:px-2.5 md:py-1.5 bg-white/15 hover:bg-white/25 text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-white/20 active:scale-95 cursor-pointer"
-              >
-                Kosongkan
-              </button>
-              <button
-                type="button"
-                onClick={onExitBatchMode}
-                disabled={isSavingBatch}
-                className="px-2.5 py-1 md:px-3 md:py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-white/20 active:scale-95 cursor-pointer"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveBatch}
-                disabled={isSavingBatch}
-                className="hidden md:flex px-4 py-1.5 bg-white text-sky-700 hover:bg-sky-50 rounded-xl text-[9px] md:text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 items-center gap-1.5 cursor-pointer disabled:opacity-50"
-              >
-                {isSavingBatch ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>Menyimpan...</span>
-                  </>
-                ) : (
-                  <>
-                    <Save className="w-3.5 h-3.5" />
-                    <span>Simpan & Selesai</span>
-                  </>
-                )}
-              </button>
+            <div className="flex items-center justify-between sm:justify-end gap-1.5 md:gap-2 shrink-0 flex-wrap">
+              {/* Counter status di sebelah kiri tombol aksi (terutama di mobile) */}
+              <div className="flex items-center gap-1 px-2 py-1 bg-white/10 rounded-lg text-[9px] font-bold text-white/95 border border-white/15">
+                <span className="text-sky-200">Terpilih:</span>
+                <span className="font-black text-white">{batchSelectedIds.size}</span>
+                <span className="text-white/60">/</span>
+                <span className="text-white/80">{filteredMembers.length}</span>
+              </div>
+
+              <div className="flex items-center gap-1 md:gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleSelectAllFiltered}
+                  className="px-2 py-1 md:px-2.5 md:py-1.5 bg-white/15 hover:bg-white/25 text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-white/20 active:scale-95 cursor-pointer whitespace-nowrap"
+                >
+                  Pilih Semua
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearAllSelected}
+                  className="px-2 py-1 md:px-2.5 md:py-1.5 bg-white/15 hover:bg-white/25 text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-white/20 active:scale-95 cursor-pointer whitespace-nowrap"
+                >
+                  Reset
+                </button>
+                <button
+                  type="button"
+                  onClick={onExitBatchMode}
+                  disabled={isSavingBatch}
+                  className="px-2 py-1 md:px-2.5 md:py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-white/20 active:scale-95 cursor-pointer whitespace-nowrap"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveBatch}
+                  disabled={isSavingBatch}
+                  className="hidden md:flex px-4 py-1.5 bg-white text-sky-700 hover:bg-sky-50 rounded-xl text-[9px] md:text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 items-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                >
+                  {isSavingBatch ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Menyimpan...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-3.5 h-3.5" />
+                      <span>Simpan & Selesai</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1874,7 +1885,10 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
               <button
                 id="filter-trigger-btn"
                 type="button"
-                onClick={() => setShowFilters(!showFilters)}
+                onClick={() => {
+                  setShowFilters(!showFilters);
+                  setTimeout(updateDimensions, 220);
+                }}
                 className={`px-3 py-2 md:py-2.5 rounded-xl md:rounded-2xl border font-black text-[9px] md:text-[10px] uppercase tracking-wider transition-all flex items-center gap-1.5 select-none active:scale-95 shrink-0 ${
                   showFilters
                     ? "bg-slate-900 border-slate-900 text-white shadow-xs"
@@ -1917,14 +1931,17 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
             </div>
           </div>
 
-          {/* Compact 4-column filter grid with animation (Hide/Unhide) */}
+          {/* Compact 4-column filter grid with animation (Exact match to AttendanceHistory) */}
           <AnimatePresence initial={false}>
             {showFilters && (
               <motion.div
                 initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
+                animate={{ height: 'auto', opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.16, ease: "easeOut" }}
+                transition={{ duration: 0.2, ease: 'easeInOut' }}
+                onAnimationComplete={() => {
+                  updateDimensions();
+                }}
                 className="overflow-visible"
               >
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 pt-2 border-t border-slate-100">
@@ -2110,7 +2127,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                       {/* DAERAH HEADER - Sticky */}
                       <div
                         ref={setDaerahHeaderRef}
-                        className="sticky z-30 py-1 -mx-3 px-3 bg-white/95 backdrop-blur-sm rounded-t-xl"
+                        className="sticky z-30 py-1 -mx-3 px-3 bg-white rounded-t-xl"
                         style={{
                           top: "calc(var(--search-bar-h, 54px) + var(--batch-banner-h, 0px))",
                         }}
@@ -2196,7 +2213,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                     >
                                       {/* KELOMPOK HEADER - Sticky right below the Daerah/Desa sticky zone */}
                                       <div
-                                        className="sticky z-20 py-1 bg-white/95 backdrop-blur-sm rounded-lg -mx-2 px-2"
+                                        className="sticky z-20 py-1 bg-white rounded-lg -mx-2 px-2"
                                         style={{
                                           top: "calc(var(--search-bar-h, 54px) + var(--batch-banner-h, 0px) + var(--daerah-h, 48px))",
                                         }}
