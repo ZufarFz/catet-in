@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { LayoutDashboard, ReceiptText, Receipt, History, Wallet, RefreshCw, AlertCircle, FileText, Settings, Loader2, LogOut, ChevronsLeft, ChevronsRight, UserCircle, ShieldAlert, FileEdit, CheckCircle2, AlertTriangle, HelpCircle, User, Users, Fingerprint, Trash2, Layers, Filter, Info, X, Clock, ShieldCheck, Copy, Check, CalendarDays, Lock, KeyRound, ArrowRight, Eye, EyeOff } from 'lucide-react';
-import { Transaction, DeletedTransaction, EditHistory, AppTab, GlobalStats, ProjectMetadata, AppType, AbsensiMember, AttendanceLog, DesaData, KelompokData, AgeCategoryData, DaerahData, EventData, Family, FamilyRelationship } from './types';
+import { Transaction, DeletedTransaction, EditHistory, AppTab, GlobalStats, ProjectMetadata, AppType, AbsensiMember, AttendanceLog, DesaData, KelompokData, AgeCategoryData, DaerahData, EventData, Family, FamilyRelationship, LabelData } from './types';
 import Dashboard from './components/bendahara/DashboardBendahara';
 import TransactionForm from './components/bendahara/TransactionForm';
 import HistoryView from './components/bendahara/HistoryView';
@@ -243,6 +243,19 @@ const App: React.FC = () => {
       return [];
     }
   });
+
+  // Batch Label Management Mode State
+  const [batchManageLabel, setBatchManageLabel] = useState<LabelData | null>(null);
+
+  const handleManageLabelMembers = (label: LabelData) => {
+    setBatchManageLabel(label);
+    setActiveTab('absensi_members');
+  };
+
+  const handleExitBatchMode = () => {
+    setBatchManageLabel(null);
+    setActiveTab('absensi_groups');
+  };
 
   // Granular Access Control Restrictions
   const [restrictedDaerahId, setRestrictedDaerahId] = useState<string>(() => localStorage.getItem('restricted_daerah_id') || '');
@@ -2391,8 +2404,8 @@ const App: React.FC = () => {
             <>
               <TabView id="dashboard" activeTab={activeTab}><DashboardAbsensi logs={scopedLogs} isLoading={isAbsensiLoading} username={fullName} summaries={absensiSummaries} ages={scopedAges} daerahs={scopedDaerahs} desas={scopedDesas} kelompoks={scopedKelompoks} events={absensiEvents} /></TabView>
               <TabView id="absensi_form" activeTab={activeTab}><AttendanceForm members={scopedMembers} logs={scopedLogs} logUrl={absensiLogUrl} username={fullName} notify={showToast} onSuccess={() => refreshAllAbsensi(true)} events={absensiEvents} ages={scopedAges} onLogsUpdated={handleMergeLogs} isActive={activeTab === 'absensi_form'} /></TabView>
-              <TabView id="absensi_members" activeTab={activeTab}><MemberManagement daerahs={scopedDaerahs} desas={scopedDesas} kelompoks={scopedKelompoks} ages={scopedAges} members={scopedMembers} setMembers={setAbsensiMembers} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} families={absensiFamilies} relationships={absensiRelationships} /></TabView>
-              <TabView id="absensi_groups" activeTab={activeTab}><GroupManagement daerahs={scopedDaerahs} setDaerahs={setAbsensiDaerahs} desas={scopedDesas} setDesas={setAbsensiDesas} kelompoks={scopedKelompoks} setKelompoks={setAbsensiKelompoks} ages={scopedAges} setAges={setAbsensiAges} events={absensiEvents} setEvents={setAbsensiEvents} families={absensiFamilies} setFamilies={setAbsensiFamilies} relationships={absensiRelationships} setRelationships={setAbsensiRelationships} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} /></TabView>
+              <TabView id="absensi_members" activeTab={activeTab}><MemberManagement daerahs={scopedDaerahs} desas={scopedDesas} kelompoks={scopedKelompoks} ages={scopedAges} members={scopedMembers} setMembers={setAbsensiMembers} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} families={absensiFamilies} relationships={absensiRelationships} batchManageLabel={batchManageLabel} onExitBatchMode={handleExitBatchMode} /></TabView>
+              <TabView id="absensi_groups" activeTab={activeTab}><GroupManagement daerahs={scopedDaerahs} setDaerahs={setAbsensiDaerahs} desas={scopedDesas} setDesas={setAbsensiDesas} kelompoks={scopedKelompoks} setKelompoks={setAbsensiKelompoks} ages={scopedAges} setAges={setAbsensiAges} events={absensiEvents} setEvents={setAbsensiEvents} families={absensiFamilies} setFamilies={setAbsensiFamilies} relationships={absensiRelationships} setRelationships={setAbsensiRelationships} appScriptMaster={absensiMasterUrl} canWrite={canWrite} onRefresh={() => refreshAllAbsensi(true)} isLoading={isAbsensiLoading} members={scopedMembers} onManageLabelMembers={handleManageLabelMembers} /></TabView>
               <TabView id="absensi_history" activeTab={activeTab}><AttendanceHistory logs={scopedLogs} isLoading={isAbsensiLoading} logUrl={absensiLogUrl} onRefresh={() => refreshAllAbsensi(true)} onFetchMoreLogs={fetchMoreAbsensiLogs} notify={showToast} events={absensiEvents} /></TabView>
             </>
           )}

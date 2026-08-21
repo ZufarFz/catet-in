@@ -1,5 +1,6 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { ChevronDown, Check, Search, X, Plus } from 'lucide-react';
 
@@ -36,7 +37,14 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number; width: number; minWidth: number }>({
+    top: 0,
+    left: 0,
+    width: 0,
+    minWidth: 0,
+  });
 
   // Normalize value to string for comparison
   const selectedOption = options.find(opt => String(opt.value) === String(value));
@@ -46,20 +54,66 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
     opt.label.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const updateCoords = () => {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const calculatedWidth = Math.max(rect.width, 220);
+      let left = rect.left;
+      
+      // Prevent overflow to the right of viewport
+      if (left + calculatedWidth > viewportWidth - 16) {
+        left = Math.max(16, viewportWidth - calculatedWidth - 16);
+      }
+
+      setCoords({
+        top: rect.bottom + window.scrollY + 4,
+        left: left + window.scrollX,
+        width: rect.width,
+        minWidth: Math.min(calculatedWidth, viewportWidth - 32),
+      });
+    }
+  };
+
+  useLayoutEffect(() => {
+    if (isOpen) {
+      updateCoords();
+    }
+  }, [isOpen]);
+
   useEffect(() => {
+    if (!isOpen) return;
+
+    const handleScrollOrResize = () => {
+      updateCoords();
+    };
+
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        triggerRef.current && !triggerRef.current.contains(target) &&
+        dropdownRef.current && !dropdownRef.current.contains(target)
+      ) {
         setIsOpen(false);
       }
     };
+
+    window.addEventListener('resize', handleScrollOrResize);
+    window.addEventListener('scroll', handleScrollOrResize, true);
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+
+    return () => {
+      window.removeEventListener('resize', handleScrollOrResize);
+      window.removeEventListener('scroll', handleScrollOrResize, true);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
 
   return (
-    <div className={`relative ${className}`} style={{ zIndex: isOpen ? 500 : 1 }} ref={containerRef}>
+    <div className={`relative ${className}`} style={{ zIndex: isOpen ? 500 : 1 }}>
       {/* Trigger */}
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         onClick={(e) => {
@@ -69,30 +123,40 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
         }}
         className={`
           w-full flex items-center justify-between 
-          ${size === 'sm' ? 'px-2.5 py-2 rounded-lg border text-xs font-semibold' : 'px-2 py-2.5 md:px-4 md:py-3.5 rounded-xl md:rounded-2xl border-2'}
+          ${size === 'sm' ? 'px-2.5 py-2 rounded-lg border text-xs font-semibold' : 'px-3 py-2.5 md:px-4 md:py-3 rounded-xl md:rounded-2xl border'}
           bg-white transition-all outline-none shadow-xs
-          ${isOpen ? 'border-sky-500 bg-white ring-2 ring-sky-500/20' : size === 'sm' ? 'border-slate-200 hover:border-slate-300' : 'border-slate-100 hover:border-slate-200'}
+          ${isOpen ? 'border-sky-500 bg-white ring-2 ring-sky-500/20' : 'border-slate-200 hover:border-slate-300'}
           ${disabled ? 'opacity-50 cursor-not-allowed bg-slate-50' : 'cursor-pointer'}
         `}
       >
-        <div className={`flex items-center ${size === 'sm' ? 'gap-1.5' : 'gap-1.5 md:gap-3'} overflow-hidden`}>
-          {DisplayIcon && <DisplayIcon className={`shrink-0 ${size === 'sm' ? 'w-3.5 h-3.5' : 'w-3 h-3 md:w-4 md:h-4'} ${isOpen ? 'text-sky-600' : 'text-slate-400'}`} />}
-          <span className={`${size === 'sm' ? 'text-[10px] md:text-[11px] font-bold' : 'text-[7px] md:text-[11px] font-black'} uppercase tracking-wider truncate ${selectedOption && selectedOption.label !== 'PILIH' ? 'text-slate-700' : 'text-slate-400'}`}>
+        <div className={`flex items-center ${size === 'sm' ? 'gap-1.5' : 'gap-2 md:gap-2.5'} overflow-hidden min-w-0`}>
+          {DisplayIcon && <DisplayIcon className={`shrink-0 ${size === 'sm' ? 'w-3.5 h-3.5' : 'w-3.5 h-3.5 md:w-4 md:h-4'} ${isOpen ? 'text-sky-600' : 'text-slate-400'}`} />}
+          <span className={`${size === 'sm' ? 'text-[10px] md:text-[11px] font-bold' : 'text-[10px] md:text-xs font-bold'} uppercase tracking-wider truncate ${selectedOption && selectedOption.label !== 'PILIH' ? 'text-slate-700' : 'text-slate-400'}`}>
             {selectedOption && selectedOption.label !== 'PILIH' ? selectedOption.label : placeholder}
           </span>
         </div>
         <ChevronDown 
-          className={`text-slate-400 transition-transform duration-300 ${size === 'sm' ? 'w-3.5 h-3.5' : 'w-3 h-3 md:w-4 md:h-4'} ${isOpen ? 'rotate-180 text-sky-600' : ''}`} 
+          className={`text-slate-400 shrink-0 transition-transform duration-300 ${size === 'sm' ? 'w-3.5 h-3.5' : 'w-3.5 h-3.5 md:w-4 md:h-4'} ${isOpen ? 'rotate-180 text-sky-600' : ''}`} 
         />
       </button>
 
-      {/* Dropdown Panel */}
-      {isOpen && (
-        <div className={noAnimation ? '' : 'contents'}>
+      {/* Dropdown Panel via Portal for highest top-level stacking */}
+      {isOpen && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={dropdownRef}
+          style={{
+            position: 'absolute',
+            top: `${coords.top}px`,
+            left: `${coords.left}px`,
+            minWidth: `${coords.minWidth}px`,
+            maxWidth: 'calc(100vw - 32px)',
+            zIndex: 9999,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
           {noAnimation ? (
             <div
-              className="absolute z-[600] top-full right-0 md:right-auto md:left-0 min-w-full w-max max-w-[calc(100vw-32px)] md:max-w-md bg-white/75 backdrop-blur-xl border border-white/90 ring-1 ring-slate-900/15 shadow-[0_20px_50px_rgba(15,23,42,0.25)] rounded-2xl overflow-hidden flex flex-col max-h-[320px] mt-2"
-              onClick={(e) => e.stopPropagation()}
+              className="bg-white/95 backdrop-blur-xl border border-slate-200/90 ring-1 ring-slate-900/10 shadow-[0_12px_40px_rgba(15,23,42,0.22)] rounded-xl md:rounded-2xl overflow-hidden flex flex-col max-h-[300px]"
             >
               {/* Search Input inside dropdown if options are many or adding is enabled */}
               {(options.length > 5 || onAddNew) && (
@@ -111,7 +175,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                       <button 
                         type="button"
                         onClick={() => setSearchTerm('')}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
                       >
                         <X size={12} />
                       </button>
@@ -136,7 +200,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                           setSearchTerm('');
                         }}
                         className={`
-                          w-full flex items-center justify-between px-3 py-2 md:px-3.5 md:py-2.5 text-left transition-all group relative rounded-xl border
+                          w-full flex items-center justify-between px-3 py-2 md:px-3.5 md:py-2.5 text-left transition-all group relative rounded-xl border cursor-pointer
                           ${isSelected 
                             ? 'bg-emerald-600/80 hover:bg-emerald-600/90 text-white border-emerald-500/40 font-black shadow-xs' 
                             : 'text-slate-700 hover:bg-white/80 hover:text-slate-900 border-transparent'}
@@ -170,7 +234,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                       setSearchTerm('');
                       setIsOpen(false);
                     }}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left transition-all text-emerald-600 hover:bg-white/80 rounded-xl text-[8px] md:text-[10px] font-black uppercase tracking-widest border border-dashed border-emerald-200 mt-1"
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left transition-all text-emerald-600 hover:bg-white/80 rounded-xl text-[8px] md:text-[10px] font-black uppercase tracking-widest border border-dashed border-emerald-200 mt-1 cursor-pointer"
                   >
                     <Plus size={14} className="shrink-0" />
                     <span>Tambah "{searchTerm}"</span>
@@ -181,12 +245,11 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
           ) : (
             <AnimatePresence>
               <motion.div
-                initial={{ opacity: 0, y: 12, scale: 0.95 }}
-                animate={{ opacity: 1, y: 8, scale: 1 }}
-                exit={{ opacity: 0, y: 12, scale: 0.95 }}
-                transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
-                className="absolute z-[600] top-full right-0 md:right-auto md:left-0 min-w-full w-max max-w-[calc(100vw-32px)] md:max-w-md bg-white/75 backdrop-blur-xl border border-white/90 ring-1 ring-slate-900/15 shadow-[0_20px_50px_rgba(15,23,42,0.25)] rounded-2xl overflow-hidden flex flex-col max-h-[320px] mt-2"
-                onClick={(e) => e.stopPropagation()}
+                initial={{ opacity: 0, y: 4, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 4, scale: 0.98 }}
+                transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
+                className="bg-white/95 backdrop-blur-xl border border-slate-200/90 ring-1 ring-slate-900/10 shadow-[0_12px_40px_rgba(15,23,42,0.22)] rounded-xl md:rounded-2xl overflow-hidden flex flex-col max-h-[300px]"
               >
                 {/* Search Input inside dropdown if options are many or adding is enabled */}
                 {(options.length > 5 || onAddNew) && (
@@ -205,7 +268,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                         <button 
                           type="button"
                           onClick={() => setSearchTerm('')}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600"
+                          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
                         >
                           <X size={12} />
                         </button>
@@ -230,7 +293,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                             setSearchTerm('');
                           }}
                           className={`
-                            w-full flex items-center justify-between px-3 py-2 md:px-3.5 md:py-2.5 text-left transition-all group relative rounded-xl border
+                            w-full flex items-center justify-between px-3 py-2 md:px-3.5 md:py-2.5 text-left transition-all group relative rounded-xl border cursor-pointer
                             ${isSelected 
                               ? 'bg-emerald-600/80 hover:bg-emerald-600/90 text-white border-emerald-500/40 font-black shadow-xs' 
                               : 'text-slate-600 hover:bg-slate-100/70 hover:text-slate-900 border-transparent'}
@@ -264,7 +327,7 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
                         setSearchTerm('');
                         setIsOpen(false);
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-2.5 text-left transition-all text-emerald-600 hover:bg-emerald-50 rounded-xl text-[8px] md:text-[10px] font-black uppercase tracking-widest border border-dashed border-emerald-200 mt-1"
+                      className="w-full flex items-center gap-2 px-3 py-2.5 text-left transition-all text-emerald-600 hover:bg-emerald-50 rounded-xl text-[8px] md:text-[10px] font-black uppercase tracking-widest border border-dashed border-emerald-200 mt-1 cursor-pointer"
                     >
                       <Plus size={14} className="shrink-0" />
                       <span>Tambah "{searchTerm}"</span>
@@ -274,7 +337,8 @@ const ModernSelect: React.FC<ModernSelectProps> = ({
               </motion.div>
             </AnimatePresence>
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

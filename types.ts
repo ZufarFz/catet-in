@@ -177,3 +177,14 @@ export interface LabelData {
   name: string;
   created_at?: string;
 }
+
+export interface EntityLabel {
+  id?: string;
+  label_id: string;
+  target_id: string;
+  target_type: 'member' | 'event';
+  instansi?: string;
+  created_at?: string;
+}
+
+export type MemberLabel = EntityLabel;

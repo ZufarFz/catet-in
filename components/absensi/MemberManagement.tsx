@@ -27,6 +27,8 @@ import {
   Minimize2,
   ChevronDown,
   ChevronUp,
+  Tag,
+  Check,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
@@ -41,7 +43,7 @@ import {
 } from "../../types";
 import ModernSelect from "../ui/ModernSelect";
 import { motion, AnimatePresence } from "motion/react";
-import { dbAddMember, dbDeleteMember, dbAddFamily, dbGetLabels, dbAddLabel } from "../../supabase";
+import { dbAddMember, dbDeleteMember, dbAddFamily, dbGetLabels, dbAddLabel, dbBatchAssignMembersToLabel } from "../../supabase";
 import { downloadMemberCard } from "../utils/barcode128";
 
 interface MemberManagementProps {
@@ -53,6 +55,8 @@ interface MemberManagementProps {
   ages: AgeCategoryData[];
   families?: Family[];
   relationships?: FamilyRelationship[];
+  batchManageLabel?: LabelData | null;
+  onExitBatchMode?: () => void;
   appScriptMaster: string;
   canWrite: boolean;
   onRefresh: () => void;
@@ -68,6 +72,8 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
   ages,
   families = [],
   relationships = [],
+  batchManageLabel,
+  onExitBatchMode,
   appScriptMaster,
   canWrite,
   onRefresh,
@@ -86,6 +92,72 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [isScanningRfid, setIsScanningRfid] = useState(false);
   const [isScanningRfidKtp, setIsScanningRfidKtp] = useState(false);
+
+  // States for Batch Label Assignment
+  const [batchSelectedIds, setBatchSelectedIds] = useState<Set<string>>(new Set());
+  const [isSavingBatch, setIsSavingBatch] = useState(false);
+
+  useEffect(() => {
+    if (batchManageLabel) {
+      const initial = new Set<string>();
+      members.forEach((m) => {
+        if ((m.labels || []).includes(batchManageLabel.name)) {
+          initial.add(m.id);
+        }
+      });
+      setBatchSelectedIds(initial);
+    } else {
+      setBatchSelectedIds(new Set());
+    }
+  }, [batchManageLabel, members]);
+
+  const handleToggleBatchMember = (memberId: string) => {
+    setBatchSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(memberId)) {
+        next.delete(memberId);
+      } else {
+        next.add(memberId);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllFiltered = () => {
+    setBatchSelectedIds((prev) => {
+      const next = new Set(prev);
+      filteredMembers.forEach((m) => next.add(m.id));
+      return next;
+    });
+  };
+
+  const handleClearAllSelected = () => {
+    setBatchSelectedIds(new Set());
+  };
+
+  const handleSaveBatch = async () => {
+    if (!batchManageLabel) return;
+    setIsSavingBatch(true);
+    try {
+      const targetIds = Array.from(batchSelectedIds);
+      const res = await dbBatchAssignMembersToLabel(
+        batchManageLabel.id,
+        targetIds,
+        batchManageLabel.name,
+        members
+      );
+      if (res.success) {
+        onRefresh();
+        if (onExitBatchMode) {
+          onExitBatchMode();
+        }
+      }
+    } catch (err) {
+      console.error("Gagal menyimpan penugasan label:", err);
+    } finally {
+      setIsSavingBatch(false);
+    }
+  };
 
   // States for importing via file
   const [showImportModal, setShowImportModal] = useState(false);
@@ -119,34 +191,56 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
   const [showFilters, setShowFilters] = useState(false);
   const [viewMode, setViewMode] = useState<"anggota" | "kk">("anggota");
 
-  // Sticky header height sync
+  // Sticky header height sync using CSS custom variables for silky smooth 60fps animations
   const searchBarRef = useRef<HTMLDivElement>(null);
-  const [searchBarHeight, setSearchBarHeight] = useState<number>(54);
-  const [daerahHeight, setDaerahHeight] = useState<number>(48);
+  const batchBannerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const daerahHeaderRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!searchBarRef.current) return;
-    const updateHeight = () => {
-      if (searchBarRef.current) {
-        setSearchBarHeight(searchBarRef.current.offsetHeight);
+    if (!searchBarRef.current || !containerRef.current) return;
+    
+    let rafId: number | null = null;
+    const updateDimensions = () => {
+      if (searchBarRef.current && containerRef.current) {
+        const sbHeight = searchBarRef.current.offsetHeight;
+        containerRef.current.style.setProperty('--search-bar-h', `${sbHeight}px`);
+        if (batchBannerRef.current) {
+          containerRef.current.style.setProperty('--batch-banner-h', `${batchBannerRef.current.offsetHeight}px`);
+        } else {
+          containerRef.current.style.setProperty('--batch-banner-h', '0px');
+        }
+        if (daerahHeaderRef.current) {
+          containerRef.current.style.setProperty('--daerah-h', `${daerahHeaderRef.current.offsetHeight}px`);
+        }
       }
     };
-    updateHeight();
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(searchBarRef.current);
-    window.addEventListener("resize", updateHeight);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", updateHeight);
+
+    updateDimensions();
+
+    const handleResize = () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(updateDimensions);
     };
-  }, [showFilters]);
+
+    const observer = new ResizeObserver(handleResize);
+    observer.observe(searchBarRef.current);
+    if (batchBannerRef.current) {
+      observer.observe(batchBannerRef.current);
+    }
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      observer.disconnect();
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [batchManageLabel, showFilters]);
 
   const setDaerahHeaderRef = (el: HTMLDivElement | null) => {
-    if (el) {
-      const h = el.offsetHeight;
-      if (h > 0 && Math.abs(h - daerahHeight) > 1) {
-        setDaerahHeight(h);
-      }
+    daerahHeaderRef.current = el;
+    if (el && containerRef.current) {
+      containerRef.current.style.setProperty('--daerah-h', `${el.offsetHeight}px`);
     }
   };
 
@@ -1532,10 +1626,18 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
   };
 
   return (
-    <div className="h-full bg-[#f8f9fa] overflow-y-auto custom-scrollbar pb-28 md:pb-8">
+    <div
+      ref={containerRef}
+      className="h-full bg-[#f8f9fa] overflow-y-auto custom-scrollbar pb-28 md:pb-8"
+      style={{
+        "--search-bar-h": "54px",
+        "--batch-banner-h": "0px",
+        "--daerah-h": "48px",
+      } as React.CSSProperties}
+    >
       {/* Header & Quick Stats */}
-      <div className="bg-white border-b border-slate-200 px-4 md:px-6 py-2 md:py-3 relative">
-        <div className="max-w-7xl mx-auto space-y-2 md:space-y-3">
+      <div className="bg-white border-b border-slate-200 px-3 md:px-6 py-1.5 md:py-3 relative">
+        <div className="max-w-7xl mx-auto space-y-1.5 md:space-y-3">
           <div className="flex flex-row justify-between items-center gap-4">
             <div className="space-y-0">
               <h2 className="text-sm md:text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2 md:gap-3">
@@ -1546,7 +1648,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                 Kelola dan pantau seluruh data keanggotaan dalam satu platform
               </p>
             </div>
-            {canWrite && (
+            {canWrite && !batchManageLabel && (
               <div className="flex items-center gap-2 md:gap-3">
                 {/* Desktop Import Button */}
                 <button
@@ -1560,9 +1662,9 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                 {/* Mobile Import Button */}
                 <button
                   onClick={() => setShowImportModal(true)}
-                  className="flex md:hidden px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-lg font-bold text-xs items-center justify-center gap-1 transition-all"
+                  className="flex md:hidden px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-lg font-bold text-xs items-center justify-center gap-1 transition-all"
                 >
-                  <Upload size={14} />
+                  <Upload size={13} />
                   Import
                 </button>
 
@@ -1578,44 +1680,54 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
             )}
           </div>
 
-          <div className="flex items-center gap-2 md:gap-3 overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
+          <div className="flex items-center gap-1.5 md:gap-3 overflow-x-auto no-scrollbar -mx-3 px-3 md:mx-0 md:px-0">
             {[
               {
                 label: "Total Anggota",
+                mobileLabel: "Total",
                 value: stats.total,
                 icon: Users,
+                emoji: "👥",
                 color: "text-blue-600",
                 bg: "bg-blue-50",
                 showMobile: true,
               },
               {
                 label: "Laki-laki",
+                mobileLabel: "Laki-laki",
                 value: stats.male,
                 icon: User,
+                emoji: "👦",
                 color: "text-emerald-600",
                 bg: "bg-emerald-50",
                 showMobile: true,
               },
               {
                 label: "Perempuan",
+                mobileLabel: "Perempuan",
                 value: stats.female,
                 icon: User,
+                emoji: "👧",
                 color: "text-rose-600",
                 bg: "bg-rose-50",
                 showMobile: true,
               },
               {
                 label: "Total Desa",
+                mobileLabel: "Desa",
                 value: desas.length,
                 icon: MapPin,
+                emoji: "📍",
                 color: "text-purple-600",
                 bg: "bg-purple-50",
                 showMobile: false,
               },
               {
                 label: "Total Kelompok",
+                mobileLabel: "Kelompok",
                 value: kelompoks.length,
                 icon: Users,
+                emoji: "🏢",
                 color: "text-amber-600",
                 bg: "bg-amber-50",
                 showMobile: false,
@@ -1624,20 +1736,22 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
               <div
                 key={i}
                 className={`
-                  bg-white border border-slate-100 p-2 md:p-3 rounded-xl flex items-center gap-2 md:gap-2.5 transition-all shadow-sm shrink-0
-                  ${stat.showMobile ? "flex-1 min-w-[100px] md:min-w-0" : "hidden md:flex flex-1"}
+                  bg-white border border-slate-100/90 py-1.5 px-2 md:p-3 rounded-lg md:rounded-xl flex items-center gap-1.5 md:gap-2.5 transition-all shadow-xs md:shadow-sm shrink-0
+                  ${stat.showMobile ? "flex-1 min-w-[75px] md:min-w-0" : "hidden md:flex flex-1"}
                 `}
               >
+                {/* Icon (seragam mobile & desktop, ukuran proporsional) */}
                 <div
-                  className={`${stat.bg} ${stat.color} w-8 md:w-10 h-8 md:h-10 rounded-lg flex items-center justify-center shrink-0`}
+                  className={`${stat.bg} ${stat.color} w-6 h-6 md:w-10 md:h-10 rounded-md md:rounded-lg flex items-center justify-center shrink-0`}
                 >
-                  <stat.icon className="w-4 md:w-5 h-4 md:h-5" />
+                  <stat.icon className="w-3.5 h-3.5 md:w-5 md:h-5" />
                 </div>
-                <div className="min-w-0">
-                  <p className="text-[7px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest leading-tight truncate">
-                    {stat.label}
+                <div className="min-w-0 flex-1">
+                  <p className="text-[7.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider leading-tight truncate">
+                    <span className="md:hidden">{stat.mobileLabel}</span>
+                    <span className="hidden md:inline">{stat.label}</span>
                   </p>
-                  <p className="text-xs md:text-lg font-black text-slate-900 leading-none mt-1">
+                  <p className="text-xs md:text-lg font-black text-slate-900 leading-none mt-0.5 md:mt-1">
                     {stat.value}
                   </p>
                 </div>
@@ -1647,10 +1761,83 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
         </div>
       </div>
 
+      {/* Sticky Batch Assignment Banner */}
+      {batchManageLabel && (
+        <div
+          ref={batchBannerRef}
+          className="sticky top-0 z-[35] bg-sky-700 text-white px-3 md:px-6 py-2.5 shadow-lg border-b border-sky-800 transition-all"
+        >
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="p-2 bg-white/20 rounded-xl shrink-0">
+                <Tag className="w-4 h-4 text-white" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[9px] font-black uppercase tracking-wider text-sky-100">
+                    Mode Penugasan Massal:
+                  </span>
+                  <span className="px-2 py-0.5 bg-white text-sky-700 rounded-md font-black text-[10px] md:text-xs uppercase shadow-xs">
+                    {batchManageLabel.name}
+                  </span>
+                </div>
+                <p className="text-[9px] md:text-[10px] text-white/90 font-medium truncate mt-0.5">
+                  Centang anggota yang ingin dimasukkan ke label ini ({batchSelectedIds.size} dipilih dari {filteredMembers.length} tampil)
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 md:gap-2 shrink-0 flex-wrap justify-end">
+              <button
+                type="button"
+                onClick={handleSelectAllFiltered}
+                className="px-2 py-1 md:px-2.5 md:py-1.5 bg-white/15 hover:bg-white/25 text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-white/20 active:scale-95 cursor-pointer"
+              >
+                Pilih Semua ({filteredMembers.length})
+              </button>
+              <button
+                type="button"
+                onClick={handleClearAllSelected}
+                className="px-2 py-1 md:px-2.5 md:py-1.5 bg-white/15 hover:bg-white/25 text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-white/20 active:scale-95 cursor-pointer"
+              >
+                Kosongkan
+              </button>
+              <button
+                type="button"
+                onClick={onExitBatchMode}
+                disabled={isSavingBatch}
+                className="px-2.5 py-1 md:px-3 md:py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-[9px] font-black uppercase tracking-wider transition-all border border-white/20 active:scale-95 cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveBatch}
+                disabled={isSavingBatch}
+                className="hidden md:flex px-4 py-1.5 bg-white text-sky-700 hover:bg-sky-50 rounded-xl text-[9px] md:text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isSavingBatch ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Menyimpan...</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Simpan & Selesai</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Search & Filters */}
       <div
         ref={searchBarRef}
-        className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b border-slate-100 px-4 md:px-6 py-2 md:py-2.5 cursor-default"
+        className="sticky z-30 bg-white/95 backdrop-blur-sm border-b border-slate-100 px-4 md:px-6 py-2 md:py-2.5 cursor-default"
+        style={{ top: "var(--batch-banner-h, 0px)" }}
       >
         <div className="w-full max-w-7xl mx-auto space-y-2.5">
           <div className="flex items-center justify-between gap-2 md:gap-3">
@@ -1737,7 +1924,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: "auto", opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.2, ease: "easeInOut" }}
+                transition={{ duration: 0.16, ease: "easeOut" }}
                 className="overflow-visible"
               >
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 pt-2 border-t border-slate-100">
@@ -1923,8 +2110,10 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                       {/* DAERAH HEADER - Sticky */}
                       <div
                         ref={setDaerahHeaderRef}
-                        className="sticky z-20 py-1 -mx-3 px-3 bg-white/95 backdrop-blur-sm rounded-t-xl transition-all duration-200"
-                        style={{ top: `${searchBarHeight}px` }}
+                        className="sticky z-30 py-1 -mx-3 px-3 bg-white/95 backdrop-blur-sm rounded-t-xl"
+                        style={{
+                          top: "calc(var(--search-bar-h, 54px) + var(--batch-banner-h, 0px))",
+                        }}
                       >
                         <div className="flex flex-row items-center justify-between gap-1.5 md:gap-2 px-3 md:px-4 py-1.5 md:py-2.5 bg-purple-50 text-purple-700 rounded-xl border border-purple-100 shadow-xs w-full">
                           <div className="flex items-center gap-1.5 md:gap-2.5 min-w-0">
@@ -2007,8 +2196,10 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                     >
                                       {/* KELOMPOK HEADER - Sticky right below the Daerah/Desa sticky zone */}
                                       <div
-                                        className="sticky z-10 py-1 bg-white/95 backdrop-blur-sm rounded-lg -mx-2 px-2"
-                                        style={{ top: `${searchBarHeight + daerahHeight}px` }}
+                                        className="sticky z-20 py-1 bg-white/95 backdrop-blur-sm rounded-lg -mx-2 px-2"
+                                        style={{
+                                          top: "calc(var(--search-bar-h, 54px) + var(--batch-banner-h, 0px) + var(--daerah-h, 48px))",
+                                        }}
                                       >
                                         <div className="flex items-center gap-2 pl-3 border-l-2 border-emerald-400 py-1 bg-emerald-50/20 rounded-r-lg">
                                           <Users
@@ -2065,14 +2256,37 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                                       <div
                                                         key={fm.id}
                                                         onClick={() => {
-                                                          setSelectedMember(fm);
-                                                          setShowDetailModal(true);
+                                                          if (batchManageLabel) {
+                                                            handleToggleBatchMember(fm.id);
+                                                          } else {
+                                                            setSelectedMember(fm);
+                                                            setShowDetailModal(true);
+                                                          }
                                                         }}
-                                                        className="flex flex-col md:flex-row md:items-center justify-between gap-2 md:gap-4 py-1.5 px-3 bg-slate-50/30 border border-slate-100/60 hover:bg-white hover:border-blue-150 hover:shadow-sm active:scale-[0.995] rounded-xl transition-all cursor-pointer group/row"
+                                                        className={`flex flex-col md:flex-row md:items-center justify-between gap-2 md:gap-4 py-1.5 px-3 border hover:border-blue-150 hover:shadow-sm active:scale-[0.995] rounded-xl transition-all cursor-pointer group/row ${
+                                                          batchManageLabel && batchSelectedIds.has(fm.id)
+                                                            ? "bg-sky-50/80 border-sky-300 ring-1 ring-sky-400/30 shadow-xs"
+                                                            : "bg-slate-50/30 border-slate-100/60 hover:bg-white"
+                                                        }`}
                                                       >
                                                         {/* Left Section: Avatar, Name, Relationship, ID */}
                                                         <div className="flex items-center justify-between md:justify-start gap-2 min-w-0 md:w-1/3 shrink-0 w-full">
                                                           <div className="flex items-center gap-2 min-w-0">
+                                                            {batchManageLabel && (
+                                                              <div
+                                                                onClick={(e) => {
+                                                                  e.stopPropagation();
+                                                                  handleToggleBatchMember(fm.id);
+                                                                }}
+                                                                className={`w-4 h-4 md:w-4.5 md:h-4.5 rounded-md flex items-center justify-center transition-all cursor-pointer shrink-0 border ${
+                                                                  batchSelectedIds.has(fm.id)
+                                                                    ? "bg-sky-600 border-sky-600 text-white shadow-xs"
+                                                                    : "bg-white border-slate-300 hover:border-sky-500"
+                                                                }`}
+                                                              >
+                                                                {batchSelectedIds.has(fm.id) && <Check size={11} strokeWidth={3} />}
+                                                              </div>
+                                                            )}
                                                             <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${fm.jenis_kelamin === "Laki-laki" ? "bg-blue-50 text-blue-600 border border-blue-100/50" : "bg-rose-50 text-rose-600 border border-rose-100/50"}`}>
                                                               <User size={13} />
                                                             </div>
@@ -2201,16 +2415,40 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                                          y: 0,
                                                        }}
                                                        onClick={() => {
-                                                         setSelectedMember(member);
-                                                         setShowDetailModal(true);
+                                                         if (batchManageLabel) {
+                                                           handleToggleBatchMember(member.id);
+                                                         } else {
+                                                           setSelectedMember(member);
+                                                           setShowDetailModal(true);
+                                                         }
                                                        }}
-                                                       className="flex flex-col md:flex-row md:items-center justify-between gap-2 md:gap-4 py-1.5 px-3 bg-slate-50/30 border border-slate-100/60 hover:bg-white hover:border-blue-150 hover:shadow-sm active:scale-[0.995] rounded-xl transition-all cursor-pointer group/row"
+                                                       className={`flex flex-col md:flex-row md:items-center justify-between gap-2 md:gap-4 py-1.5 px-3 border hover:border-blue-150 hover:shadow-sm active:scale-[0.995] rounded-xl transition-all cursor-pointer group/row ${
+                                                         batchManageLabel && batchSelectedIds.has(member.id)
+                                                           ? "bg-sky-50/80 border-sky-300 ring-1 ring-sky-400/30 shadow-xs"
+                                                           : "bg-slate-50/30 border-slate-100/60 hover:bg-white"
+                                                       }`}
                                                      >
                                                        {/* Left Section: Avatar, Name, Relationship, ID */}
                                                        <div className="flex items-center justify-between md:justify-start gap-2 min-w-0 md:w-1/3 shrink-0 w-full">
                                                          <div className="flex items-center gap-2 min-w-0">
-                                                           <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${member.jenis_kelamin === "Laki-laki" ? "bg-blue-50 text-blue-600 border border-blue-100/50" : "bg-rose-50 text-rose-600 border border-rose-100/50"}`}>
-                                                             <User size={13} />
+                                                           {batchManageLabel && (
+                                                             <div
+                                                               onClick={(e) => {
+                                                                 e.stopPropagation();
+                                                                 handleToggleBatchMember(member.id);
+                                                               }}
+                                                               className={`w-4 h-4 md:w-4.5 md:h-4.5 rounded-md flex items-center justify-center transition-all cursor-pointer shrink-0 border ${
+                                                                 batchSelectedIds.has(member.id)
+                                                                   ? "bg-sky-600 border-sky-600 text-white shadow-xs"
+                                                                   : "bg-white border-slate-300 hover:border-sky-500"
+                                                               }`}
+                                                             >
+                                                               {batchSelectedIds.has(member.id) && <Check size={11} strokeWidth={3} />}
+                                                             </div>
+                                                           )}
+                                                            <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${member.jenis_kelamin === "Laki-laki" ? "bg-blue-50 text-blue-600 border border-blue-100/50" : "bg-rose-50 text-rose-600 border border-rose-100/50"}`}>
+
+                                                              <User size={13} />
                                                            </div>
                                                            <div className="min-w-0">
                                                              <div className="flex items-center gap-1.5 flex-wrap">
@@ -2798,7 +3036,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
 
         {/* Form Modal */}
         {showModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-2.5 sm:p-4 pb-16 sm:pb-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -2810,66 +3048,50 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative bg-white w-full md:max-w-4xl h-full md:h-auto md:max-h-[90vh] rounded-2xl md:rounded-3xl shadow-2xl flex flex-col overflow-hidden"
+              className="relative bg-white w-full md:max-w-4xl max-h-[82vh] md:max-h-[90vh] rounded-2xl md:rounded-3xl shadow-2xl flex flex-col overflow-hidden"
             >
-              <div className="px-4 md:px-12 py-4 md:py-8 border-b border-slate-100 flex items-center justify-between shrink-0">
+              <div className="px-3.5 md:px-12 py-3 md:py-8 border-b border-slate-100 flex items-center justify-between shrink-0">
                 <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-lg md:text-2xl font-black text-slate-900 leading-tight">
-                      {editingMember
-                        ? "Metamorfosis Data"
-                        : "Pendaftaran Anggota"}
-                    </h3>
-                    {editingMember === null && (
-                      <span className="px-2 py-0.5 bg-emerald-50 text-emerald-600 text-[8px] md:text-[9px] font-black uppercase rounded-full border border-emerald-200 animate-pulse tracking-wider">
-                        📝 Draft Aktif
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[9px] md:text-xs text-slate-400 mt-0.5 md:mt-1 uppercase font-black tracking-[0.2em]">
+                  <h3 className="text-base md:text-2xl font-black text-slate-900 leading-tight">
+                    {editingMember
+                      ? "Metamorfosis Data"
+                      : "Pendaftaran Anggota"}
+                  </h3>
+                  <p className="text-[8.5px] md:text-xs text-slate-400 mt-0.5 md:mt-1 uppercase font-black tracking-[0.15em] md:tracking-[0.2em]">
                     Formulir Digital Administrasi
                   </p>
                 </div>
                 <div className="flex items-center gap-1.5 md:gap-2">
-                  {editingMember === null && (
-                    <button
-                      type="button"
-                      onClick={() => setShowModal(false)}
-                      className="w-10 h-10 md:w-12 md:h-12 bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-slate-800 rounded-full flex items-center justify-center transition-all active:scale-90"
-                      title="Minimalkan ke Draft"
-                    >
-                      <Minimize2 size={16} />
-                    </button>
-                  )}
                   <button
                     onClick={() => setShowModal(false)}
-                    className="w-10 h-10 md:w-12 md:h-12 bg-slate-50 text-slate-400 hover:bg-rose-50 hover:text-rose-500 rounded-full flex items-center justify-center transition-all active:scale-90"
+                    className="w-8 h-8 md:w-12 md:h-12 bg-slate-50 text-slate-400 hover:bg-rose-50 hover:text-rose-500 rounded-full flex items-center justify-center transition-all active:scale-90"
                     title="Tutup"
                   >
-                    <X size={20} />
+                    <X size={18} className="md:w-5 md:h-5" />
                   </button>
                 </div>
               </div>
 
               <form
                 onSubmit={handleSubmit}
-                className="flex-1 overflow-y-auto p-4 md:p-12 space-y-8 md:space-y-12 no-scrollbar"
+                className="flex-1 overflow-y-auto p-3.5 md:p-10 space-y-4 md:space-y-8 no-scrollbar"
               >
                 {/* Section: Identitas Utama */}
-                <div className="space-y-6 md:space-y-8">
-                  <div className="flex items-center gap-3 md:gap-4">
-                    <div className="w-8 h-8 md:w-10 md:h-10 bg-blue-50 text-blue-600 rounded-xl md:rounded-2xl flex items-center justify-center shrink-0">
-                      <User size={16} className="md:w-5 md:h-5" />
+                <div className="space-y-3 md:space-y-5">
+                  <div className="flex items-center gap-2 md:gap-3">
+                    <div className="w-7 h-7 md:w-9 md:h-9 bg-blue-50 text-blue-600 rounded-lg md:rounded-xl flex items-center justify-center shrink-0">
+                      <User size={14} className="md:w-4 md:h-4" />
                     </div>
-                    <h4 className="text-[10px] md:text-sm font-black text-slate-700 uppercase tracking-widest">
+                    <h4 className="text-[9.5px] md:text-xs font-black text-slate-700 uppercase tracking-wider md:tracking-widest">
                       Identitas Dasar
                     </h4>
                     <div className="h-px bg-slate-100 flex-1"></div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-8">
-                    <div className="space-y-1 md:space-y-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
+                  <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 gap-2.5 md:gap-5">
+                    {/* Nama Lengkap - Full width on mobile */}
+                    <div className="col-span-2 lg:col-span-1 space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
                         Nama Lengkap *
                       </label>
                       <input
@@ -2882,12 +3104,14 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                             nama_lengkap: e.target.value,
                           })
                         }
-                        className="w-full px-4 md:px-5 py-3 md:py-4 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold placeholder:text-slate-300"
+                        className="w-full px-3 md:px-4 py-2.5 md:py-3 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold placeholder:text-slate-300"
                         placeholder="Masukan Nama Anggota"
                       />
                     </div>
-                    <div className="space-y-1 md:space-y-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
+
+                    {/* Jenis Kelamin & Kontak WA - Sampingan di mobile */}
+                    <div className="col-span-1 space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
                         Jenis Kelamin
                       </label>
                       <ModernSelect
@@ -2904,14 +3128,15 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                         ]}
                       />
                     </div>
-                    <div className="space-y-1 md:space-y-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
+
+                    <div className="col-span-1 space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
                         Kontak WhatsApp
                       </label>
                       <div className="relative">
                         <Phone
-                          className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-slate-300"
-                          size={14}
+                          className="absolute left-2.5 md:left-3.5 top-1/2 -translate-y-1/2 text-slate-300"
+                          size={13}
                         />
                         <input
                           type="text"
@@ -2922,13 +3147,15 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                               no_hp_anggota: e.target.value,
                             })
                           }
-                          className="w-full pl-10 md:pl-12 pr-4 md:pr-5 py-3 md:py-4 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold"
+                          className="w-full pl-8 md:pl-10 pr-3 md:pr-4 py-2.5 md:py-3 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold"
                           placeholder="085123xxx"
                         />
                       </div>
                     </div>
-                    <div className="space-y-1 md:space-y-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
+
+                    {/* Tempat Lahir & Tanggal Lahir - Sampingan di mobile */}
+                    <div className="col-span-1 space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
                         Tempat Lahir
                       </label>
                       <input
@@ -2940,18 +3167,19 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                             tempat_lahir: e.target.value,
                           })
                         }
-                        className="w-full px-4 md:px-5 py-3 md:py-4 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold"
-                        placeholder="Masukan kota lahir"
+                        className="w-full px-3 md:px-4 py-2.5 md:py-3 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold"
+                        placeholder="Kota lahir"
                       />
                     </div>
-                    <div className="space-y-1 md:space-y-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
+
+                    <div className="col-span-1 space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
                         Tanggal Lahir
                       </label>
                       <div className="relative">
                         <Calendar
-                          className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-slate-300"
-                          size={14}
+                          className="absolute left-2.5 md:left-3.5 top-1/2 -translate-y-1/2 text-slate-300"
+                          size={13}
                         />
                         <input
                           type="date"
@@ -2962,12 +3190,14 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                               tanggal_lahir: e.target.value,
                             })
                           }
-                          className="w-full pl-10 md:pl-12 pr-4 md:pr-5 py-3 md:py-4 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold text-slate-600"
+                          className="w-full pl-8 md:pl-10 pr-2.5 md:pr-4 py-2.5 md:py-3 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-[11px] md:text-sm font-bold text-slate-600"
                         />
                       </div>
                     </div>
-                    <div className="space-y-1 md:space-y-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
+
+                    {/* Kategori Usia & Status Pernikahan - Sampingan di mobile */}
+                    <div className="col-span-1 space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
                         Kategori Usia *
                       </label>
                       <ModernSelect
@@ -2982,8 +3212,9 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                         placeholder="Pilih Kategori"
                       />
                     </div>
-                    <div className="space-y-1 md:space-y-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
+
+                    <div className="col-span-1 space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
                         Status Pernikahan
                       </label>
                       <ModernSelect
@@ -3000,24 +3231,48 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                         placeholder="Pilih Status"
                       />
                     </div>
-                    <div className="col-span-1 md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+
+                    {/* Pekerjaan Anggota - Dipindah setelah Status Pernikahan */}
+                    <div className="col-span-2 lg:col-span-1 space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
+                        Pekerjaan Anggota
+                      </label>
+                      <div className="relative">
+                        <Briefcase
+                          className="absolute left-2.5 md:left-3.5 top-1/2 -translate-y-1/2 text-slate-300"
+                          size={13}
+                        />
+                        <input
+                          type="text"
+                          value={formData.pekerjaan || ""}
+                          onChange={(e) =>
+                            setFormData({
+                              ...formData,
+                              pekerjaan: e.target.value,
+                            })
+                          }
+                          className="w-full pl-8 md:pl-10 pr-3 md:pr-4 py-2.5 md:py-3 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold"
+                          placeholder="Wiraswasta, Pelajar, dsb"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Daftar ID Card dan E-KTP - Sampingan di mobile */}
+                    <div className="col-span-2 md:col-span-3 grid grid-cols-2 gap-2.5 md:gap-4 pt-1">
                       {/* RFID Card */}
-                      <div className="space-y-1 md:space-y-2">
-                        <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
-                          Registrasi ID Card RFID / NFC
+                      <div className="space-y-1 md:space-y-1.5">
+                        <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 truncate block">
+                          ID Card RFID / NFC
                         </label>
                         {formData.rfid ? (
-                          <div className="flex items-center justify-between p-3 bg-emerald-50 border border-emerald-200 rounded-xl md:rounded-2xl">
-                            <div className="flex items-center gap-2.5">
-                              <div className="w-6 h-6 rounded-lg bg-emerald-500 text-white flex items-center justify-center shadow-sm">
-                                <CheckCircle2 size={12} />
+                          <div className="flex items-center justify-between p-2 md:p-3 bg-emerald-50 border border-emerald-200 rounded-xl md:rounded-2xl">
+                            <div className="flex items-center gap-1.5 md:gap-2.5 min-w-0">
+                              <div className="w-5 h-5 md:w-6 md:h-6 rounded-lg bg-emerald-500 text-white flex items-center justify-center shrink-0">
+                                <CheckCircle2 size={11} />
                               </div>
-                              <div>
-                                <p className="text-[10px] font-black text-emerald-800 uppercase tracking-wider">
-                                  ID Card Terhubung
-                                </p>
-                                <p className="text-[9px] text-emerald-600 font-bold uppercase tracking-tight ">
-                                  {formData.rfid ? "Terdaftar" : ""}
+                              <div className="min-w-0">
+                                <p className="text-[9px] md:text-[10px] font-black text-emerald-800 uppercase tracking-wider truncate">
+                                  ID Terhubung
                                 </p>
                               </div>
                             </div>
@@ -3026,39 +3281,39 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                               onClick={() =>
                                 setFormData((prev) => ({ ...prev, rfid: "" }))
                               }
-                              className="text-[10px] font-black text-rose-500 hover:text-rose-700 uppercase tracking-widest px-2.5 py-1 bg-white border border-rose-100 rounded-lg hover:shadow-sm transition-all"
+                              className="text-[8.5px] md:text-[10px] font-black text-rose-500 hover:text-rose-700 uppercase tracking-wider px-2 py-0.5 bg-white border border-rose-100 rounded-lg hover:shadow-sm transition-all shrink-0 ml-1"
                             >
                               Hapus
                             </button>
                           </div>
                         ) : isScanningRfid ? (
-                          <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl md:rounded-2xl space-y-2.5">
+                          <div className="p-2.5 md:p-3 bg-blue-50 border border-blue-200 rounded-xl md:rounded-2xl space-y-2">
                             <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-1.5">
                                 <span className="relative flex h-2 w-2">
                                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
                                   <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
                                 </span>
-                                <p className="text-[10px] font-black text-blue-800 uppercase tracking-wider">
-                                  Menunggu Tap ID Card...
+                                <p className="text-[8.5px] md:text-[10px] font-black text-blue-800 uppercase tracking-wider">
+                                  Scan ID Card...
                                 </p>
                               </div>
                               <button
                                 type="button"
                                 onClick={() => setIsScanningRfid(false)}
-                                className="text-[9px] font-black text-slate-400 hover:text-slate-600 uppercase tracking-widest"
+                                className="text-[8px] md:text-[9px] font-black text-slate-400 hover:text-slate-600 uppercase tracking-widest"
                               >
                                 Batal
                               </button>
                             </div>
                             <div className="relative">
-                              <div className="flex flex-col items-center justify-center py-6 w-full">
+                              <div className="flex flex-col items-center justify-center py-3 md:py-6 w-full">
                                 <CreditCard
-                                  className="text-blue-500 animate-bounce mb-2"
-                                  size={24}
+                                  className="text-blue-500 animate-bounce mb-1"
+                                  size={20}
                                 />
-                                <p className="text-xs font-bold text-blue-700 animate-pulse text-center">
-                                  Tempelkan kartu atau scan kartu
+                                <p className="text-[10px] md:text-xs font-bold text-blue-700 animate-pulse text-center">
+                                  Tempelkan kartu
                                 </p>
                               </div>
                               <input
@@ -3084,9 +3339,6 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                 placeholder=""
                               />
                             </div>
-                            <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider leading-relaxed text-center">
-                              Kartu akan otomatis terdeteksi.
-                            </p>
                           </div>
                         ) : (
                           <button
@@ -3095,36 +3347,33 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                               setIsScanningRfid(true);
                               setIsScanningRfidKtp(false);
                             }}
-                            className="w-full flex items-center justify-center gap-2 py-3.5 bg-slate-50 border border-dashed border-slate-300 hover:border-blue-400 hover:bg-blue-50/20 rounded-xl md:rounded-2xl transition-all group"
+                            className="w-full flex flex-col md:flex-row items-center justify-center gap-1.5 md:gap-2 py-2.5 md:py-3 px-2 bg-slate-50 border border-dashed border-slate-300 hover:border-blue-400 hover:bg-blue-50/20 rounded-xl md:rounded-2xl transition-all group"
                           >
                             <CreditCard
                               className="text-slate-400 group-hover:text-blue-500 transition-colors"
                               size={14}
                             />
-                            <span className="text-xs font-black text-slate-500 group-hover:text-blue-600 uppercase tracking-widest">
-                              Daftarkan ID Card
+                            <span className="text-[9.5px] md:text-xs font-black text-slate-500 group-hover:text-blue-600 uppercase tracking-wider md:tracking-widest text-center truncate">
+                              Daftar ID Card
                             </span>
                           </button>
                         )}
                       </div>
 
                       {/* E-KTP NFC Card */}
-                      <div className="space-y-1 md:space-y-2">
-                        <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
-                          Registrasi E-KTP / NFC Card
+                      <div className="space-y-1 md:space-y-1.5">
+                        <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 truncate block">
+                          E-KTP / NFC Card
                         </label>
                         {formData.rfid_ktp ? (
-                          <div className="flex items-center justify-between p-3 bg-violet-50 border border-violet-200 rounded-xl md:rounded-2xl">
-                            <div className="flex items-center gap-2.5">
-                              <div className="w-6 h-6 rounded-lg bg-violet-500 text-white flex items-center justify-center shadow-sm">
-                                <CheckCircle2 size={12} />
+                          <div className="flex items-center justify-between p-2 md:p-3 bg-violet-50 border border-violet-200 rounded-xl md:rounded-2xl">
+                            <div className="flex items-center gap-1.5 md:gap-2.5 min-w-0">
+                              <div className="w-5 h-5 md:w-6 md:h-6 rounded-lg bg-violet-500 text-white flex items-center justify-center shrink-0">
+                                <CheckCircle2 size={11} />
                               </div>
-                              <div>
-                                <p className="text-[10px] font-black text-violet-800 uppercase tracking-wider">
-                                  E-KTP Terhubung
-                                </p>
-                                <p className="text-[9px] text-violet-600 font-bold uppercase tracking-tight ">
-                                  {formData.rfid_ktp ? "Terdaftar" : ""}
+                              <div className="min-w-0">
+                                <p className="text-[9px] md:text-[10px] font-black text-violet-800 uppercase tracking-wider truncate">
+                                  KTP Terhubung
                                 </p>
                               </div>
                             </div>
@@ -3136,39 +3385,39 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                   rfid_ktp: "",
                                 }))
                               }
-                              className="text-[10px] font-black text-rose-500 hover:text-rose-700 uppercase tracking-widest px-2.5 py-1 bg-white border border-rose-100 rounded-lg hover:shadow-sm transition-all"
+                              className="text-[8.5px] md:text-[10px] font-black text-rose-500 hover:text-rose-700 uppercase tracking-wider px-2 py-0.5 bg-white border border-rose-100 rounded-lg hover:shadow-sm transition-all shrink-0 ml-1"
                             >
                               Hapus
                             </button>
                           </div>
                         ) : isScanningRfidKtp ? (
-                          <div className="p-3 bg-violet-50 border border-violet-200 rounded-xl md:rounded-2xl space-y-2.5">
+                          <div className="p-2.5 md:p-3 bg-violet-50 border border-violet-200 rounded-xl md:rounded-2xl space-y-2">
                             <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-1.5">
                                 <span className="relative flex h-2 w-2">
                                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75"></span>
                                   <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-500"></span>
                                 </span>
-                                <p className="text-[10px] font-black text-violet-800 uppercase tracking-wider">
-                                  Menunggu Tap E-KTP...
+                                <p className="text-[8.5px] md:text-[10px] font-black text-violet-800 uppercase tracking-wider">
+                                  Scan E-KTP...
                                 </p>
                               </div>
                               <button
                                 type="button"
                                 onClick={() => setIsScanningRfidKtp(false)}
-                                className="text-[9px] font-black text-slate-400 hover:text-slate-600 uppercase tracking-widest"
+                                className="text-[8px] md:text-[9px] font-black text-slate-400 hover:text-slate-600 uppercase tracking-widest"
                               >
                                 Batal
                               </button>
                             </div>
                             <div className="relative">
-                              <div className="flex flex-col items-center justify-center py-6 w-full">
+                              <div className="flex flex-col items-center justify-center py-3 md:py-6 w-full">
                                 <CreditCard
-                                  className="text-violet-500 animate-bounce mb-2"
-                                  size={24}
+                                  className="text-violet-500 animate-bounce mb-1"
+                                  size={20}
                                 />
-                                <p className="text-xs font-bold text-violet-700 animate-pulse text-center">
-                                  Tempelkan kartu atau scan kartu
+                                <p className="text-[10px] md:text-xs font-bold text-violet-700 animate-pulse text-center">
+                                  Tempelkan kartu
                                 </p>
                               </div>
                               <input
@@ -3194,9 +3443,6 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                 placeholder=""
                               />
                             </div>
-                            <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider leading-relaxed text-center">
-                              Kartu akan otomatis terdeteksi.
-                            </p>
                           </div>
                         ) : (
                           <button
@@ -3205,14 +3451,14 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                               setIsScanningRfidKtp(true);
                               setIsScanningRfid(false);
                             }}
-                            className="w-full flex items-center justify-center gap-2 py-3.5 bg-slate-50 border border-dashed border-slate-300 hover:border-violet-400 hover:bg-violet-50/20 rounded-xl md:rounded-2xl transition-all group"
+                            className="w-full flex flex-col md:flex-row items-center justify-center gap-1.5 md:gap-2 py-2.5 md:py-3 px-2 bg-slate-50 border border-dashed border-slate-300 hover:border-violet-400 hover:bg-violet-50/20 rounded-xl md:rounded-2xl transition-all group"
                           >
                             <CreditCard
                               className="text-slate-400 group-hover:text-violet-500 transition-colors"
                               size={14}
                             />
-                            <span className="text-xs font-black text-slate-500 group-hover:text-violet-600 uppercase tracking-widest">
-                              Daftarkan E-KTP (NFC)
+                            <span className="text-[9.5px] md:text-xs font-black text-slate-500 group-hover:text-violet-600 uppercase tracking-wider md:tracking-widest text-center truncate">
+                              Daftar E-KTP
                             </span>
                           </button>
                         )}
@@ -3222,26 +3468,26 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                 </div>
 
                 {/* Section: Afiliasi & Penempatan */}
-                <div className="space-y-6 md:space-y-8">
-                  <div className="flex items-center gap-3 md:gap-4">
-                    <div className="w-8 h-8 md:w-10 md:h-10 bg-emerald-50 text-emerald-600 rounded-xl md:rounded-2xl flex items-center justify-center shrink-0">
-                      <MapPin size={16} className="md:w-5 md:h-5" />
+                <div className="space-y-3 md:space-y-5">
+                  <div className="flex items-center gap-2 md:gap-3">
+                    <div className="w-7 h-7 md:w-9 md:h-9 bg-emerald-50 text-emerald-600 rounded-lg md:rounded-xl flex items-center justify-center shrink-0">
+                      <MapPin size={14} className="md:w-4 md:h-4" />
                     </div>
-                    <h4 className="text-[10px] md:text-sm font-black text-slate-700 uppercase tracking-widest">
+                    <h4 className="text-[9.5px] md:text-xs font-black text-slate-700 uppercase tracking-wider md:tracking-widest">
                       Penempatan
                     </h4>
                     <div className="h-px bg-slate-100 flex-1"></div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
-                    <div className="space-y-1 md:space-y-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5 md:gap-5">
+                    {/* Daerah & Desa berdampingan di mobile */}
+                    <div className="col-span-1 space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
                         Daerah Terdaftar
                       </label>
                       <ModernSelect
                         value={String(formData.daerah_id || "")}
                         onChange={(val) => {
-                          // When Daerah is changed, if the current desa belongs to a different daerah, reset desa & kelompok
                           const matchedDesa = desas.find(
                             (d) => String(d.id) === String(formData.desa_id),
                           );
@@ -3262,8 +3508,9 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                         placeholder="Pilih Daerah"
                       />
                     </div>
-                    <div className="space-y-1 md:space-y-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
+
+                    <div className="col-span-1 space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
                         Desa Terdaftar *
                       </label>
                       <ModernSelect
@@ -3306,11 +3553,13 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                             value: String(d.id),
                             label: d.nama_desa,
                           }))}
-                        placeholder="Pilih Desa Asal"
+                        placeholder="Pilih Desa"
                       />
                     </div>
-                    <div className="space-y-1 md:space-y-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
+
+                    {/* Kelompok */}
+                    <div className="col-span-2 md:col-span-1 space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
                         Kelompok *
                       </label>
                       <ModernSelect
@@ -3332,14 +3581,15 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                         placeholder="Pilih Kelompok"
                       />
                     </div>
-                    <div className="space-y-1 md:space-y-2 md:col-span-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
+
+                    <div className="col-span-2 md:col-span-3 space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
                         Alamat Tinggal Lengkap
                       </label>
                       <div className="relative">
                         <Home
-                          className="absolute left-3 md:left-4 top-4 md:top-5 text-slate-300"
-                          size={14}
+                          className="absolute left-2.5 md:left-3.5 top-3 md:top-3.5 text-slate-300"
+                          size={13}
                         />
                         <textarea
                           value={formData.alamat_rumah}
@@ -3349,7 +3599,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                               alamat_rumah: e.target.value,
                             })
                           }
-                          className="w-full pl-10 md:pl-12 pr-4 md:pr-5 py-3 md:py-4 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold min-h-[80px] md:min-h-[100px] resize-none"
+                          className="w-full pl-8 md:pl-10 pr-3 md:pr-4 py-2.5 md:py-3 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold min-h-[64px] md:min-h-[85px] resize-none"
                           placeholder="Alamat lengkap..."
                         />
                       </div>
@@ -3358,25 +3608,25 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                 </div>
 
                 {/* Section: Label & Kategori */}
-                <div className="space-y-6 md:space-y-8">
-                  <div className="flex items-center gap-3 md:gap-4">
-                    <div className="w-8 h-8 md:w-10 md:h-10 bg-indigo-50 text-indigo-600 rounded-xl md:rounded-2xl flex items-center justify-center shrink-0">
-                      <LayoutGrid size={16} className="md:w-5 md:h-5" />
+                <div className="space-y-3 md:space-y-5">
+                  <div className="flex items-center gap-2 md:gap-3">
+                    <div className="w-7 h-7 md:w-9 md:h-9 bg-indigo-50 text-indigo-600 rounded-lg md:rounded-xl flex items-center justify-center shrink-0">
+                      <LayoutGrid size={14} className="md:w-4 md:h-4" />
                     </div>
-                    <h4 className="text-[10px] md:text-sm font-black text-slate-700 uppercase tracking-widest">
+                    <h4 className="text-[9.5px] md:text-xs font-black text-slate-700 uppercase tracking-wider md:tracking-widest">
                       Label / Tagging Anggota
                     </h4>
                     <div className="h-px bg-slate-100 flex-1"></div>
                   </div>
 
-                  <div className="bg-slate-50/50 border border-slate-100 rounded-2xl p-4 md:p-6">
-                    <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 leading-none">
+                  <div className="bg-slate-50/50 border border-slate-100 rounded-xl md:rounded-2xl p-3 md:p-5">
+                    <p className="text-[9.5px] md:text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5 leading-none">
                       Pilih label kustom untuk anggota ini:
                     </p>
                     {allLabels.length === 0 ? (
                       <p className="text-xs text-slate-400 font-medium">Belum ada label kustom yang dibuat. Kelola label di tab Group & Master.</p>
                     ) : (
-                      <div className="flex flex-wrap gap-2 md:gap-3">
+                      <div className="flex flex-wrap gap-2 md:gap-2.5">
                         {allLabels.map((lbl) => {
                           const isChecked = (formData.labels || []).includes(lbl.name);
                           return (
@@ -3390,9 +3640,9 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                   : [...current, lbl.name];
                                 setFormData({ ...formData, labels: next });
                               }}
-                              className={`px-3 py-2 rounded-xl text-xs font-black transition-all border ${
+                              className={`px-2.5 py-1.5 md:px-3.5 md:py-2 rounded-lg md:rounded-xl text-[11px] md:text-xs font-black transition-all border ${
                                 isChecked
-                                  ? "bg-indigo-600 border-indigo-600 text-white shadow-sm"
+                                  ? "bg-indigo-600 border-indigo-600 text-white shadow-xs"
                                   : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
                               }`}
                             >
@@ -3406,31 +3656,37 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                 </div>
 
                 {/* Section: Keluarga & Peranan */}
-                <div className="space-y-6 md:space-y-8">
-                  <div className="flex items-center gap-3 md:gap-4">
-                    <div className="w-8 h-8 md:w-10 md:h-10 bg-amber-50 text-amber-600 rounded-xl md:rounded-2xl flex items-center justify-center shrink-0">
-                      <Users size={16} className="md:w-5 md:h-5" />
+                <div className="space-y-3 md:space-y-5">
+                  <div className="flex items-center gap-2 md:gap-3">
+                    <div className="w-7 h-7 md:w-9 md:h-9 bg-amber-50 text-amber-600 rounded-lg md:rounded-xl flex items-center justify-center shrink-0">
+                      <Users size={14} className="md:w-4 md:h-4" />
                     </div>
-                    <h4 className="text-[10px] md:text-sm font-black text-slate-700 uppercase tracking-widest">
+                    <h4 className="text-[9.5px] md:text-xs font-black text-slate-700 uppercase tracking-wider md:tracking-widest">
                       Keluarga &amp; Peranan
                     </h4>
                     <div className="h-px bg-slate-100 flex-1"></div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-8">
-                    <div className="space-y-1 md:space-y-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
-                        Hubungkan Keluarga / KK
+                  <div className="grid grid-cols-2 md:grid-cols-2 gap-2.5 md:gap-5">
+                    {/* Hubungan Keluarga / KK & Peranan berdampingan */}
+                    <div className="col-span-1 space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
+                        Keluarga / KK
                       </label>
                       <ModernSelect
                         value={String(formData.family_id || "")}
-                        onChange={(val) =>
-                          setFormData({ ...formData, family_id: val })
-                        }
+                        onChange={(val) => {
+                          setFormData({
+                            ...formData,
+                            family_id: val,
+                            // Jika KK dikosongkan, reset peranan/hubungan
+                            relationship_id: val ? formData.relationship_id : "",
+                          });
+                        }}
                         options={[
                           {
                             value: "",
-                            label: "-- Tanpa Keluarga (Pribadi) --",
+                            label: "-- Pribadi --",
                           },
                           ...(families || []).map((f) => ({
                             value: String(f.id),
@@ -3440,8 +3696,9 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                         placeholder="Pilih Keluarga"
                       />
                     </div>
-                    <div className="space-y-1 md:space-y-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
+
+                    <div className="col-span-1 space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
                         Peranan / Hubungan
                       </label>
                       <ModernSelect
@@ -3449,6 +3706,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                         onChange={(val) =>
                           setFormData({ ...formData, relationship_id: val })
                         }
+                        disabled={!formData.family_id}
                         options={[
                           { value: "", label: "-- Tanpa Hubungan --" },
                           ...(relationships || []).map((r) => {
@@ -3459,40 +3717,17 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                             };
                           }),
                         ]}
-                        placeholder="Pilih Peranan"
+                        placeholder={!formData.family_id ? "Pilih KK Dahulu" : "Pilih Peranan"}
                       />
-                    </div>
-                    <div className="space-y-1 md:space-y-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
-                        Pekerjaan Anggota
-                      </label>
-                      <div className="relative">
-                        <Briefcase
-                          className="absolute left-3 md:left-4 top-1/2 -translate-y-1/2 text-slate-300"
-                          size={14}
-                        />
-                        <input
-                          type="text"
-                          value={formData.pekerjaan || ""}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              pekerjaan: e.target.value,
-                            })
-                          }
-                          className="w-full pl-10 md:pl-12 pr-4 md:pr-5 py-3 md:py-4 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold"
-                          placeholder="Wiraswasta, Pelajar, dsb"
-                        />
-                      </div>
                     </div>
                   </div>
 
                   {formData.family_id && (
-                    <div className="p-4 bg-amber-50/30 border border-amber-100 rounded-2xl space-y-2">
-                      <p className="text-[10px] font-black text-amber-800 uppercase tracking-wider">
+                    <div className="p-3 md:p-4 bg-amber-50/30 border border-amber-100 rounded-xl md:rounded-2xl space-y-2">
+                      <p className="text-[9.5px] md:text-[10px] font-black text-amber-800 uppercase tracking-wider">
                         Deteksi Otomatis Orang Tua / Wali:
                       </p>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 md:gap-3">
                         <div className="bg-white/80 p-2.5 rounded-xl border border-amber-100/40">
                           <p className="text-[8px] font-bold text-slate-400 uppercase">
                             Nama Ayah (Wali)
@@ -3549,20 +3784,20 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                 </div>
 
                 {/* Section: Pendidikan */}
-                <div className="space-y-6 md:space-y-8">
-                  <div className="flex items-center gap-3 md:gap-4">
-                    <div className="w-8 h-8 md:w-10 md:h-10 bg-indigo-50 text-indigo-600 rounded-xl md:rounded-2xl flex items-center justify-center shrink-0">
-                      <GraduationCap size={16} className="md:w-5 md:h-5" />
+                <div className="space-y-3 md:space-y-5">
+                  <div className="flex items-center gap-2 md:gap-3">
+                    <div className="w-7 h-7 md:w-9 md:h-9 bg-indigo-50 text-indigo-600 rounded-lg md:rounded-xl flex items-center justify-center shrink-0">
+                      <GraduationCap size={14} className="md:w-4 md:h-4" />
                     </div>
-                    <h4 className="text-[10px] md:text-sm font-black text-slate-700 uppercase tracking-widest">
+                    <h4 className="text-[9.5px] md:text-xs font-black text-slate-700 uppercase tracking-wider md:tracking-widest">
                       Pendidikan
                     </h4>
                     <div className="h-px bg-slate-100 flex-1"></div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8">
-                    <div className="space-y-1 md:space-y-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
+                  <div className="grid grid-cols-2 md:grid-cols-2 gap-2.5 md:gap-5">
+                    <div className="space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
                         Pendidikan Terakhir
                       </label>
                       <input
@@ -3574,12 +3809,12 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                             pendidikan: e.target.value,
                           })
                         }
-                        className="w-full px-4 md:px-5 py-3 md:py-4 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold"
+                        className="w-full px-3 md:px-4 py-2.5 md:py-3 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold"
                         placeholder="SD, SMP, dsb"
                       />
                     </div>
-                    <div className="space-y-1 md:space-y-2">
-                      <label className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">
+                    <div className="space-y-1 md:space-y-1.5">
+                      <label className="text-[8.5px] md:text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1 block truncate">
                         Kelas / Semester
                       </label>
                       <input
@@ -3588,7 +3823,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                         onChange={(e) =>
                           setFormData({ ...formData, kelas: e.target.value })
                         }
-                        className="w-full px-4 md:px-5 py-3 md:py-4 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold"
+                        className="w-full px-3 md:px-4 py-2.5 md:py-3 bg-slate-50 border border-slate-200 rounded-xl md:rounded-2xl outline-none focus:border-blue-500 focus:bg-white transition-all text-xs md:text-sm font-bold"
                         placeholder="Tingkatan"
                       />
                     </div>
@@ -3596,8 +3831,8 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                 </div>
               </form>
 
-              <div className="p-4 md:px-12 bg-slate-50 border-t border-slate-100 flex flex-col md:flex-row items-center justify-between gap-3 shrink-0">
-                <div className="flex items-center gap-2 w-full md:w-auto">
+              <div className="p-3 md:px-12 md:py-5 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-2 shrink-0">
+                <div className="flex items-center gap-1.5">
                   {editingMember === null && hasDraftContent && (
                     <button
                       type="button"
@@ -3636,34 +3871,26 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                           });
                         }
                       }}
-                      className="w-full md:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700 rounded-xl font-bold text-[9px] md:text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all active:scale-95 border border-slate-200"
+                      className="px-2.5 md:px-4 py-2 md:py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700 rounded-xl font-bold text-[9px] md:text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all active:scale-95 border border-slate-200"
+                      title="Reset Formulir"
                     >
-                      <RotateCcw size={14} />
-                      Mulai Baru (Reset)
+                      <RotateCcw size={13} />
+                      <span className="hidden sm:inline">Mulai Baru (Reset)</span>
+                      <span className="sm:hidden">Reset</span>
                     </button>
                   )}
                 </div>
 
-                <div className="flex flex-col md:flex-row items-center gap-2.5 w-full md:w-auto justify-end">
-                  {editingMember === null && (
-                    <button
-                      type="button"
-                      onClick={() => setShowModal(false)}
-                      className="w-full md:w-auto px-5 py-3 md:py-4 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 rounded-xl md:rounded-2xl text-[10px] md:text-xs font-black uppercase tracking-wider transition-all active:scale-95 flex items-center justify-center gap-2"
-                    >
-                      <Minimize2 size={14} />
-                      Minimalkan Form
-                    </button>
-                  )}
+                <div className="flex items-center gap-2">
                   <button
                     onClick={handleSubmit}
                     disabled={isSubmitting}
-                    className="w-full md:w-auto px-6 md:px-10 py-3 md:py-4 bg-blue-600 text-white rounded-xl md:rounded-2xl font-black text-[10px] md:text-xs uppercase tracking-[0.2em] flex items-center justify-center gap-3 shadow-xl shadow-blue-600/30 active:scale-95 transition-all disabled:opacity-50"
+                    className="px-5 md:px-10 py-2.5 md:py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl md:rounded-2xl font-black text-[10px] md:text-xs uppercase tracking-wider md:tracking-[0.2em] flex items-center justify-center gap-2 md:gap-3 shadow-lg shadow-blue-600/25 active:scale-95 transition-all disabled:opacity-50"
                   >
                     {isSubmitting ? (
-                      <Loader2 className="animate-spin" size={16} />
+                      <Loader2 className="animate-spin" size={14} />
                     ) : (
-                      <Save size={16} />
+                      <Save size={14} />
                     )}
                     Simpan Data
                   </button>
@@ -4061,15 +4288,42 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
 
       {/* Mobile Floating Action Button */}
       {canWrite && (
-        <motion.button
-          initial={{ scale: 0, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          whileTap={{ scale: 0.9 }}
-          onClick={handleOpenAdd}
-          className="md:hidden fixed right-6 bottom-24 z-40 w-14 h-14 bg-blue-600 text-white rounded-full shadow-2xl flex items-center justify-center active:scale-95 transition-all"
-        >
-          <UserPlus size={24} />
-        </motion.button>
+        batchManageLabel ? (
+          <motion.button
+            key="fab-save-batch"
+            initial={{ scale: 0, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={handleSaveBatch}
+            disabled={isSavingBatch}
+            aria-label="Simpan Penugasan Label"
+            className="md:hidden fixed right-4 bottom-[62px] z-[45] px-4 h-11 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-full shadow-lg shadow-emerald-600/35 border border-white/20 flex items-center justify-center gap-1.5 active:scale-90 transition-all cursor-pointer font-black text-[11px] uppercase tracking-wider disabled:opacity-50"
+          >
+            {isSavingBatch ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                <span>Menyimpan...</span>
+              </>
+            ) : (
+              <>
+                <Save size={16} />
+                <span>Simpan ({batchSelectedIds.size})</span>
+              </>
+            )}
+          </motion.button>
+        ) : (
+          <motion.button
+            key="fab-add-member"
+            initial={{ scale: 0, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={handleOpenAdd}
+            aria-label="Tambah Anggota"
+            className="md:hidden fixed right-4 bottom-[62px] z-[45] w-11 h-11 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-lg shadow-blue-600/35 border border-white/20 flex items-center justify-center active:scale-90 transition-all"
+          >
+            <UserPlus size={19} />
+          </motion.button>
+        )
       )}
     </div>
   );

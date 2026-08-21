@@ -536,7 +536,6 @@ create table if not exists public.members (
   relationship_id text,
   pekerjaan text,
   status text,
-  labels text[],
   instansi text not null default public.get_user_instansi()
 );
 
@@ -547,6 +546,21 @@ create table if not exists public.labels (
   created_at timestamp with time zone default now(),
   instansi text not null default public.get_user_instansi()
 );
+
+-- entity_labels pivot table (Polymorphic Relation for Members & Events)
+create table if not exists public.entity_labels (
+  id text primary key default gen_random_uuid()::text,
+  label_id text not null references public.labels(id) on delete cascade,
+  target_id text not null,
+  target_type text not null default 'member', -- 'member' atau 'event'
+  created_at timestamp with time zone default now(),
+  instansi text not null default public.get_user_instansi(),
+  unique (label_id, target_id, target_type, instansi)
+);
+
+create index if not exists idx_entity_labels_target on public.entity_labels(target_id, target_type, instansi);
+create index if not exists idx_entity_labels_label on public.entity_labels(label_id, instansi);
+create index if not exists idx_entity_labels_instansi on public.entity_labels(instansi);
 
 -- attendance_logs table
 create table if not exists public.attendance_logs (
@@ -577,7 +591,6 @@ create table if not exists public.events (
   created_at timestamp with time zone default now(),
   updated_at timestamp with time zone default now(),
   jam_mulai text,
-  target_labels text[],
   instansi text not null default public.get_user_instansi()
 );
 
@@ -737,6 +750,18 @@ create policy "Strict Instansi Select RLS" on public.labels for select to authen
 create policy "Strict Instansi Insert RLS" on public.labels for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
 create policy "Strict Instansi Update RLS" on public.labels for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
 create policy "Strict Instansi Delete RLS" on public.labels for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
+-- ENTITY_LABELS
+alter table public.entity_labels enable row level security;
+drop policy if exists "Strict Instansi Select RLS" on public.entity_labels;
+drop policy if exists "Strict Instansi Insert RLS" on public.entity_labels;
+drop policy if exists "Strict Instansi Update RLS" on public.entity_labels;
+drop policy if exists "Strict Instansi Delete RLS" on public.entity_labels;
+create policy "Strict Instansi Select RLS" on public.entity_labels for select to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Insert RLS" on public.entity_labels for insert to authenticated with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Update RLS" on public.entity_labels for update to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi()) with check (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+create policy "Strict Instansi Delete RLS" on public.entity_labels for delete to authenticated using (public.get_user_role() = 'PortalMaster' or instansi = public.get_user_instansi());
+
 
 -- ATTENDANCE_LOGS
 alter table public.attendance_logs enable row level security;

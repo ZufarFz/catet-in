@@ -3,7 +3,7 @@ import supabaseConfigRaw from './supabase-applet-config.json';
 import { 
   Transaction, DeletedTransaction, EditHistory, ProjectMetadata, 
   AbsensiMember, AttendanceLog, DesaData, KelompokData, AgeCategoryData, DaerahData, EventData,
-  Family, FamilyRelationship, LabelData
+  Family, FamilyRelationship, LabelData, MemberLabel, EntityLabel
 } from './types';
 
 // Load Supabase central configurations
@@ -500,6 +500,117 @@ export async function dbUpdateProjectStatus(name: string, status: string) {
   }
 }
 
+
+// Helper to resolve entity labels for a given target_type ('member' | 'event')
+async function fetchAndMapEntityLabels(targetType: 'member' | 'event'): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>();
+  try {
+    const client = getActiveDb();
+    const instansi = getInstansiContext();
+
+    let elQuery = client.from('entity_labels').select('label_id, target_id').eq('target_type', targetType);
+    let lblQuery = client.from('labels').select('id, name');
+    if (instansi) {
+      elQuery = elQuery.eq('instansi', instansi);
+      lblQuery = lblQuery.eq('instansi', instansi);
+    }
+
+    const [elRes, lblRes] = await Promise.all([elQuery, lblQuery]);
+
+    let elData = elRes.data;
+    if (elRes.error && targetType === 'member') {
+      try {
+        let fallbackQuery = client.from('member_labels').select('label_id, member_id');
+        if (instansi) fallbackQuery = fallbackQuery.eq('instansi', instansi);
+        const fbRes = await fallbackQuery;
+        if (!fbRes.error && fbRes.data) {
+          elData = fbRes.data.map((r: any) => ({ label_id: r.label_id, target_id: r.member_id }));
+        }
+      } catch (fbErr) {
+        // ignore
+      }
+    }
+
+    if (!elData || lblRes.error) {
+      return map;
+    }
+
+    const labelMap = new Map<string, string>();
+    (lblRes.data || []).forEach((lbl: any) => {
+      labelMap.set(lbl.id, lbl.name);
+    });
+
+    (elData || []).forEach((el: any) => {
+      const labelName = labelMap.get(el.label_id);
+      if (labelName) {
+        const list = map.get(el.target_id) || [];
+        if (!list.includes(labelName)) {
+          list.push(labelName);
+        }
+        map.set(el.target_id, list);
+      }
+    });
+  } catch (e) {
+    console.warn(`Error resolving entity_labels for ${targetType}:`, e);
+  }
+  return map;
+}
+
+export async function dbAssignEntityLabels(
+  targetId: string,
+  targetType: 'member' | 'event',
+  labelNamesOrIds: string[]
+): Promise<boolean> {
+  try {
+    const client = getActiveDb();
+    const instansi = getInstansiContext() || 'Catet-In (Master)';
+
+    let delQuery = client.from('entity_labels').delete().eq('target_id', targetId).eq('target_type', targetType);
+    if (instansi) {
+      delQuery = delQuery.eq('instansi', instansi);
+    }
+    await delQuery;
+
+    if (!labelNamesOrIds || labelNamesOrIds.length === 0) {
+      return true;
+    }
+
+    let lblQuery = client.from('labels').select('id, name');
+    if (instansi) lblQuery = lblQuery.eq('instansi', instansi);
+    const { data: allLabels } = await lblQuery;
+    const labelList = allLabels || [];
+
+    const labelIdsToInsert: string[] = [];
+    for (const item of labelNamesOrIds) {
+      const byId = labelList.find((l: any) => l.id === item);
+      if (byId) {
+        labelIdsToInsert.push(byId.id);
+        continue;
+      }
+      const byName = labelList.find((l: any) => l.name.trim().toLowerCase() === item.trim().toLowerCase());
+      if (byName) {
+        labelIdsToInsert.push(byName.id);
+      }
+    }
+
+    const uniqueIds = Array.from(new Set(labelIdsToInsert));
+    if (uniqueIds.length > 0) {
+      const rows = uniqueIds.map((lid) => ({
+        label_id: lid,
+        target_id: targetId,
+        target_type: targetType,
+        instansi: instansi,
+      }));
+      await client.from('entity_labels').insert(rows);
+    }
+
+    return true;
+  } catch (err) {
+    console.warn(`Error in dbAssignEntityLabels (${targetType}/${targetId}):`, err);
+    return false;
+  }
+}
+
 // 8. Attendance Members
 export async function dbGetMembers() {
   try {
@@ -509,9 +620,22 @@ export async function dbGetMembers() {
     if (instansi) {
       query = query.eq('instansi', instansi);
     }
-    const { data, error } = await query.order('nama_lengkap', { ascending: true });
-    if (error) return handleSupabaseError(error, OperationType.LIST, 'members');
-    return (data || []) as AbsensiMember[];
+    const [membersRes, entityLabelsMap] = await Promise.all([
+      query.order('nama_lengkap', { ascending: true }),
+      fetchAndMapEntityLabels('member')
+    ]);
+
+    if (membersRes.error) return handleSupabaseError(membersRes.error, OperationType.LIST, 'members');
+    
+    const rawList = (membersRes.data || []) as AbsensiMember[];
+    return rawList.map((m) => {
+      const pivotLabels = entityLabelsMap.get(m.id) || [];
+      const resolvedLabels = pivotLabels.length > 0 ? pivotLabels : (m.labels || []);
+      return {
+        ...m,
+        labels: resolvedLabels
+      };
+    });
   } catch (err) {
     console.error("Error inside dbGetMembers:", err);
     return [];
@@ -521,13 +645,17 @@ export async function dbGetMembers() {
 export async function dbAddMember(mbr: AbsensiMember) {
   try {
     const client = getActiveDb();
-    const { daerah_name, desa_name, kelompok_name, age_category_name, family_name, relationship_name, is_wali, nama_ortu, no_hp_ortu, pekerjaan_ortu, ...cleanMbr } = mbr;
+    const { daerah_name, desa_name, kelompok_name, age_category_name, family_name, relationship_name, is_wali, nama_ortu, no_hp_ortu, pekerjaan_ortu, labels, ...cleanMbr } = mbr;
     const instansi = getInstansiContext();
     if (instansi && !(cleanMbr as any).instansi) {
       (cleanMbr as any).instansi = instansi;
     }
     const { error } = await client.from('members').upsert([cleanMbr]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `members/${mbr.id}`);
+
+    if (labels !== undefined) {
+      await dbAssignEntityLabels(mbr.id, 'member', labels);
+    }
     return true;
   } catch (err) {
     return false;
@@ -537,13 +665,17 @@ export async function dbAddMember(mbr: AbsensiMember) {
 export async function dbUpdateMember(id: string, mbr: Partial<AbsensiMember>) {
   try {
     const client = getActiveDb();
-    const { daerah_name, desa_name, kelompok_name, age_category_name, family_name, relationship_name, is_wali, nama_ortu, no_hp_ortu, pekerjaan_ortu, ...cleanMbr } = mbr as any;
+    const { daerah_name, desa_name, kelompok_name, age_category_name, family_name, relationship_name, is_wali, nama_ortu, no_hp_ortu, pekerjaan_ortu, labels, ...cleanMbr } = mbr as any;
     const instansi = getInstansiContext();
     if (instansi && !cleanMbr.instansi) {
       cleanMbr.instansi = instansi;
     }
     const { error } = await client.from('members').update(cleanMbr).eq('id', id);
     if (error) return handleSupabaseError(error, OperationType.UPDATE, `members/${id}`);
+
+    if (labels !== undefined) {
+      await dbAssignEntityLabels(id, 'member', labels);
+    }
     return true;
   } catch (err) {
     return false;
@@ -709,15 +841,29 @@ export async function dbGetRecentEvents(limitCount: number = 5): Promise<EventDa
       query = query.eq('instansi', instansi);
     }
     query = query.order('updated_at', { ascending: false }).limit(limitCount);
-    const { data, error } = await query;
-    if (error || !data || data.length === 0) {
+    
+    const [eventsRes, entityLabelsMap] = await Promise.all([
+      query,
+      fetchAndMapEntityLabels('event')
+    ]);
+
+    let data = eventsRes.data;
+    if (eventsRes.error || !data || data.length === 0) {
       let fallbackQuery = client.from('events').select('*');
       if (instansi) fallbackQuery = fallbackQuery.eq('instansi', instansi);
       fallbackQuery = fallbackQuery.order('created_at', { ascending: false }).limit(limitCount);
       const { data: fallbackData } = await fallbackQuery;
-      return (fallbackData || []) as EventData[];
+      data = fallbackData;
     }
-    return (data || []) as EventData[];
+    const rawEvents = (data || []) as EventData[];
+    return rawEvents.map((e) => {
+      const pivotLabels = entityLabelsMap.get(e.id) || [];
+      const resolvedLabels = pivotLabels.length > 0 ? pivotLabels : (e.target_labels || []);
+      return {
+        ...e,
+        target_labels: resolvedLabels
+      };
+    });
   } catch (err) {
     return [];
   }
@@ -1369,9 +1515,22 @@ export async function dbGetEvents() {
     if (instansi) {
       query = query.eq('instansi', instansi);
     }
-    const { data, error } = await query.order('updated_at', { ascending: false, nullsFirst: false });
-    if (error) return handleSupabaseError(error, OperationType.LIST, 'events');
-    return (data || []) as EventData[];
+    const [eventsRes, entityLabelsMap] = await Promise.all([
+      query.order('updated_at', { ascending: false, nullsFirst: false }),
+      fetchAndMapEntityLabels('event')
+    ]);
+
+    if (eventsRes.error) return handleSupabaseError(eventsRes.error, OperationType.LIST, 'events');
+    
+    const rawEvents = (eventsRes.data || []) as EventData[];
+    return rawEvents.map((e) => {
+      const pivotLabels = entityLabelsMap.get(e.id) || [];
+      const resolvedLabels = pivotLabels.length > 0 ? pivotLabels : (e.target_labels || []);
+      return {
+        ...e,
+        target_labels: resolvedLabels
+      };
+    });
   } catch (err) {
     console.error("Error inside dbGetEvents:", err);
     return [];
@@ -1382,8 +1541,9 @@ export async function dbAddEvent(event: EventData) {
   try {
     const client = getActiveDb();
     const instansi = getInstansiContext();
+    const { target_labels, ...cleanEvent } = event as any;
     const dbEvent = { 
-      ...event, 
+      ...cleanEvent, 
       updated_at: new Date().toISOString() 
     } as any;
     if (instansi && !dbEvent.instansi) {
@@ -1391,6 +1551,10 @@ export async function dbAddEvent(event: EventData) {
     }
     const { error } = await client.from('events').upsert([dbEvent]);
     if (error) return handleSupabaseError(error, OperationType.WRITE, `events/${event.id}`);
+
+    if (target_labels !== undefined) {
+      await dbAssignEntityLabels(event.id, 'event', target_labels);
+    }
     return true;
   } catch (err) {
     return false;
@@ -1400,8 +1564,15 @@ export async function dbAddEvent(event: EventData) {
 export async function dbDeleteEvent(id: string) {
   try {
     const client = getActiveDb();
+    const instansi = getInstansiContext();
     const { error } = await client.from('events').delete().eq('id', id);
     if (error) return handleSupabaseError(error, OperationType.DELETE, `events/${id}`);
+    
+    // Clean up entity_labels
+    let delPivot = client.from('entity_labels').delete().eq('target_id', id).eq('target_type', 'event');
+    if (instansi) delPivot = delPivot.eq('instansi', instansi);
+    await delPivot;
+
     return true;
   } catch (err) {
     return false;
@@ -1414,7 +1585,7 @@ export function dbSubscribeEvents(callback: (events: EventData[]) => void, onErr
   return () => {};
 }
 
-// 9.6 Labels Management (Label Anggota)
+// 9.6 Labels Management (Label Anggota & Event)
 export async function dbGetLabels() {
   try {
     const client = getActiveDb();
@@ -1451,11 +1622,86 @@ export async function dbAddLabel(lbl: LabelData) {
 export async function dbDeleteLabel(id: string) {
   try {
     const client = getActiveDb();
+    const instansi = getInstansiContext();
     const { error } = await client.from('labels').delete().eq('id', id);
     if (error) return handleSupabaseError(error, OperationType.DELETE, `labels/${id}`);
+
+    // Clean up entity_labels
+    let delPivot = client.from('entity_labels').delete().eq('label_id', id);
+    if (instansi) delPivot = delPivot.eq('instansi', instansi);
+    await delPivot;
+
     return true;
   } catch (err) {
     return false;
+  }
+}
+
+// 9.7 Entity Labels Polymorphic Pivot Table (Members & Events)
+export async function dbGetEntityLabels(targetType?: 'member' | 'event', targetId?: string): Promise<EntityLabel[]> {
+  try {
+    const client = getActiveDb();
+    let query = client.from('entity_labels').select('*');
+    const instansi = getInstansiContext();
+    if (instansi) {
+      query = query.eq('instansi', instansi);
+    }
+    if (targetType) {
+      query = query.eq('target_type', targetType);
+    }
+    if (targetId) {
+      query = query.eq('target_id', targetId);
+    }
+    const { data, error } = await query;
+    if (error) {
+      console.warn("entity_labels query note:", error.message);
+      return [];
+    }
+    return (data || []) as EntityLabel[];
+  } catch (err) {
+    console.warn("Error in dbGetEntityLabels:", err);
+    return [];
+  }
+}
+
+// Backward-compatibility alias
+export const dbGetMemberLabels = () => dbGetEntityLabels('member');
+
+export async function dbBatchAssignMembersToLabel(
+  labelId: string,
+  targetMemberIds: string[],
+  labelName?: string,
+  allMembers?: AbsensiMember[]
+): Promise<{ success: boolean; updatedCount: number }> {
+  try {
+    const client = getActiveDb();
+    const instansi = getInstansiContext() || 'Catet-In (Master)';
+
+    // 1. Delete all existing entity_labels for this label_id where target_type = 'member'
+    try {
+      let delQuery = client.from('entity_labels').delete().eq('label_id', labelId).eq('target_type', 'member');
+      if (instansi) {
+        delQuery = delQuery.eq('instansi', instansi);
+      }
+      await delQuery;
+
+      if (targetMemberIds.length > 0) {
+        const rowsToInsert = targetMemberIds.map((mId) => ({
+          target_id: mId,
+          target_type: 'member',
+          label_id: labelId,
+          instansi: instansi,
+        }));
+        await client.from('entity_labels').insert(rowsToInsert);
+      }
+    } catch (pivotErr) {
+      console.warn("Pivot table entity_labels update warning:", pivotErr);
+    }
+
+    return { success: true, updatedCount: targetMemberIds.length };
+  } catch (err) {
+    console.error("Error in dbBatchAssignMembersToLabel:", err);
+    return { success: false, updatedCount: 0 };
   }
 }
 
@@ -1651,8 +1897,15 @@ export async function dbDeleteAgeCategory(id: string) {
 export async function dbDeleteMember(id: string) {
   try {
     const client = getActiveDb();
+    const instansi = getInstansiContext();
     const { error } = await client.from('members').delete().eq('id', id);
     if (error) return handleSupabaseError(error, OperationType.DELETE, `members/${id}`);
+
+    // Clean up entity_labels
+    let delPivot = client.from('entity_labels').delete().eq('target_id', id).eq('target_type', 'member');
+    if (instansi) delPivot = delPivot.eq('instansi', instansi);
+    await delPivot;
+
     return true;
   } catch (err) {
     return false;

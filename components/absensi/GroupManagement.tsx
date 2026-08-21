@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { LayoutGrid, Plus, Edit2, Trash2, Loader2, X, Save, AlertCircle, CheckCircle2, MapPin, Users, History, Info, CalendarDays, ChevronDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { DesaData, KelompokData, AgeCategoryData, DaerahData, EventData, Family, FamilyRelationship, LabelData } from '../../types';
+import { DesaData, KelompokData, AgeCategoryData, DaerahData, EventData, Family, FamilyRelationship, LabelData, AbsensiMember } from '../../types';
 import { 
   dbAddDesa, dbDeleteDesa, dbAddKelompok, dbDeleteKelompok, 
   dbAddAgeCategory, dbDeleteAgeCategory, dbAddDaerah, dbDeleteDaerah, 
@@ -28,6 +28,8 @@ interface GroupManagementProps {
   setFamilies?: React.Dispatch<React.SetStateAction<Family[]>>;
   relationships?: FamilyRelationship[];
   setRelationships?: React.Dispatch<React.SetStateAction<FamilyRelationship[]>>;
+  members?: AbsensiMember[];
+  onManageLabelMembers?: (label: LabelData) => void;
   appScriptMaster: string;
   canWrite: boolean;
   onRefresh: () => void;
@@ -42,6 +44,8 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
   events = [], setEvents,
   families = [], setFamilies,
   relationships = [], setRelationships,
+  members = [],
+  onManageLabelMembers,
   appScriptMaster, canWrite, onRefresh, isLoading 
 }) => {
   const [activeType, setActiveType] = useState<GroupType>('age');
@@ -1131,9 +1135,16 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
                               {item.description || 'Tidak ada deskripsi.'}
                             </p>
                           ) : isLabel ? (
-                            <p className="text-[9px] md:text-[10px] font-bold text-slate-500 leading-none truncate">
-                              Tag kustom aktif anggota
-                            </p>
+                            <div className="flex items-center gap-1.5 text-[9px] md:text-[10px] text-slate-500 leading-none truncate flex-wrap">
+                              <span className="text-[7.5px] md:text-[8.5px] font-black text-cyan-700 bg-cyan-50/90 px-1.5 py-0.5 rounded-md border border-cyan-200/50 inline-flex items-center gap-1">
+                                <Users size={9} />
+                                {(() => {
+                                  const count = (members || []).filter(m => (m.labels || []).includes(item.name)).length;
+                                  return `${count} Anggota`;
+                                })()}
+                              </span>
+                              <span className="text-slate-400 font-medium text-[8px]">Tag kustom aktif</span>
+                            </div>
                           ) : isEvent ? (
                             <div className="flex flex-col gap-1 mt-1">
                               <div className="flex items-center gap-1.5 text-[9px] md:text-[10px] text-slate-500 leading-none truncate flex-wrap">
@@ -1216,6 +1227,17 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
                     {/* Compact actions block */}
                     {isAllowedToEditActiveType && (
                       <div className="flex items-center gap-1 shrink-0 bg-slate-100/40 hover:bg-slate-100/80 p-0.5 rounded-lg border border-slate-100 transition-colors">
+                        {isLabel && onManageLabelMembers && (
+                          <button 
+                            type="button"
+                            onClick={() => onManageLabelMembers(item)} 
+                            className="px-2 py-1 bg-cyan-500 hover:bg-cyan-600 text-white rounded-md transition-all active:scale-95 flex items-center gap-1 text-[8px] md:text-[9px] font-black uppercase tracking-wider shadow-xs cursor-pointer"
+                            title="Kelola Anggota Label ini"
+                          >
+                            <Users className="size-3 md:size-3.5 shrink-0" />
+                            <span className="whitespace-nowrap">Kelola</span>
+                          </button>
+                        )}
                         {isAge && (
                           <>
                             <button 
