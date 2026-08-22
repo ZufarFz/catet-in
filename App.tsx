@@ -30,6 +30,7 @@ import AttendanceForm from './components/absensi/AttendanceForm';
 import AttendanceHistory from './components/absensi/AttendanceHistory';
 import MemberManagement from './components/absensi/MemberManagement';
 import GroupManagement from './components/absensi/GroupManagement';
+import { CurvedBottomNav } from './components/ui/CurvedBottomNav';
 
 const cleanNumber = (val: any): number => {
   if (val === null || val === undefined || val === '') return 0;
@@ -2364,7 +2365,7 @@ const App: React.FC = () => {
             <button onClick={() => openConfirm("Keluar?", "Sesi akan diakhiri.", "Ya, Keluar", handleLogout, true)} className="p-1.5 text-rose-500 bg-rose-50 rounded-lg transition-all border border-rose-100"><LogOut size={16} /></button>
           </div>
         </div>
-        <div className="flex-1 relative overflow-hidden bg-slate-50/20 pb-[50px] md:pb-0">
+        <div className="flex-1 relative overflow-hidden bg-slate-50/20 pb-[64px] md:pb-0">
           {currentApp === 'bendahara' ? (
             <>
               <TabView id="dashboard" activeTab={activeTab}><Dashboard transactions={transactions} globalStats={globalStats} isLoading={isLoading} isActive={activeTab === 'dashboard'} username={fullName} role={roleRaw} /></TabView>
@@ -2424,17 +2425,12 @@ const App: React.FC = () => {
             </TabView>
           )}
         </div>
-        <div className="md:hidden fixed bottom-0 left-0 right-0 w-full bg-[#00254A]/95 backdrop-blur-xl flex justify-around items-center h-[50px] px-2 shadow-[0_-4px_16px_rgba(0,0,0,0.15)] z-[50] border-t border-white/10">
-          {navItems.map(t => (
-            <button key={t.id} onClick={() => setActiveTab(t.id as AppTab)} className={`flex flex-col items-center justify-center space-y-0.5 transition-all flex-1 h-full relative ${activeTab === t.id ? 'text-[#00AEEF]' : 'text-slate-400'}`}>
-              <div className={`transition-all duration-300 ${activeTab === t.id ? 'scale-105' : ''}`}>
-                <t.icon size={16} />
-              </div>
-              <span className={`text-[8px] font-extrabold uppercase tracking-tight transition-opacity duration-300 ${activeTab === t.id ? 'opacity-100' : 'opacity-60'}`}>{t.label}</span>
-              {activeTab === t.id && <div className="absolute bottom-0 w-6 h-[2.5px] bg-[#00AEEF] rounded-full"></div>}
-            </button>
-          ))}
-        </div>
+        {/* MODERN FLUID CURVED MOBILE BOTTOM NAVIGATION */}
+        <CurvedBottomNav 
+          items={navItems} 
+          activeId={activeTab} 
+          onChange={(id) => setActiveTab(id as AppTab)} 
+        />
       </div>
     </div>
   );

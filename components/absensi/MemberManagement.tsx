@@ -2165,8 +2165,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                     0,
                                   ),
                                 0,
-                              )}{" "}
-                              JIWA
+                              )}
                             </span>
                           </div>
                         </div>
@@ -2192,13 +2191,12 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                     DESA: {desa}
                                   </h4>
                                   <div className="h-px bg-blue-100/20 flex-1 mx-2"></div>
-                                  <span className="text-[9px] font-bold text-blue-500 mr-2">
+                                  <span className="text-[9px] font-black text-blue-500 mr-2">
                                     {Object.values(kelompokGroup).reduce(
                                       (acc, curr) =>
                                         acc + Object.values(curr).flat().length,
                                       0,
-                                    )}{" "}
-                                    JIWA
+                                    )}
                                   </span>
                                 </div>
                               </div>
@@ -2231,8 +2229,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                                             {
                                               Object.values(ageGroups).flat()
                                                 .length
-                                            }{" "}
-                                            ANGGOTA
+                                            }
                                           </span>
                                         </div>
                                       </div>
@@ -3067,31 +3064,39 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
               className="relative bg-white w-full md:max-w-4xl max-h-[82vh] md:max-h-[90vh] rounded-2xl md:rounded-3xl shadow-2xl flex flex-col overflow-hidden"
             >
-              <div className="px-3.5 md:px-12 py-3 md:py-8 border-b border-slate-100 flex items-center justify-between shrink-0">
+              <div className="px-3.5 md:px-6 py-2.5 md:py-3.5 border-b border-slate-100 flex items-center justify-between shrink-0 bg-slate-50/50">
                 <div>
-                  <h3 className="text-base md:text-2xl font-black text-slate-900 leading-tight">
+                  <h3 className="text-sm md:text-lg font-black text-slate-900 leading-tight">
                     {editingMember
                       ? "Metamorfosis Data"
                       : "Pendaftaran Anggota"}
                   </h3>
-                  <p className="text-[8.5px] md:text-xs text-slate-400 mt-0.5 md:mt-1 uppercase font-black tracking-[0.15em] md:tracking-[0.2em]">
+                  <p className="text-[7.5px] md:text-[9.5px] text-slate-400 mt-0.5 uppercase font-black tracking-wider">
                     Formulir Digital Administrasi
                   </p>
                 </div>
-                <div className="flex items-center gap-1.5 md:gap-2">
+                <div className="flex items-center gap-1.5">
                   <button
                     onClick={() => setShowModal(false)}
-                    className="w-8 h-8 md:w-12 md:h-12 bg-slate-50 text-slate-400 hover:bg-rose-50 hover:text-rose-500 rounded-full flex items-center justify-center transition-all active:scale-90"
+                    className="w-7 h-7 md:w-8 md:h-8 bg-white border border-slate-200 text-slate-400 hover:bg-rose-50 hover:text-rose-500 rounded-full flex items-center justify-center transition-all active:scale-90 shadow-2xs"
                     title="Tutup"
                   >
-                    <X size={18} className="md:w-5 md:h-5" />
+                    <X size={15} />
                   </button>
                 </div>
               </div>
 
               <form
                 onSubmit={handleSubmit}
-                className="flex-1 overflow-y-auto p-3.5 md:p-10 space-y-4 md:space-y-8 no-scrollbar"
+                onFocus={(e) => {
+                  // Jika pengguna mengklik/fokus pada input formulir lain saat mode scan aktif, batalkan scanning agar keyboard normal kembali
+                  const target = e.target as HTMLElement;
+                  if (target && !target.closest('.rfid-scan-box')) {
+                    if (isScanningRfid) setIsScanningRfid(false);
+                    if (isScanningRfidKtp) setIsScanningRfidKtp(false);
+                  }
+                }}
+                className="flex-1 overflow-y-auto p-3.5 md:p-6 space-y-4 md:space-y-6 no-scrollbar"
               >
                 {/* Section: Identitas Utama */}
                 <div className="space-y-3 md:space-y-5">
@@ -3304,7 +3309,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                             </button>
                           </div>
                         ) : isScanningRfid ? (
-                          <div className="p-2.5 md:p-3 bg-blue-50 border border-blue-200 rounded-xl md:rounded-2xl space-y-2">
+                          <div className="rfid-scan-box p-2.5 md:p-3 bg-blue-50 border border-blue-200 rounded-xl md:rounded-2xl space-y-2">
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-1.5">
                                 <span className="relative flex h-2 w-2">
@@ -3336,6 +3341,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                               <input
                                 type="text"
                                 autoFocus
+                                inputMode="none"
                                 onKeyDown={(e) => {
                                   if (e.key === "Enter") {
                                     e.preventDefault();
@@ -3408,7 +3414,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                             </button>
                           </div>
                         ) : isScanningRfidKtp ? (
-                          <div className="p-2.5 md:p-3 bg-violet-50 border border-violet-200 rounded-xl md:rounded-2xl space-y-2">
+                          <div className="rfid-scan-box p-2.5 md:p-3 bg-violet-50 border border-violet-200 rounded-xl md:rounded-2xl space-y-2">
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-1.5">
                                 <span className="relative flex h-2 w-2">
@@ -3440,6 +3446,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                               <input
                                 type="text"
                                 autoFocus
+                                inputMode="none"
                                 onKeyDown={(e) => {
                                   if (e.key === "Enter") {
                                     e.preventDefault();
@@ -3848,7 +3855,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                 </div>
               </form>
 
-              <div className="p-3 md:px-12 md:py-5 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-2 shrink-0">
+              <div className="px-3.5 md:px-6 py-2.5 md:py-3.5 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-2 shrink-0">
                 <div className="flex items-center gap-1.5">
                   {editingMember === null && hasDraftContent && (
                     <button
@@ -3888,7 +3895,7 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                           });
                         }
                       }}
-                      className="px-2.5 md:px-4 py-2 md:py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700 rounded-xl font-bold text-[9px] md:text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all active:scale-95 border border-slate-200"
+                      className="px-2.5 md:px-3.5 py-1.5 md:py-2 bg-white hover:bg-slate-100 text-slate-500 hover:text-slate-700 rounded-xl font-bold text-[9px] md:text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all active:scale-95 border border-slate-200 shadow-2xs"
                       title="Reset Formulir"
                     >
                       <RotateCcw size={13} />
@@ -3902,12 +3909,12 @@ const MemberManagement: React.FC<MemberManagementProps> = ({
                   <button
                     onClick={handleSubmit}
                     disabled={isSubmitting}
-                    className="px-5 md:px-10 py-2.5 md:py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl md:rounded-2xl font-black text-[10px] md:text-xs uppercase tracking-wider md:tracking-[0.2em] flex items-center justify-center gap-2 md:gap-3 shadow-lg shadow-blue-600/25 active:scale-95 transition-all disabled:opacity-50"
+                    className="px-4 md:px-6 py-2 md:py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl md:rounded-xl font-black text-[10px] md:text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 md:gap-2 shadow-md shadow-blue-600/20 active:scale-95 transition-all disabled:opacity-50"
                   >
                     {isSubmitting ? (
-                      <Loader2 className="animate-spin" size={14} />
+                      <Loader2 className="animate-spin" size={13} />
                     ) : (
-                      <Save size={14} />
+                      <Save size={13} />
                     )}
                     Simpan Data
                   </button>

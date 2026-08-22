@@ -957,7 +957,7 @@ const AttendanceForm: React.FC<AttendanceFormProps> = ({
           date: selectedDate + ' ' + new Date().toTimeString().split(' ')[0], 
           dateInput: new Date().toISOString(),
           status: 'Alpa',
-          note: 'Selesai Absen (Sistem)',
+          note: '',
           createdBy: username,
           event_id: selectedEventId || null,
           metode: 'manual',

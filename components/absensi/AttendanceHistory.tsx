@@ -1768,7 +1768,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                       type="date"
                       value={exportStartDate}
                       onChange={(e) => { setExportStartDate(e.target.value); setIsDatesFetched(false); }}
-                      className="w-full px-2 py-1.5 sm:px-3 sm:py-2 bg-slate-50 border border-slate-200 rounded-xl text-[11px] sm:text-xs font-bold text-slate-800 focus:bg-white focus:border-emerald-500 outline-none transition-all"
+                      className="w-full px-2 py-1.5 sm:px-3 sm:py-2 bg-slate-50 border border-slate-200 rounded-xl text-[11px] sm:text-xs font-bold text-slate-800 focus:bg-white focus:border-emerald-500 outline-none transition-all [color-scheme:light]"
                     />
                   </div>
                   <div>
@@ -1777,7 +1777,7 @@ const AttendanceHistory: React.FC<AttendanceHistoryProps> = ({ logs, isLoading, 
                       type="date"
                       value={exportEndDate}
                       onChange={(e) => { setExportEndDate(e.target.value); setIsDatesFetched(false); }}
-                      className="w-full px-2 py-1.5 sm:px-3 sm:py-2 bg-slate-50 border border-slate-200 rounded-xl text-[11px] sm:text-xs font-bold text-slate-800 focus:bg-white focus:border-emerald-500 outline-none transition-all"
+                      className="w-full px-2 py-1.5 sm:px-3 sm:py-2 bg-slate-50 border border-slate-200 rounded-xl text-[11px] sm:text-xs font-bold text-slate-800 focus:bg-white focus:border-emerald-500 outline-none transition-all [color-scheme:light]"
                     />
                   </div>
                 </div>

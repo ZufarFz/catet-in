@@ -350,7 +350,7 @@ const TransactionForm: React.FC<TransactionFormProps> = ({
                     max={todayStr}
                     value={formData.date}
                     onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                    className={`w-full px-3 py-2.5 md:px-4 md:py-3 rounded-lg font-bold text-xs outline-none transition-all border-2 ${locked ? 'bg-rose-50 border-rose-100 text-rose-500' : 'bg-slate-50 border-transparent focus:bg-white focus:border-sky-100 text-slate-700'}`}
+                    className={`w-full px-3 py-2.5 md:px-4 md:py-3 rounded-lg font-bold text-xs outline-none transition-all border-2 [color-scheme:light] ${locked ? 'bg-rose-50 border-rose-100 text-rose-500' : 'bg-slate-50 border-transparent focus:bg-white focus:border-sky-100 text-slate-700'}`}
                   />
                 </div>
 

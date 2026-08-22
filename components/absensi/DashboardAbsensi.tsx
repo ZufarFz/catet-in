@@ -8,7 +8,6 @@ import {
   BarChart2,
   Trophy,
   Users,
-  Zap,
   ChevronDown,
   ChevronUp,
   Check,
@@ -120,9 +119,7 @@ const DashboardAbsensi: React.FC<DashboardAbsensiProps> = ({
   const [dbSummary, setDbSummary] = useState<EventDashboardSummary | null>(null);
   const [isSummaryLoading, setIsSummaryLoading] = useState<boolean>(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
-  const [isGridStackedMobile, setIsGridStackedMobile] = useState<boolean>(false);
   const [isDetailsExpandedMobile, setIsDetailsExpandedMobile] = useState<boolean>(false);
-  const [isTransitioningMobile, setIsTransitioningMobile] = useState<boolean>(false);
 
   // Trend Chart Metric Filter States (Default: Only Hadir is displayed)
   const [showHadirTrend, setShowHadirTrend] = useState<boolean>(true);
@@ -130,32 +127,7 @@ const DashboardAbsensi: React.FC<DashboardAbsensiProps> = ({
   const [showAlpaTrend, setShowAlpaTrend] = useState<boolean>(false);
 
   const handleToggleMobileDetail = () => {
-    if (isTransitioningMobile) return;
-    setIsTransitioningMobile(true);
-
-    if (!isGridStackedMobile) {
-      // EXPAND FLOW (Bertahap & Smooth):
-      // 1. Pindah posisi ke 1 kolom terlebih dahulu
-      setIsGridStackedMobile(true);
-      // 2. Setelah posisi berpindah (280ms), baru melebarkan & menampilkan detail
-      setTimeout(() => {
-        setIsDetailsExpandedMobile(true);
-        setTimeout(() => {
-          setIsTransitioningMobile(false);
-        }, 320);
-      }, 280);
-    } else {
-      // COLLAPSE FLOW (Bertahap & Smooth):
-      // 1. Mengecilkan detail ke bentuk ringkas terlebih dahulu
-      setIsDetailsExpandedMobile(false);
-      // 2. Setelah selesai mengecil (280ms), baru mengembalikan grid ke 5 kolom (ke atas)
-      setTimeout(() => {
-        setIsGridStackedMobile(false);
-        setTimeout(() => {
-          setIsTransitioningMobile(false);
-        }, 320);
-      }, 280);
-    }
+    setIsDetailsExpandedMobile(prev => !prev);
   };
 
   useEffect(() => {
@@ -372,8 +344,7 @@ const DashboardAbsensi: React.FC<DashboardAbsensiProps> = ({
 
           {/* Top Row: Pill Badge & Current Month */}
           <div className="flex items-center justify-between gap-2 relative z-20">
-            <div className="inline-flex items-center gap-1 px-2.5 py-0.5 sm:px-3 sm:py-1 rounded-full bg-white/20 border border-white/20 backdrop-blur-md text-[9px] sm:text-xs font-black tracking-wider uppercase text-white shadow-xs">
-              <Zap size={11} className="text-amber-300 fill-amber-300 sm:w-3.5 sm:h-3.5" />
+            <div className="inline-flex items-center px-2.5 py-0.5 sm:px-3 sm:py-1 rounded-full bg-white/20 border border-white/20 backdrop-blur-md text-[9px] sm:text-xs font-black tracking-wider uppercase text-white shadow-xs">
               <span>DASHBOARD ABSENSI</span>
             </div>
             <span className="text-[9px] sm:text-xs font-black tracking-widest uppercase text-sky-100/90">
@@ -396,8 +367,7 @@ const DashboardAbsensi: React.FC<DashboardAbsensiProps> = ({
 
           {/* Section Label: Ringkasan 5 Pertemuan Terakhir - Nama Kegiatan */}
           <div className="flex items-center justify-between mb-1.5 sm:mb-3 relative z-20">
-            <span className="text-[9px] sm:text-xs font-black text-sky-100 uppercase tracking-widest flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-300 inline-block" />
+            <span className="text-[9px] sm:text-xs font-black text-sky-100 uppercase tracking-widest">
               RINGKASAN 5 PERTEMUAN TERAKHIR{activeEvent?.nama_kegiatan ? ` - ${activeEvent.nama_kegiatan}` : ''}
             </span>
           </div>
@@ -590,7 +560,7 @@ const DashboardAbsensi: React.FC<DashboardAbsensiProps> = ({
 
         {/* Chart Panel: 5 Pertemuan Terakhir (Full Width) */}
         <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
-          <div className="px-4 py-3 sm:px-6 sm:py-3.5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 bg-gradient-to-r from-slate-50 to-white">
+          <div className="px-4 py-3 sm:px-6 sm:py-3.5 border-b border-slate-100 flex items-center justify-between gap-2.5 bg-gradient-to-r from-slate-50 to-white">
             <div className="space-y-0.5">
               <div className="flex items-center gap-2">
                 <BarChart2 className="text-rose-600 shrink-0" size={16} />
@@ -602,12 +572,6 @@ const DashboardAbsensi: React.FC<DashboardAbsensiProps> = ({
                 {activeEvent ? `Evaluasi keaktifan presensi untuk kegiatan "${activeEvent.nama_kegiatan.toUpperCase()}"` : 'Pilih kegiatan untuk melihat grafik'}
               </p>
             </div>
-
-            {activeEvent && (
-              <div className="px-2.5 py-1 bg-rose-50 text-rose-700 border border-rose-100 rounded-xl text-[9px] font-black uppercase tracking-wider self-start sm:self-auto">
-                {meetingStats.length} Pertemuan Terdata
-              </div>
-            )}
           </div>
 
           <div className="p-3 sm:p-5">
@@ -622,9 +586,17 @@ const DashboardAbsensi: React.FC<DashboardAbsensiProps> = ({
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+              <motion.div 
+                layout 
+                transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }} 
+                className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start"
+              >
                 {/* Left Side: Compact 2-Line Cards List (Stacked vertically, Collapsible on Mobile) */}
-                <div className="lg:col-span-5 flex flex-col space-y-1.5">
+                <motion.div 
+                  layout 
+                  transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }} 
+                  className="lg:col-span-5 flex flex-col space-y-1.5"
+                >
                   <div className="flex items-center justify-between">
                     <span className="text-[9.5px] font-black text-slate-700 uppercase tracking-wider block">
                       Riwayat Pertemuan ({meetingStats.length})
@@ -632,111 +604,97 @@ const DashboardAbsensi: React.FC<DashboardAbsensiProps> = ({
                     <button
                       type="button"
                       onClick={handleToggleMobileDetail}
-                      disabled={isTransitioningMobile}
-                      className="lg:hidden inline-flex items-center gap-1 text-[9px] font-extrabold text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-md border border-blue-200/80 transition-colors disabled:opacity-50"
+                      className="lg:hidden inline-flex items-center gap-1.5 text-[9px] font-extrabold text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-lg border border-blue-200/80 transition-all duration-200 cursor-pointer shadow-2xs active:scale-95"
                     >
-                      <span>{(isGridStackedMobile || isDetailsExpandedMobile) ? 'Sembunyikan' : 'Lihat Detail'}</span>
-                      {(isGridStackedMobile || isDetailsExpandedMobile) ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                      <span>{isDetailsExpandedMobile ? 'Sembunyikan' : 'Lihat Detail'}</span>
+                      <ChevronDown size={12} className={`transition-transform duration-300 ease-out ${isDetailsExpandedMobile ? 'rotate-180 text-blue-700' : ''}`} />
                     </button>
                   </div>
 
-                  {/* Single Unified Container with Framer Motion Layout Animation */}
+                  {/* Riwayat Pertemuan Cards (Grid on Mobile when collapsed, 1-col when expanded or on desktop) */}
                   <motion.div 
                     layout
-                    transition={{ layout: { duration: 0.28, ease: "easeInOut" } }}
-                    className={`grid gap-1.5 lg:flex lg:flex-col lg:gap-2 ${isGridStackedMobile ? 'grid-cols-1' : 'grid-cols-5'}`}
+                    transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+                    className={`grid gap-1.5 lg:flex lg:flex-col lg:gap-2 ${isDetailsExpandedMobile ? 'grid-cols-1' : 'grid-cols-5'}`}
                   >
                     {meetingStats.map((m) => (
                       <motion.div 
                         layout
+                        transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
                         key={m.dateStr}
-                        transition={{ layout: { duration: 0.28, ease: "easeInOut" } }}
-                        className="px-2 py-1.5 sm:px-2.5 sm:py-1.5 lg:px-3 lg:py-2 rounded-xl bg-slate-50 hover:bg-slate-100/80 border border-slate-100/80 transition-colors flex flex-col justify-between overflow-hidden w-full shadow-xs"
+                        className={`px-2.5 py-2 rounded-xl border transition-colors duration-300 overflow-hidden w-full ${
+                          isDetailsExpandedMobile
+                            ? 'bg-white border-blue-200/90 shadow-sm'
+                            : 'bg-slate-50 hover:bg-slate-100/80 border-slate-100/80 shadow-2xs'
+                        }`}
                       >
-                        {/* Baris Utama / Top Row */}
-                        <motion.div 
-                          layout 
-                          transition={{ layout: { duration: 0.28, ease: "easeInOut" } }}
-                          className={`flex w-full ${
+                        {/* Baris 1 / Top Row: Judul Pertemuan (Kiri) & Stat Hadir (Kanan) */}
+                        <div 
+                          className={`flex w-full transition-all duration-300 ${
                             isDetailsExpandedMobile 
-                              ? 'flex-row items-center justify-between text-[10px] font-black uppercase gap-1' 
-                              : 'flex-col items-center justify-center text-center gap-0.5 lg:flex-row lg:items-center lg:justify-between lg:text-[10px] lg:font-black lg:uppercase lg:gap-1'
+                              ? 'flex-row items-center justify-between text-[10px] font-black uppercase gap-1.5' 
+                              : 'flex-col items-center justify-center text-center gap-0.5 lg:flex-row lg:items-center lg:justify-between lg:text-[10px] lg:font-black lg:uppercase lg:gap-1.5'
                           }`}
                         >
-                          <motion.div layout transition={{ layout: { duration: 0.28, ease: "easeInOut" } }} className="flex items-center gap-1">
-                            <motion.span layout transition={{ layout: { duration: 0.28, ease: "easeInOut" } }} className="text-slate-800 tracking-tight font-black text-[9px] sm:text-[10px]">
-                              P{m.meetingNumber}
-                            </motion.span>
-
-                            {/* Tanggal badge - Always on Desktop, Animated on Mobile when expanded */}
-                            <div className="hidden lg:inline-block">
-                              <span className="text-[9px] font-bold text-slate-400 bg-white px-1.5 py-0.5 rounded border border-slate-100">
-                                📅 {formatDateDDMMMYYYY(m.dateStr || m.dateFormatted)}
-                              </span>
-                            </div>
-                            <AnimatePresence>
-                              {isDetailsExpandedMobile && (
-                                <motion.div
-                                  initial={{ opacity: 0, width: 0 }}
-                                  animate={{ opacity: 1, width: 'auto' }}
-                                  exit={{ opacity: 0, width: 0 }}
-                                  transition={{ duration: 0.25, ease: 'easeInOut' }}
-                                  className="lg:hidden overflow-hidden"
-                                >
-                                  <span className="text-[8.5px] font-bold text-slate-400 bg-white px-1 py-0.5 rounded border border-slate-100 whitespace-nowrap inline-block">
-                                    📅 {formatDateDDMMMYYYY(m.dateStr || m.dateFormatted)}
-                                  </span>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </motion.div>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`tracking-tight font-black text-[9px] sm:text-[10px] ${isDetailsExpandedMobile ? 'text-blue-700 font-extrabold' : 'text-slate-800'}`}>
+                              {isDetailsExpandedMobile ? `Pertemuan ${m.meetingNumber}` : `P${m.meetingNumber}`}
+                            </span>
+                          </div>
 
                           {/* Stat Total & Percentage */}
-                          <motion.div layout transition={{ layout: { duration: 0.28, ease: "easeInOut" } }} className="flex items-center gap-0.5 text-[8.5px] sm:text-[10px]">
-                            <motion.span layout transition={{ layout: { duration: 0.28, ease: "easeInOut" } }} className="font-black text-emerald-600">
+                          <div className="flex items-center gap-1 text-[8.5px] sm:text-[10px]">
+                            <span className="font-black text-emerald-600">
                               {m.hadir}{isDetailsExpandedMobile ? ' Hadir' : ''}
-                            </motion.span>
-                            <motion.span layout transition={{ layout: { duration: 0.28, ease: "easeInOut" } }} className="font-semibold text-slate-500">
+                            </span>
+                            <span className="font-semibold text-slate-500">
                               ({m.pct}%)
-                            </motion.span>
-                          </motion.div>
-                        </motion.div>
-
-                        {/* Baris 2: Detail status Izin, Sakit, Alpa terpisah */}
-                        {/* Always visible on Desktop */}
-                        <div className="hidden lg:flex items-center justify-between text-[9px] font-bold text-slate-400 border-t border-slate-200/50 pt-0.5 mt-0.5">
-                          <div className="flex items-center gap-2">
-                            <span className="text-amber-600">Izin: {m.izin}</span>
-                            <span className="text-sky-600">Sakit: {m.sakit}</span>
+                            </span>
                           </div>
-                          <span className="text-rose-500 font-extrabold">Alpa: {m.alpa}</span>
                         </div>
 
-                        {/* Mobile Animated Detail Row */}
-                        <AnimatePresence>
-                          {isDetailsExpandedMobile && (
-                            <motion.div
-                              initial={{ opacity: 0, height: 0, marginTop: 0 }}
-                              animate={{ opacity: 1, height: 'auto', marginTop: 6 }}
-                              exit={{ opacity: 0, height: 0, marginTop: 0 }}
-                              transition={{ duration: 0.25, ease: 'easeInOut' }}
-                              className="lg:hidden flex items-center justify-between text-[9px] font-bold text-slate-400 border-t border-slate-200/50 pt-1 overflow-hidden"
-                            >
-                              <div className="flex items-center gap-2">
-                                <span className="text-amber-600">Izin: {m.izin}</span>
-                                <span className="text-sky-600">Sakit: {m.sakit}</span>
+                        {/* Baris 2 (Desktop): Tanggal di Kiri Bawah & Status Izin/Sakit/Alpa di Kanan Bawah */}
+                        <div className="hidden lg:flex items-center justify-between text-[9px] font-bold border-t border-slate-200/50 pt-1 mt-1">
+                          <span className="text-slate-400 bg-white px-1.5 py-0.5 rounded border border-slate-100 font-medium">
+                            📅 {formatDateDDMMMYYYY(m.dateStr || m.dateFormatted)}
+                          </span>
+                          <div className="flex items-center gap-3 text-slate-500">
+                            <span className="text-amber-600">Izin: {m.izin}</span>
+                            <span className="text-sky-600">Sakit: {m.sakit}</span>
+                            <span className="text-rose-600 font-extrabold">Alpa: {m.alpa}</span>
+                          </div>
+                        </div>
+
+                        {/* Mobile Smooth Expand Container: Tanggal di Kiri Bawah & Status di Kanan Bawah */}
+                        <div 
+                          className={`lg:hidden grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
+                            isDetailsExpandedMobile ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+                          }`}
+                        >
+                          <div className="overflow-hidden">
+                            <div className="flex items-center justify-between text-[8.5px] sm:text-[9px] font-bold border-t border-slate-100 pt-1.5 mt-1.5">
+                              <span className="text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200/70 font-medium">
+                                📅 {formatDateDDMMMYYYY(m.dateStr || m.dateFormatted)}
+                              </span>
+                              <div className="flex items-center gap-2 sm:gap-3">
+                                <span className="text-amber-600 font-bold">Izin: {m.izin}</span>
+                                <span className="text-sky-600 font-bold">Sakit: {m.sakit}</span>
+                                <span className="text-rose-600 font-extrabold">Alpa: {m.alpa}</span>
                               </div>
-                              <span className="text-rose-500 font-extrabold">Alpa: {m.alpa}</span>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
+                            </div>
+                          </div>
+                        </div>
                       </motion.div>
                     ))}
                   </motion.div>
-                </div>
+                </motion.div>
 
-                {/* Right Side: Trend SVG Chart */}
-                <div className="lg:col-span-7 flex flex-col space-y-1.5">
+                {/* Right Side: Trend SVG Chart (Glides smoothly on layout changes) */}
+                <motion.div 
+                  layout 
+                  transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }} 
+                  className="lg:col-span-7 flex flex-col space-y-1.5"
+                >
                   <span className="text-[9.5px] font-black text-slate-700 uppercase tracking-wider block">
                     Bagan Tren Persentase Presensi
                   </span>
@@ -998,8 +956,8 @@ const DashboardAbsensi: React.FC<DashboardAbsensiProps> = ({
                       </button>
                     </div>
                   </div>
-                </div>
-              </div>
+                </motion.div>
+              </motion.div>
             )}
           </div>
         </div>
@@ -1011,14 +969,18 @@ const DashboardAbsensi: React.FC<DashboardAbsensiProps> = ({
               <div className="p-2 bg-amber-100 text-amber-600 rounded-xl shrink-0">
                 <Trophy size={18} strokeWidth={2.5} />
               </div>
-              <div>
-                <h3 className="text-xs sm:text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                  Top 5 {topCategory === 'hadir' ? 'Hadir' : topCategory === 'izin' ? 'Izin / Sakit' : topCategory === 'alpa' ? 'Alpa' : 'Terlambat'}
-                  <span className="text-[10px] text-slate-400 font-normal">
-                    {activeEvent ? `(${activeEvent.nama_kegiatan.toUpperCase()})` : ''}
-                  </span>
-                </h3>
-                <p className="text-[9px] font-medium text-slate-400">
+              <div className="min-w-0">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:gap-1.5">
+                  <h3 className="text-xs sm:text-sm font-black text-slate-900 uppercase tracking-wider leading-tight">
+                    Top 5 {topCategory === 'hadir' ? 'Hadir' : topCategory === 'izin' ? 'Izin / Sakit' : topCategory === 'alpa' ? 'Alpa' : 'Terlambat'}
+                  </h3>
+                  {activeEvent?.nama_kegiatan && (
+                    <span className="text-[10px] sm:text-[11px] text-slate-400 font-normal leading-tight truncate">
+                      ({activeEvent.nama_kegiatan.toUpperCase()})
+                    </span>
+                  )}
+                </div>
+                <p className="text-[9px] font-medium text-slate-400 mt-0.5 sm:mt-0 leading-tight">
                   Peringkat berdasarkan 5 pertemuan terakhir
                 </p>
               </div>
